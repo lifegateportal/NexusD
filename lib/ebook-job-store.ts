@@ -22,6 +22,13 @@ function openDb(): Promise<IDBDatabase> {
 }
 
 export async function saveEbookJob(state: EbookJobState, retries = 2): Promise<void> {
+  // Sync to R2 check-point asynchronously (Audit C-3 + U-1)
+  fetch(`/api/ebook/jobs/${state.jobId}/checkpoint`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(state)
+  }).catch(err => console.error("Checkpoint sync failed:", err));
+
   for (let attempt = 0; attempt <= retries; attempt++) {
     try {
       const db = await openDb();

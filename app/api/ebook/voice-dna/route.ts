@@ -106,7 +106,12 @@ export async function POST(req: NextRequest) {
   } catch (err) {
     return NextResponse.json({ error: err instanceof Error ? err.message : "Invalid input" }, { status: 400 });
   }
-
+  if (Buffer.byteLength(input.masterTranscript, "utf8") > 400_000) {
+    return NextResponse.json(
+      { error: "Transcript exceeds 400 KB — split into smaller sessions." },
+      { status: 422 }
+    );
+  }
   // Lighter distributed sample to keep route reliably under gateway time limits.
   const words = input.masterTranscript.split(/\s+/);
   const total = words.length;

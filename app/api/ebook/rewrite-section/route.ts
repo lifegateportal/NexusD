@@ -3,7 +3,8 @@ import { generateObject, streamText } from "ai";
 import { z } from "zod";
 import { deepSeekModel } from "@/lib/ai-providers";
 import { SectionAssignmentSchema } from "@/lib/schemas/ebook";
-import { PREMIUM_BOOK_STYLE_RULES, SOURCE_LOCK_RULES, READER_NORMALIZATION_RULES } from "@/lib/editorial-style-bible";
+import { PREMIUM_BOOK_STYLE_RULES, PROSE_MASTERY_RULES, SOURCE_LOCK_RULES, READER_NORMALIZATION_RULES } from "@/lib/editorial-style-bible";
+import { SCRIPTURE_FORMATTING_RULES } from "@/lib/scripture-formatter";
 
 export const runtime = "nodejs";
 export const maxDuration = 180;
@@ -80,33 +81,6 @@ export async function POST(req: NextRequest) {
         })
         .join("\n\n");
 
-  // Scripture formatting rules
-  const scriptureFormattingRules = `
-═══ SCRIPTURE FORMATTING (Chicago Manual + Premium Print) ═══
-
-SHORT INLINE (under 40 words, woven into sentence):
-*"verse text"* (Book Chapter:Verse Translation)
-Example: Paul writes *"I can do all things through Christ who strengthens me"* (Philippians 4:13 NIV).
-
-SHORT STANDALONE (under 40 words, quoted as own statement):
-> Verse text here.
-> — Book Chapter:Verse (Translation)
-
-LONG BLOCK (40+ words — mandatory blockquote, no quotation marks):
-> Verse text here, continuing across
-> multiple lines as needed.
-> — Book Chapter:Verse (Translation)
-
-CRITICAL SCRIPTURE RULES:
-• Reference ALWAYS ends with translation in parentheses: (NIV), (KJV), (ESV)
-• Reference ALWAYS preceded by em-dash: —
-• Block quotes NEVER use quotation marks around verse text
-• Reproduce scripture EXACTLY as the speaker quoted it. Never paraphrase scripture.
-• After scripture quotes, ADVANCE the argument—never restate what the verse just said.
-• Quote each scripture ONCE per section. Subsequent references use shorthand: "As Jesus said in John 15:5..."
-• Every scripture must complete TEXT → TRUTH → APPLICATION within 2-3 paragraphs.
-`;
-
   // Boundary instructions for additive mode
   const boundaryInstructions = rewriteMode === "additive"
     ? `
@@ -138,11 +112,13 @@ You are rewriting the entire section from scratch using all provided transcript 
   const rewriteSystem = `You are an elite editor rewriting one section of a teaching book.
 
 ${boundaryInstructions}
-${scriptureFormattingRules}
+${SCRIPTURE_FORMATTING_RULES}
 
 ${SOURCE_LOCK_RULES}
 
 ${READER_NORMALIZATION_RULES}
+
+${PROSE_MASTERY_RULES}
 
 ${PREMIUM_BOOK_STYLE_RULES}
 

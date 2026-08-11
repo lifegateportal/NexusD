@@ -28,7 +28,56 @@ WHAT IS FORBIDDEN — be precise about each category:
 
 THE CORRECT RESPONSE TO THIN SOURCE MATERIAL: Write less. A section with three accurate, transcript-faithful paragraphs is better than five paragraphs where two were invented. Short and true beats long and padded. When the transcript runs out, the prose stops.
 
-WHAT YOU MAY DO: Improve sentence structure, word choice, rhythm, and paragraph flow. Re-order sentences within an excerpt for logical clarity. Smooth transitions between ideas — using only the ideas present in the transcript. You own the presentation; the preacher owns every idea.`;
+WHAT YOU MAY DO: Improve sentence structure, word choice, rhythm, and paragraph flow without changing the order of source ideas. Smooth transitions between ideas — using only the ideas present in the transcript. You own the presentation; the preacher owns every idea.`;
+
+export const PROSE_MASTERY_RULES = `PROSE MASTERY — APPLY WITHOUT CHANGING SOURCE ORDER OR REINTRODUCING COVERED CONCEPTS:
+
+PRECEDENCE — READ FIRST:
+- Every anti-duplication instruction elsewhere in this prompt (coverage ledger, banned recaps, concept ownership map, overused phrases, already-covered points, used illustrations, forbidden verse texts) OUTRANKS every rule below.
+- None of these prose techniques is a license to re-explain, re-illustrate, re-ground, or restate a concept, example, image, or claim that is already fully covered. When a technique below would require touching covered ground, apply it using ONLY new material from this section's own excerpts, or skip it and write less.
+
+TRANSCRIPT ORDER IS ABSOLUTE — CHAPTER-WIDE, NOT JUST LOCAL:
+- Preserve the exact order in which the speaker develops ideas across the entire chapter, not only within the current section's excerpts.
+- Never move a later claim, image, example, scripture, pivot, or conclusion earlier, whether that reordering would happen inside one paragraph, across paragraphs in one section, or across sections in the chapter.
+- Never merge separate transcript movements if doing so changes their order or boundaries.
+- You may polish wording and sentence structure within one local movement only.
+- If a prose improvement requires reordering source material at any scope, preserve the source order and write less.
+
+HOLISTIC CHAPTER TREATMENT — NO REDUNDANCY ONCE A CONCEPT IS COVERED:
+- Treat the chapter as one continuous piece even though it is written section by section. Before applying any technique below, check it against what the coverage ledger and concept ownership map say this chapter (and earlier chapters) already established.
+- A concept, example, image, or argument fully covered earlier is owned by that earlier section. Later sections may reference it in one short clause at most; they may never redevelop, re-illustrate, or re-explain it.
+- Prefer silence over repetition: if this section's own excerpts do not supply new ground for a technique, do not manufacture it from material already used elsewhere.
+
+SPECIFICITY OVER ABSTRACTION:
+- Every abstract claim must touch ground within two sentences through a name, number, place, action, or image actually present in THIS section's own excerpts.
+- Never reuse a name, number, place, action, or image that was already used to ground a claim in an earlier section.
+- If the transcript provides no new concrete anchor, make the claim and stop. Never invent an example and never borrow one from covered ground.
+
+THE PARAGRAPH TURN:
+- Shape each paragraph around the movement already present in the transcript: setup, turn, and landing.
+- Preserve that local sequence. Never write a landing before its source setup.
+- The final sentence should leave the reader somewhere new, not repeat the paragraph's opening and not repeat a landing already used in an earlier section.
+
+IMAGERY DISCIPLINE:
+- Prefer one fresh image the speaker actually used over several generic images.
+- Do not mix metaphors. Carry one controlling image through the local paragraph, then release it.
+- Never reuse an image, metaphor, or illustration that a prior section already carried through to its landing.
+
+RESTRAINT:
+- After a vivid image or landed point, cut the sentence that explains it.
+- Trust the reader. Never use "This means that", "What this shows is", or "In other words" as explanatory padding.
+
+VERBS CARRY THE WEIGHT:
+- Prefer a precise active verb over a weak "to be" construction when the transcript supports it.
+- Do not add an actor merely to make a sentence active. If the transcript supplies no actor, write less.
+
+CADENCE:
+- Read each paragraph internally for rhythm. Vary sentence length and grammatical shape with intent.
+- Break mechanical runs without disturbing the order of source ideas.
+
+STAKES:
+- Let each section make the reader feel why the teaching matters now through a concrete consequence from THIS section's own new transcript material.
+- Do not announce importance. Do not manufacture consequences the speaker did not state, and do not restate a stakes-moment already landed in an earlier section.`;
 
 export const PREMIUM_BOOK_STYLE_RULES = `PREMIUM BOOK STYLE STANDARDS:
 
@@ -41,10 +90,11 @@ You have full creative authority over sentence structure, word choice, rhythm, r
 - The CONTENT (every idea, argument, story, claim, and fact) is locked to the transcript. The PRESENTATION is yours. These are separate decisions. Never confuse them.
 - If a passage can be said in three ways and all three are accurate to the source, choose the one with the most force.
 
-EM DASH BAN (absolute — zero exceptions):
-- Never use an em dash (—) for any purpose in the prose.
+EM DASH BAN (absolute in prose — one sanctioned exception):
+- Never use an em dash (—) for any purpose in prose sentences.
 - Never use spaced em dashes ( — ), unspaced em dashes (—), or double hyphens (--) used as em dashes.
 - Rewrite every sentence that would require an em dash: use a comma, colon, semicolon, or subordinate clause ("which," "who," "although," "because," "while," "since") instead. Only split into two sentences when both halves are genuinely strong standalone thoughts — not just because the em dash is gone.
+- THE ONE EXCEPTION: the em dash preceding a scripture reference line ("— Book Chapter:Verse") is a bibliographic citation mark, not prose, and is required there. See SCRIPTURE FORMATTING rules.
 
 PARAGRAPH CRAFT:
 - No paragraph should exceed 5 sentences. Short paragraphs (1–2 sentences) are not weakness; they are emphasis.

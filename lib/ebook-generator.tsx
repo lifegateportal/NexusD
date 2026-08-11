@@ -911,55 +911,6 @@ function findMatchingBlockQuote(paragraph: string, quotes: Quote[]): Quote | nul
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-// Parse a markdown blockquote paragraph (lines starting with '> ') into
-// a Quote-compatible object. Returns null if not a markdown blockquote.
-function parseMarkdownBlockquote(paragraph: string): { text: string; reference?: string; translation?: string } | null {
-  if (!paragraph.startsWith("> ") && !paragraph.startsWith(">")) return null;
-  // Strip ALL leading '>' levels — handles nested '> > text' and LLM '> > ref' formats
-  const lines = paragraph.split("\n")
-    .map((l) => l.replace(/^(>\s*)+/, "").trim())
-    .filter(Boolean);
-  if (lines.length === 0) return null;
-
-  // Reference detection: em-dash prefix OR a bare scripture citation (Book Chapter:Verse)
-  const refPattern = /^[\u2014\-\u2013]|^\*[\u2014\-\u2013]|^(?:[1-9]\s+)?[A-Z][a-z]+(?:\s+[A-Z][a-z]+)?\s+\d+:\d+/;
-  let refLineIdx = -1;
-  for (let i = lines.length - 1; i >= 0; i--) {
-    if (refPattern.test(lines[i].trim())) { refLineIdx = i; break; }
-  }
-
-  // Handle inline ">.  BookName chapter:verse" separators embedded at the end of a verse line
-  // e.g. LLM output: "...themselves. >. Genesis 3:6-7 (NIV)"
-  // Also handle ">" appearing mid-text as a separator
-  let verseLines = refLineIdx > 0 ? lines.slice(0, refLineIdx) : lines;
-  let inlineRef = "";
-  if (refLineIdx < 0 && verseLines.length > 0) {
-    const lastLine = verseLines[verseLines.length - 1];
-    const inlineMatch = lastLine.match(
-      /^(.*?)\s*>\.?\s+((?:[1-9]\s+)?[A-Z][a-z]+(?:\s+[A-Z][a-z]+)?\s+\d+:\d+(?:[:\u2013\-]\d+)?\s*(?:\([^)]*\))?)\s*$/
-    );
-    if (inlineMatch && inlineMatch[1].trim()) {
-      verseLines = [...verseLines.slice(0, -1), inlineMatch[1].trim()];
-      inlineRef = inlineMatch[2].trim();
-    }
-  }
-
-  // Strip any remaining stray ">" symbols from the verse text itself (edge case cleanup)
-  const cleanedVerseLines = verseLines.map((line) => 
-    line.replace(/>\s+/g, " ").replace(/>\./g, "").trim()
-  );
-
-  const refRaw = inlineRef || (refLineIdx >= 0 ? lines[refLineIdx] : "");
-  const refClean = refRaw.replace(/^\*?[\u2014\-\u2013]\s*/, "").replace(/\*$/, "").trim();
-  const transMatch = refClean.match(/^(.+?)\s*\(([^)]+)\)\s*$/);
-
-  return {
-    text: cleanedVerseLines.join("\n"),
-    reference: transMatch ? transMatch[1].trim() : (refClean || undefined),
-    translation: transMatch ? transMatch[2].trim() : undefined,
-  };
-}
-
 function writeScriptureBlock(doc: any, quote: ScriptureQuote, fonts: PdfFontSet, tpl: BookTemplateConfig) {
   // Helper to calculate indent/width based on current page margins
   const getScriptureLayout = () => {

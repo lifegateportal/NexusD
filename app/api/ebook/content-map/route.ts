@@ -105,6 +105,13 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: err instanceof Error ? err.message : "Invalid input" }, { status: 400 });
   }
 
+  if (Buffer.byteLength(input.masterTranscript, "utf8") > 400_000) {
+    return NextResponse.json(
+      { error: "Transcript exceeds 400 KB — split into smaller sessions." },
+      { status: 422 }
+    );
+  }
+
   try {
     // ── 1. Split masterTranscript into per-slot chunks ──────────────────────
     const slotChunks: { sourceAudio: string; text: string }[] = [];
@@ -134,7 +141,7 @@ export async function POST(req: NextRequest) {
 
     // ── 2. Extract segments per slot — all slots processed in parallel ───────
     // Processing slots sequentially caused reverse-proxy timeouts on large projects
-    // (6 slots × 5 chunks × ~4s/call ≈ 120 s). Parallel execution cuts wall-clock
+    // (10 slots × 5 chunks × ~4s/call ≈ 200 s). Parallel execution cuts wall-clock
     // time to roughly that of the single slowest slot (~20–30 s).
 
     type DedupedSlotResult = {

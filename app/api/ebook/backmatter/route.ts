@@ -4,7 +4,7 @@ import { z } from "zod";
 import { deepSeekReasonerModel, deepSeekModel } from "@/lib/ai-providers";
 import { EbookManifestSchema, BackMatterSchema } from "@/lib/schemas/ebook";
 import type { BackMatter } from "@/lib/schemas/ebook";
-import { SOURCE_LOCK_RULES } from "@/lib/editorial-style-bible";
+import { SOURCE_LOCK_RULES, READER_NORMALIZATION_RULES, PREMIUM_BOOK_STYLE_RULES } from "@/lib/editorial-style-bible";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
@@ -37,12 +37,15 @@ function buildScriptureIndex(manifest: z.infer<typeof EbookManifestSchema>): Bac
 
   for (const chapter of manifest.chapters) {
     for (const section of chapter.sections) {
-      // Scan section body for scripture references (basic pattern)
+      // Scan section body for scripture references, capturing the translation
+      // abbreviation when it appears alongside the reference (inline "(John 3:16 NIV)"
+      // or block "— John 3:16 (NIV)"). Only fall back to the placeholder when the
+      // body genuinely carries no translation next to that citation.
       const body = section.body ?? "";
-      const refPattern = /\b([1-3]?\s?[A-Z][a-z]+(?:\s[A-Z][a-z]+)?)\s+(\d+):(\d+(?:[–\-]\d+)?)/g;
+      const refPattern = /\b([1-3]?\s?[A-Z][a-z]+(?:\s[A-Z][a-z]+)?\s+\d+:\d+(?:[\u2013-]\d+)?)\)?\s*\(?\s*(NIV|ESV|KJV|NKJV|NASB|NLT|CSB|NRSV|RSV|AMP|MSG|CEV|GNT|NET|HCSB)?\s*\)?/g;
       let m;
       while ((m = refPattern.exec(body)) !== null) {
-        addRef(m[0].trim(), "translation unspecified", chapter.number);
+        addRef(m[1].trim(), m[2] ?? "translation unspecified", chapter.number);
       }
     }
   }

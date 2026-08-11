@@ -11,7 +11,14 @@ import {
   BackMatterSchema,
 } from "@/lib/schemas/ebook";
 import { CoverAccentSchema } from "@/lib/schemas/published-book";
-import { harmonizeBookManifest } from "@/lib/editorial-style-bible";
+import {
+  harmonizeBookManifest,
+  PROSE_MASTERY_RULES,
+  SOURCE_LOCK_RULES,
+  READER_NORMALIZATION_RULES,
+  PREMIUM_BOOK_STYLE_RULES,
+} from "@/lib/editorial-style-bible";
+import { SCRIPTURE_FORMATTING_RULES } from "@/lib/scripture-formatter";
 
 export const runtime = "nodejs";
 export const maxDuration = 120;
@@ -279,6 +286,16 @@ This book was produced strictly from a speaker's transcripts. You MUST:
 - When rewriting or editing, work ONLY with content already in the book
 - Preserve the speaker's voice, vocabulary, and teaching style exactly
 - If asked to "improve" or "expand" content, do so by reorganizing or clarifying existing text — not by adding new content
+
+${SOURCE_LOCK_RULES}
+
+${READER_NORMALIZATION_RULES}
+
+${PROSE_MASTERY_RULES}
+
+${SCRIPTURE_FORMATTING_RULES}
+
+${PREMIUM_BOOK_STYLE_RULES}
 
 BOOK-SAFETY RULE — ALWAYS APPLY
 - Remove or avoid church-room chatter that does not belong in a book: greetings to congregation, thanking attendees/teams, service-flow remarks, crowd-response prompts, and stage directions.

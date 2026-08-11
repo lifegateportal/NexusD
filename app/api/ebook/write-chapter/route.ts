@@ -3,7 +3,8 @@ import { generateObject } from "ai";
 import { z } from "zod";
 import { deepSeekModel } from "@/lib/ai-providers";
 import { WriteChapterRequestSchema, WriteChapterOutputSchema } from "@/lib/schemas/ebook";
-import { SOURCE_LOCK_RULES, READER_NORMALIZATION_RULES, PREMIUM_BOOK_STYLE_RULES, stripAudienceLanguage, cleanTranscriptForBook } from "@/lib/editorial-style-bible";
+import { SOURCE_LOCK_RULES, PROSE_MASTERY_RULES, READER_NORMALIZATION_RULES, PREMIUM_BOOK_STYLE_RULES, stripAudienceLanguage, cleanTranscriptForBook } from "@/lib/editorial-style-bible";
+import { SCRIPTURE_FORMATTING_RULES } from "@/lib/scripture-formatter";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
@@ -130,13 +131,7 @@ Each paragraph is a string in a JSON array. ONE idea per paragraph. 3–5 senten
 Each section is sealed. Do NOT preview the next section's content from within the current one. Presuppose what you just wrote — opening sentences of Section 2+ must not re-introduce concepts already developed.
 
 # SCRIPTURE RULES
-• Short (<40 words): *"verse text"* (Book Chapter:Verse, Translation) inline
-• Long (40+ words): markdown blockquote, no quotation marks, — Reference (Translation) at end
-• Always complete the TEXT → TRUTH → APPLICATION circuit within 2–3 paragraphs
-• No post-quote restatement (next sentence must ADVANCE the argument, not re-explain the quote)
-• Anchor controlling verse BEFORE exposition, not after
-• Preserve Greek/Hebrew terms exactly as the speaker stated them
-• If a translation was not stated, write (translation unspecified)
+${SCRIPTURE_FORMATTING_RULES}
 
 # REMOVE FROM OUTPUT — HARD RULE: if any of these appear in output, the book fails QC
 • Live-event audience address: "say amen", "somebody say", "turn to your neighbor", "give your neighbor a high five", "can I get an amen", "clap your hands", "stand to your feet", "you may be seated"
@@ -150,6 +145,7 @@ Each section is sealed. Do NOT preview the next section's content from within th
 • Any sentence beginning with a markdown heading symbol (#, ##, ###)
 ${SOURCE_LOCK_RULES}${voiceDnaBlock}${authorConfigBlock}${priorContextBlock}${bannedRecapsBlock}${quoteDedupBlock}${lexicalBlock}${translationBlock}
 ${READER_NORMALIZATION_RULES}
+${PROSE_MASTERY_RULES}
 ${PREMIUM_BOOK_STYLE_RULES}`;
 
   const coreThesisLine = coreThesis ? `\nCORE BOOK THESIS (thread through every section): ${coreThesis}` : "";

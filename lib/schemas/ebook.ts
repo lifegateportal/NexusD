@@ -45,7 +45,7 @@ export const VoiceDNASchema = z.object({
 
 export const ContentSegmentSchema = z.object({
   id: z.string(),
-  sourceAudio: z.enum(["audio-1", "audio-2", "audio-3", "audio-4", "audio-5", "audio-6"]),
+  sourceAudio: z.enum(["audio-1", "audio-2", "audio-3", "audio-4", "audio-5", "audio-6", "audio-7", "audio-8", "audio-9", "audio-10"]),
   topic: z.string(),
   rawText: z.string(),                          // the actual transcript excerpt
   keyPoints: z.array(z.string()).default([]),               // points explicitly made in this segment
@@ -239,6 +239,7 @@ export const ChapterPolishInputSchema = z.object({
   chapterSegmentTexts: z.array(z.string()),     // raw transcript for this chapter
   voiceDNA: VoiceDNASchema,
   quotesInChapter: z.array(QuoteSchema).default([]),
+  primaryTranslation: z.string().optional(),    // dominant Bible translation for this book — fallback when a quote candidate has no translation recorded
   previousChapterForwardQuestion: z.string().optional(), // forward question from the preceding chapter for arc connective tissue
   // ── Upgrade 5: Chapter premise line from architect ────────────────────────
   chapterPremise: z.string().optional(),         // one-sentence north star for this chapter's intro/conclusion
@@ -488,6 +489,8 @@ export const FrontMatterRequestSchema = z.object({
   architecture: BookArchitectureSchema,
   voiceDNA: VoiceDNASchema,
   authorConfig: AuthorConfigSchema.optional(),
+  alreadyQuotedRefs: z.array(z.string()).default([]),   // scripture references already reproduced in full inside the chapters/epigraphs
+  forbiddenVerseTexts: z.array(z.string()).default([]), // exact verse texts already quoted in full — hard ban on re-printing in front/back matter
 });
 
 export const ExportRequestSchema = z.object({

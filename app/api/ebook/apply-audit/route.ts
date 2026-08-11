@@ -3,7 +3,8 @@ import { generateText } from "ai";
 import { deepSeekReasonerModel } from "@/lib/ai-providers";
 import { z } from "zod";
 import { VoiceDNASchema } from "@/lib/schemas/ebook";
-import { SOURCE_LOCK_RULES, PREMIUM_BOOK_STYLE_RULES, READER_NORMALIZATION_RULES } from "@/lib/editorial-style-bible";
+import { SOURCE_LOCK_RULES, PROSE_MASTERY_RULES, PREMIUM_BOOK_STYLE_RULES, READER_NORMALIZATION_RULES } from "@/lib/editorial-style-bible";
+import { SCRIPTURE_FORMATTING_RULES } from "@/lib/scripture-formatter";
 
 type VoiceDNAType = z.infer<typeof VoiceDNASchema>;
 
@@ -208,6 +209,10 @@ RULES:
 ${SOURCE_LOCK_RULES}
 
 ${READER_NORMALIZATION_RULES}
+
+${PROSE_MASTERY_RULES}
+
+${SCRIPTURE_FORMATTING_RULES}
 
 ${PREMIUM_BOOK_STYLE_RULES}`,
     });

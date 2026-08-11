@@ -46,6 +46,13 @@ export async function POST(req: NextRequest) {
     );
   }
 
+  if (Buffer.byteLength(input.masterTranscript, "utf8") > 400_000) {
+    return NextResponse.json(
+      { error: "Transcript exceeds 400 KB — split into smaller sessions." },
+      { status: 422 }
+    );
+  }
+
   const transcript = input.masterTranscript;
 
   // Sample head + tail. Non-teaching content (prayers, announcements, altar calls)

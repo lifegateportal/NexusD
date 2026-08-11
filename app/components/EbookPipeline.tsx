@@ -121,9 +121,9 @@ async function postJson<T>(url: string, body: unknown, retries = 1): Promise<T> 
         err = rawText ? { details: rawText } : {};
       }
       const msg = err.error || `HTTP ${res.status} error from ${route}`;
-      // Retry once on transient gateway/auth errors (Codespaces proxy warm-up or LLM timeout)
-      if (attempt < retries && (res.status === 401 || res.status === 502 || res.status === 503 || res.status === 504)) {
-        await new Promise<void>((r) => setTimeout(r, 3000));
+      // Do not retry client errors except 429 (Rate Limit)
+      if (attempt < retries && (res.status === 429 || res.status >= 500)) {
+        await new Promise<void>((r) => setTimeout(r, Math.pow(2, attempt) * 1000));
         continue;
       }
       // Surface a helpful message for persistent 401s
@@ -145,8 +145,8 @@ async function postJson<T>(url: string, body: unknown, retries = 1): Promise<T> 
 async function streamSection(
   assignment: SectionAssignment,
   authorConfig?: { instructions: string; targetAudience: string }
-): Promise<{ body: string; claimLedger: Array<{ claim: string; excerptNumbers: number[] }>; passiveVoiceCount: number; unfullfilledHook: string | null; sequenceBreakCount: number }> {
-  const result = await postJson<{ body: string; claimLedger?: Array<{ claim: string; excerptNumbers: number[] }>; passiveVoiceCount?: number; unfullfilledHook?: string | null; sequenceBreakCount?: number }>(
+): Promise<{ body: string; claimLedger: Array<{ claim: string; excerptNumbers: number[] }>; passiveVoiceCount: number; unfullfilledHook: string | null; sequenceBreakCount: number; fallback: boolean; fallbackError: string | null }> {
+  const result = await postJson<{ body: string; claimLedger?: Array<{ claim: string; excerptNumbers: number[] }>; passiveVoiceCount?: number; unfullfilledHook?: string | null; sequenceBreakCount?: number; fallback?: boolean; error?: string }>(
     "/api/ebook/write-section", { assignment, ...(authorConfig ? { authorConfig } : {}) }
   );
   return {
@@ -155,6 +155,8 @@ async function streamSection(
     passiveVoiceCount: result.passiveVoiceCount ?? 0,
     unfullfilledHook: result.unfullfilledHook ?? null,
     sequenceBreakCount: result.sequenceBreakCount ?? 0,
+    fallback: result.fallback === true,
+    fallbackError: result.fallback === true ? (result.error ?? "unknown error") : null,
   };
 }
 
@@ -3111,6 +3113,7 @@ export function EbookPipeline({
       }
       const allSections: SectionDraft[] = [..._dedupedSections];
       let completedCount = allSections.length;
+      let rawTranscriptFallbackCount = 0;
       const getLastSentence = (text: string) => {
         const lastPara = text.split("\n\n").filter(Boolean).slice(-1)[0] ?? "";
         const sentences = lastPara.match(/[^.!?]+[.!?]+/g) ?? [];
@@ -3548,6 +3551,8 @@ export function EbookPipeline({
         let passiveVoiceCount: number;
         let unfullfilledHook: string | null;
         let sequenceBreakCount: number;
+        let usedFallback = false;
+        let fallbackError: string | null = null;
         if (_cached && _cached.paragraphs.length > 0) {
           body = _cached.paragraphs.join("\n\n");
           claimLedger = _cached.claimLedger;
@@ -3555,10 +3560,23 @@ export function EbookPipeline({
           unfullfilledHook = null;
           sequenceBreakCount = 0;
         } else {
-          ({ body, claimLedger, passiveVoiceCount, unfullfilledHook, sequenceBreakCount } = await streamSection(
+          ({ body, claimLedger, passiveVoiceCount, unfullfilledHook, sequenceBreakCount, fallback: usedFallback, fallbackError } = await streamSection(
             augmented,
             (authorInstructions || targetAudience) ? { instructions: authorInstructions, targetAudience } : undefined
           ));
+          // A transient LLM/API failure degrades the route to raw transcript text.
+          // Retry up to 2 more times before accepting unedited transcript into the book.
+          for (let retryAttempt = 1; usedFallback && retryAttempt <= 2; retryAttempt++) {
+            addLog(`  ↺ Ch${assignment.chapterNumber} §${assignment.sectionNumber} fell back to raw transcript (${fallbackError}) — retry ${retryAttempt}/2…`);
+            ({ body, claimLedger, passiveVoiceCount, unfullfilledHook, sequenceBreakCount, fallback: usedFallback, fallbackError } = await streamSection(
+              augmented,
+              (authorInstructions || targetAudience) ? { instructions: authorInstructions, targetAudience } : undefined
+            ));
+          }
+          if (usedFallback) {
+            rawTranscriptFallbackCount++;
+            addLog(`  ⚠ Ch${assignment.chapterNumber} §${assignment.sectionNumber} STILL raw transcript after retries (${fallbackError}) — review and rewrite this section manually`);
+          }
         }
 
         // Quality gate: retry once if too short (transcript coverage check)
@@ -3571,6 +3589,7 @@ export function EbookPipeline({
             (authorInstructions || targetAudience) ? { instructions: authorInstructions, targetAudience } : undefined
           ));
         }
+
 
         // ── Upgrade 8: Log passive voice hits ────────────────────────────
         if (passiveVoiceCount > 0) {
@@ -3678,6 +3697,9 @@ export function EbookPipeline({
           }
         }
       }
+      if (rawTranscriptFallbackCount > 0) {
+        addLog(`⚠ ${rawTranscriptFallbackCount} section(s) still contain raw, unedited transcript after retries — search the manuscript for these before publishing.`);
+      }
 
       // ── Stage 7: Polish chapters ─────────────────────────────────────────
       setStage("polishing");
@@ -3710,6 +3732,7 @@ export function EbookPipeline({
             chapterSegmentTexts: [], // not used by the route; omit to reduce payload
             voiceDNA,
             quotesInChapter: (chapterBlueprint.quotesInChapter ?? []).slice(0, 8),
+            primaryTranslation: assignments.find((a) => a.chapterNumber === chapterBlueprint.number)?.primaryTranslation,
             previousChapterForwardQuestion: polishedChapters.length > 0
               ? polishedChapters[polishedChapters.length - 1].forwardQuestion
               : undefined,
@@ -3773,6 +3796,8 @@ export function EbookPipeline({
           architecture,
           voiceDNA,
           ...((authorInstructions || targetAudience) ? { authorConfig: { instructions: authorInstructions, targetAudience } } : {}),
+          alreadyQuotedRefs: [...quotedVerseTextsByRef.keys()],
+          forbiddenVerseTexts: Array.from(quotedVerseTextsByRef.values()).filter(Boolean),
         });
         addLog("✓ Front and back matter complete");
         acc.frontMatter = frontMatter;

@@ -3,11 +3,27 @@ import { generateObject, generateText } from "ai";
 import { z } from "zod";
 import { deepSeekModel } from "@/lib/ai-providers";
 import { WriteSectionRequestSchema } from "@/lib/schemas/ebook";
-import { PREMIUM_BOOK_STYLE_RULES, READER_NORMALIZATION_RULES, SOURCE_LOCK_RULES } from "@/lib/editorial-style-bible";
+import { PREMIUM_BOOK_STYLE_RULES, PROSE_MASTERY_RULES, READER_NORMALIZATION_RULES, SOURCE_LOCK_RULES } from "@/lib/editorial-style-bible";
 import { stripAudienceLanguage } from "@/lib/editorial-style-bible";
+import { SCRIPTURE_FORMATTING_RULES } from "@/lib/scripture-formatter";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
+
+/** Retry a transient-failure-prone async call before giving up — a single dropped
+ *  connection or malformed-JSON response should not immediately degrade a section
+ *  to the raw-transcript fallback. */
+async function withRetries<T>(work: () => Promise<T>, attempts = 3): Promise<T> {
+  let lastErr: unknown;
+  for (let i = 0; i < attempts; i++) {
+    try {
+      return await work();
+    } catch (err) {
+      lastErr = err;
+    }
+  }
+  throw lastErr;
+}
 
 function jsonKeepAlive<T>(work: () => Promise<T>): Response {
   const encoder = new TextEncoder();
@@ -56,12 +72,7 @@ async function fallbackSectionBody(input: z.infer<typeof WriteSectionRequestSche
     return (input.keyPoints.filter(Boolean).join(" ") || input.heading).trim();
   }
 
-  try {
-    const { text } = await generateText({
-      model: deepSeekModel,
-      temperature: 0.5,
-      maxTokens: 1200,
-      system: `You are a professional book editor. Rewrite the raw spoken transcript below into clean, polished book prose.
+  const system = `You are a professional book editor. Rewrite the raw spoken transcript below into clean, polished book prose.
 
 ${SOURCE_LOCK_RULES}
 
@@ -69,17 +80,26 @@ ${READER_NORMALIZATION_RULES}
 
 ${PREMIUM_BOOK_STYLE_RULES}
 
+${SCRIPTURE_FORMATTING_RULES}
+
 ADDITIONAL RULES:
 - Output 3–6 prose paragraphs separated by blank lines — no headings, no markdown
-- Write shorter output rather than invent content`,
-      prompt: `SECTION HEADING: ${input.heading}\n\nRAW TRANSCRIPT:\n${rawExcerpts.slice(0, 4000)}`,
-    });
-    return text.trim() || rawExcerpts;
-  } catch {
-    // Last resort: return the raw excerpts stripped of obvious live-event language
-    return rawExcerpts;
+- Write shorter output rather than invent content`;
+  const prompt = `SECTION HEADING: ${input.heading}\n\nRAW TRANSCRIPT:\n${rawExcerpts.slice(0, 4000)}`;
+
+  // A single transient LLM/network failure should not dump raw transcript into the book —
+  // retry twice before giving up to the unedited excerpt text as the absolute last resort.
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      const { text } = await generateText({ model: deepSeekModel, temperature: 0.5, maxTokens: 1200, system, prompt });
+      if (text.trim()) return text.trim();
+    } catch (err) {
+      console.error(`[write-section] fallbackSectionBody attempt ${attempt + 1} failed:`, err instanceof Error ? err.message : err);
+    }
   }
+  return rawExcerpts;
 }
+
 
 function normalizeReaderFacingProse(text: string): string {
   return text
@@ -390,26 +410,7 @@ ARGUMENT FLOW:
 • No em dashes (—) anywhere. Use commas, colons, semicolons, or subordinate clauses instead.
 • After scripture quotes, ADVANCE the argument—never restate what the verse just said.
 
-═══ SCRIPTURE FORMATTING (Chicago Manual + Premium Print) ═══
-SHORT INLINE (under 40 words, woven into sentence): *"verse text"* (Book Chapter:Verse, Translation)
-SHORT STANDALONE (under 40 words, quoted as own statement):
-> Verse text here.
-> — Book Chapter:Verse (Translation)
-
-LONG BLOCK (40+ words—mandatory blockquote, no quotation marks):
-> Verse text here, continuing across
-> multiple lines as needed.
-> — Book Chapter:Verse (Translation)
-
-CRITICAL RULES:
-• Reproduce scripture EXACTLY as the speaker quoted it. Never paraphrase scripture.
-• When a central passage anchors the section, place it as a standalone block near the opening—before explanatory words.
-• No post-quote restatement. The sentence after scripture must advance, apply, or land an implication—not echo what was just said.
-• Include original Greek/Hebrew terms exactly as the speaker stated them: the Greek word *transliteration*, meaning "definition."
-• Quote each scripture ONCE per section. Subsequent references use shorthand only: "As Jesus said in John 15:5..."
-• Never add biblical background (historical setting, authorial intent, cultural context) unless the speaker explicitly stated it.
-• Every scripture must complete TEXT → TRUTH → APPLICATION within 2-3 paragraphs of the quotation.
-• Always include translation abbreviation: (NIV), (KJV), (ESV), etc.
+${SCRIPTURE_FORMATTING_RULES}
 
 ═══ VOICE DNA ENFORCEMENT ═══
 When Voice DNA is provided, you MUST:
@@ -853,9 +854,9 @@ SCRIPTURE EXCEPTION: Skip rule NEVER applies to Bible verses. Include every scri
 ${isAbsoluteFirstSection ? "" : "\nTRANSITIONAL OPENING: Open with \"Having seen…\", \"Building on…\", \"Since we established…\""}`
       : "";
 
-    const deduplicatedSystem = `${EDITORIAL_SYSTEM}${voiceDnaBlock}${authorConfigBlock}${readabilityBlock}${coreThesisBlock}${usedIllustrationsBlock}${primaryTranslationBlock}${alreadyQuotedBlock}${dedupBlock}`;
+    const deduplicatedSystem = `${EDITORIAL_SYSTEM}${PROSE_MASTERY_RULES}${voiceDnaBlock}${authorConfigBlock}${readabilityBlock}${coreThesisBlock}${usedIllustrationsBlock}${primaryTranslationBlock}${alreadyQuotedBlock}${dedupBlock}`;
 
-    const { object } = await generateObject({
+    const { object } = await withRetries(() => generateObject({
       model: deepSeekModel,
       schema: SectionBodySchema,
       mode: "json",
@@ -864,7 +865,7 @@ ${isAbsoluteFirstSection ? "" : "\nTRANSITIONAL OPENING: Open with \"Having seen
       prompt: paragraphPlan.length > 0
         ? `${prompt}\n\nPARAGRAPH PLAN (must follow in order):\n${JSON.stringify(paragraphPlan)}`
         : prompt,
-    });
+    }));
     const rawParagraphs = (object.paragraphs ?? [])
       .map((p) => p.trim())
       .filter(Boolean)

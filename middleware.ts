@@ -41,11 +41,19 @@ export async function middleware(request: NextRequest) {
 
   const sessionToken = request.cookies.get(COOKIE_NAME)?.value;
   if (!sessionToken) {
+    if (pathname.startsWith("/api/")) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
     return NextResponse.redirect(new URL("/login", request.url));
   }
 
   const expected = await computeExpectedToken(cookieSecret, authPassword);
   if (sessionToken !== expected) {
+    if (pathname.startsWith("/api/")) {
+      const res = NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+      res.cookies.set(COOKIE_NAME, "", { maxAge: 0, path: "/" });
+      return res;
+    }
     const res = NextResponse.redirect(new URL("/login", request.url));
     // Clear the stale / tampered cookie
     res.cookies.set(COOKIE_NAME, "", { maxAge: 0, path: "/" });

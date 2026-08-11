@@ -2,7 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { generateObject } from "ai";
 import { deepSeekReasonerModel, deepSeekModel } from "@/lib/ai-providers";
 import { FrontMatterRequestSchema, FrontBackMatterSchema } from "@/lib/schemas/ebook";
-import { PREMIUM_BOOK_STYLE_RULES, READER_NORMALIZATION_RULES, SOURCE_LOCK_RULES, stripAudienceLanguage } from "@/lib/editorial-style-bible";
+import { PREMIUM_BOOK_STYLE_RULES, PROSE_MASTERY_RULES, READER_NORMALIZATION_RULES, SOURCE_LOCK_RULES, stripAudienceLanguage } from "@/lib/editorial-style-bible";
+import { SCRIPTURE_FORMATTING_RULES } from "@/lib/scripture-formatter";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
@@ -25,6 +26,12 @@ export async function POST(req: NextRequest) {
     ? `\n\n════════════════════════════════════════════\nAUTHOR BOOK CONFIGURATION (highest priority)\n════════════════════════════════════════════${authorConfig.targetAudience ? `\nTARGET AUDIENCE: ${authorConfig.targetAudience}` : ""}${authorConfig.instructions ? `\nAUTHOR WRITING INSTRUCTIONS: ${authorConfig.instructions}` : ""}`
     : "";
 
+  // Scripture already quoted in full elsewhere in the book (chapter bodies, epigraphs) —
+  // the introduction/conclusion must never reprint that verse text, only reference it.
+  const quoteDedupBlock = (input.alreadyQuotedRefs.length + input.forbiddenVerseTexts.length) > 0
+    ? `\n\n════════════════════════════════════════════\nSCRIPTURE DEDUP — ALREADY QUOTED IN FULL ELSEWHERE IN THIS BOOK\n════════════════════════════════════════════${input.alreadyQuotedRefs.length > 0 ? `\nThese references already appear in full in a chapter or a chapter epigraph — reference them by citation only (e.g. "as Psalm 27:1 declares"), never reprint the verse text: ${input.alreadyQuotedRefs.join(", ")}` : ""}${input.forbiddenVerseTexts.length > 0 ? `\nForbidden verse texts (exact wording already printed — hard ban on reprinting, even with a different translation label): ${input.forbiddenVerseTexts.slice(0, 8).map((t) => `"${t.slice(0, 80)}…"`).join(" | ")}` : ""}`
+    : "";
+
   const frontmatterSystem = `You are an editorial assistant writing the introduction and conclusion of a published teaching book.
 
 ABSOLUTE CONTENT RULE — ZERO FABRICATION:
@@ -45,7 +52,9 @@ BACK MATTER
 - aboutAuthor: ONLY write if the author spoke about themselves, their background, or their story. Return null if not.
 - resourcesList: Books, tools, websites, or resources the author explicitly recommended. Return [] if none mentioned.
 
-SCRIPTURE & QUOTE FORMATTING: Apply Chicago Manual of Style rules as established in the chapter content.
+SCRIPTURE & QUOTE FORMATTING:
+${SCRIPTURE_FORMATTING_RULES}
+
 VOICE ENFORCEMENT — FIRST PERSON MANDATORY:
 The introduction speaks in first person as the author. This means:
 • Write WITH the author's voice, not ABOUT the author. Never slip into third-person description.
@@ -58,7 +67,9 @@ ${SOURCE_LOCK_RULES}
 
 ${READER_NORMALIZATION_RULES}
 
-${PREMIUM_BOOK_STYLE_RULES}${authorConfigBlock}`;
+${PROSE_MASTERY_RULES}
+
+${PREMIUM_BOOK_STYLE_RULES}${authorConfigBlock}${quoteDedupBlock}`;
 
   const frontmatterPrompt = `Write the front and back matter for this ebook.
 

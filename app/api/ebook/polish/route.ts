@@ -3,7 +3,7 @@ import { generateText } from "ai";
 import { deepSeekModel } from "@/lib/ai-providers";
 import { z } from "zod";
 import { PolishChapterRequestSchema } from "@/lib/schemas/ebook";
-import { PREMIUM_BOOK_STYLE_RULES, READER_NORMALIZATION_RULES, SOURCE_LOCK_RULES } from "@/lib/editorial-style-bible";
+import { PREMIUM_BOOK_STYLE_RULES, PROSE_MASTERY_RULES, READER_NORMALIZATION_RULES, SOURCE_LOCK_RULES } from "@/lib/editorial-style-bible";
 import { stripAudienceLanguage } from "@/lib/editorial-style-bible";
 
 export const runtime = "nodejs";
@@ -98,7 +98,7 @@ export async function POST(req: NextRequest) {
     const epigraphCandidates = (chapter.quotesInChapter ?? [])
       .filter((q) => q.type === "scripture")
       .slice(0, 5)
-      .map((q) => `"${q.text.slice(0, 120)}" \u2014 ${q.reference}${q.translation ? ` (${q.translation})` : ""}`)
+      .map((q) => `"${q.text.slice(0, 120)}" \u2014 ${q.reference} (${q.translation || chapter.primaryTranslation || "translation not stated \u2014 resolve to the book's primary translation"})`)
       .join("\n");
 
     const prevChapterBlock = chapter.previousChapterForwardQuestion
@@ -143,7 +143,7 @@ EM DASH ABSOLUTE BAN: Never use an em dash (—) in any output. No spaced em das
 HUMANIZATION: Use contractions naturally. Avoid "not just...but", "not merely...but", "indeed,", "certainly,", "ultimately,", "at its core", "in essence", "profoundly", "transformative". Break any run of three parallel-structured sentences.
 
 Your tasks:
-1. EPIGRAPH: From the provided scripture candidates, pick the ONE most resonant opening quote for this chapter. Return it formatted as: "Quote text." — Reference (Translation). If no candidate strongly fits or none are provided, return an empty string. Never invent a quote.
+1. EPIGRAPH: From the provided scripture candidates, pick the ONE most resonant opening quote for this chapter. Return it formatted as: "Quote text." — Reference (Translation). The translation abbreviation is REQUIRED and must never be omitted — every candidate below already gives you one to use. If no candidate strongly fits or none are provided, return an empty string. Never invent a quote.
 2. INTRO (CONSOLIDATED CHAPTER OPENER): Two sentences — no more, no less.
    Sentence 1: ONE bold declarative statement — the north star thesis of this chapter. States what is at stake, what will be proven, or what the reader will discover. Present tense. Direct. Max 20 words.
    Sentence 2: ONE provocative question that makes the reader feel the personal stakes and need to read on. Sharp, specific to this chapter's content — not generic.
@@ -177,6 +177,8 @@ READER NORMALIZATION:
 ${SOURCE_LOCK_RULES}
 
 ${READER_NORMALIZATION_RULES}
+
+${PROSE_MASTERY_RULES}
 
 ${PREMIUM_BOOK_STYLE_RULES}${authorConfigBlock}
 

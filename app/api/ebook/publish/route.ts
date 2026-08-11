@@ -117,8 +117,26 @@ export async function POST(req: NextRequest) {
   // Prefer image URLs passed explicitly; fall back to URLs embedded in the manifest
   const coverImageUrl  = input.coverImageUrl  ?? manifest.coverImageUrl  ?? null;
   const authorImageUrl = input.authorImageUrl ?? manifest.authorImageUrl ?? null;
-  const slug = slugify(manifest.bookTitle, manifest.jobId);
   const s3   = makeS3Client(R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY);
+
+  let slug = slugify(manifest.bookTitle, manifest.jobId);
+  try {
+    // C-2 Slug Collision handling
+    const getRes = await s3.send(
+      new GetObjectCommand({ Bucket: R2_BUCKET_NAME, Key: "published/index.json" }),
+    );
+    const getRaw = await getRes.Body?.transformToString();
+    const existingCatalog = getRaw ? PublishedCatalogSchema.parse(JSON.parse(getRaw)) : { books: [] };
+    
+    let counter = 1;
+    let baseSlug = slug;
+    while (existingCatalog.books.some(b => b.slug === slug)) {
+      counter++;
+      slug = `${baseSlug}-${counter}`;
+    }
+  } catch (err) {
+    // If index.json doesn't exist, we just proceed
+  }
 
   try {
     // 1. Write the full manifest to R2 (include image URLs so the reader can use them)
@@ -151,36 +169,57 @@ export async function POST(req: NextRequest) {
       authorImageUrl,
     });
 
-    // 3. Read existing catalog (best-effort — index may not yet exist)
-    let catalog: PublishedCatalog = { updatedAt: now, books: [] };
-    try {
-      const existing = await s3.send(
-        new GetObjectCommand({ Bucket: R2_BUCKET_NAME, Key: "published/index.json" }),
-      );
-      const raw = await existing.Body?.transformToString();
-      if (raw) {
-        const parsed = PublishedCatalogSchema.safeParse(JSON.parse(raw));
-        if (parsed.success) catalog = parsed.data;
+    // 3. Retry loop for conditional ETag-based updates (Audit: C-1)
+    let finalUrl = "";
+    for (let attempts = 0; attempts < 3; attempts++) {
+      let catalog: PublishedCatalog = { updatedAt: now, books: [] };
+      let etag: string | undefined;
+
+      // Read existing catalog
+      try {
+        const existing = await s3.send(
+          new GetObjectCommand({ Bucket: R2_BUCKET_NAME, Key: "published/index.json" }),
+        );
+        const raw = await existing.Body?.transformToString();
+        if (raw) {
+          const parsed = PublishedCatalogSchema.safeParse(JSON.parse(raw));
+          if (parsed.success) catalog = parsed.data;
+        }
+        etag = existing.ETag;
+      } catch (err: any) {
+        if (err.name !== "NoSuchKey" && err.name !== "NotFound") {
+          throw err;
+        }
+        // Index not yet created — start fresh
       }
-    } catch {
-      // Index not yet created — start fresh
+
+      // 4. Upsert (remove old entry for this slug, prepend new one)
+      catalog.books   = catalog.books.filter((b) => b.slug !== slug);
+      catalog.books.unshift(entry);
+      catalog.updatedAt = now;
+
+      // 5. Write updated catalog
+      try {
+        await s3.send(
+          new PutObjectCommand({
+            Bucket:       R2_BUCKET_NAME,
+            Key:          "published/index.json",
+            Body:         JSON.stringify(catalog),
+            ContentType:  "application/json",
+            CacheControl: "public, max-age=30",
+            IfMatch:      etag,
+          }),
+        );
+        break; // Success!
+      } catch (writeErr: any) {
+        if (writeErr.name === "PreconditionFailed") {
+          if (attempts === 2) throw new Error("Could not update index.json due to concurrent changes.");
+          continue; // ETag mismatched, try again
+        } else {
+          throw writeErr;
+        }
+      }
     }
-
-    // 4. Upsert (remove old entry for this slug, prepend new one)
-    catalog.books   = catalog.books.filter((b) => b.slug !== slug);
-    catalog.books.unshift(entry);
-    catalog.updatedAt = now;
-
-    // 5. Write updated catalog
-    await s3.send(
-      new PutObjectCommand({
-        Bucket:       R2_BUCKET_NAME,
-        Key:          "published/index.json",
-        Body:         JSON.stringify(catalog),
-        ContentType:  "application/json",
-        CacheControl: "public, max-age=30",
-      }),
-    );
 
     const publicUrl = R2_PUBLIC_URL
       ? `${R2_PUBLIC_URL.replace(/\/$/, "")}/published/${slug}/manifest.json`

@@ -314,7 +314,7 @@ ${transcriptBlock}`,
 
 function fallbackArchitecture(input: z.infer<typeof ArchitectRequestSchema>) {
   // Group segments by sourceAudio to produce one chapter per message in series order
-  const audioOrder = ["audio-1", "audio-2", "audio-3", "audio-4", "audio-5", "audio-6"];
+  const audioOrder = ["audio-1", "audio-2", "audio-3", "audio-4", "audio-5", "audio-6", "audio-7", "audio-8", "audio-9", "audio-10"];
   const segmentsByAudio = new Map<string, typeof input.contentMap.segments>();
   for (const seg of input.contentMap.segments) {
     const bucket = segmentsByAudio.get(seg.sourceAudio) ?? [];
@@ -486,7 +486,7 @@ export async function POST(req: NextRequest) {
         // ── Per-audio parallel LLM calls (oneChapterPerUpload) ────────────────
         // Each audio file gets its own focused LLM call with full transcript text.
         // The LLM produces premium structure entirely from the provided transcript.
-        const audioOrder = ["audio-1", "audio-2", "audio-3", "audio-4", "audio-5", "audio-6"] as const;
+        const audioOrder = ["audio-1", "audio-2", "audio-3", "audio-4", "audio-5", "audio-6", "audio-7", "audio-8", "audio-9", "audio-10"] as const;
         const segsByAudio = new Map<string, typeof input.contentMap.segments>();
         for (const seg of input.contentMap.segments) {
           const bucket = segsByAudio.get(seg.sourceAudio) ?? [];
