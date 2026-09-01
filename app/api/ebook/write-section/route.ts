@@ -91,7 +91,7 @@ ADDITIONAL RULES:
   // retry twice before giving up to the unedited excerpt text as the absolute last resort.
   for (let attempt = 0; attempt < 3; attempt++) {
     try {
-      const { text } = await generateText({ model: deepSeekModel, temperature: 0.5, maxTokens: 1200, system, prompt });
+      const { text } = await generateText({ model: deepSeekModel, temperature: 0.35, maxTokens: 1200, system, prompt });
       if (text.trim()) return text.trim();
     } catch (err) {
       console.error(`[write-section] fallbackSectionBody attempt ${attempt + 1} failed:`, err instanceof Error ? err.message : err);
@@ -860,7 +860,7 @@ ${isAbsoluteFirstSection ? "" : "\nTRANSITIONAL OPENING: Open with \"Having seen
       model: deepSeekModel,
       schema: SectionBodySchema,
       mode: "json",
-      temperature: 0.7,
+      temperature: 0.35,
       system: deduplicatedSystem,
       prompt: paragraphPlan.length > 0
         ? `${prompt}\n\nPARAGRAPH PLAN (must follow in order):\n${JSON.stringify(paragraphPlan)}`
@@ -925,8 +925,54 @@ ${isAbsoluteFirstSection ? "" : "\nTRANSITIONAL OPENING: Open with \"Having seen
       }
     }
 
-    const rawBody = finalParagraphs.join("\n\n") || await fallbackSectionBody(assignment);
+    let rawBody = finalParagraphs.join("\n\n") || await fallbackSectionBody(assignment);
+    
+    // ── NOTEBOOK-LM INTELLIGENCE: Theologian Fidelity Pass ───────────────────────
+    console.log(`[write-section] NotebookLM: Running Theologian Fidelity Check for Ch${assignment.chapterNumber} §${assignment.sectionNumber}...`);
+    try {
+      const { object: fidelityReport } = await generateObject({
+        model: deepSeekModel,
+        schema: z.object({
+          isFaithful: z.boolean(),
+          hallucinations: z.array(z.string()).describe("Specific facts, claims, or theology NOT in the transcript"),
+          fixesRequired: z.string().optional()
+        }),
+        system: "You are the Fidelity Checker. Compare the Draft to the Source Transcript. If the draft invents ANY historical fact, illustration, or theological claim NOT in the transcript, set isFaithful=false and list the hallucinations.",
+        prompt: `SOURCE TRANSCRIPT EXCERPTS:\n${effectiveExcerpts.join("\n")}\n\n---\n\nDRAFT:\n${rawBody}`,
+        temperature: 0.1,
+      });
+
+      if (!fidelityReport.isFaithful && fidelityReport.fixesRequired) {
+        console.log(`[write-section] ⛔ Hallucinations detected:`, fidelityReport.hallucinations);
+        const { text: repairedText } = await generateText({
+           model: deepSeekModel,
+           system: "You are the Fidelity Fixer. Rewrite the draft to strict source fidelity by removing the following hallucinations. Do NOT add new information. Rely only on the source.",
+           prompt: `Hallucinations to remove: ${fidelityReport.fixesRequired}\n\nDraft:\n${rawBody}\n\nSource Excerpts:\n${effectiveExcerpts.join("\n")}`
+        });
+        rawBody = repairedText;
+      }
+    } catch (err) {
+      console.warn("[write-section] Theologian check failed, proceeding with draft.", err);
+    }
+
+    // ── NOTEBOOK-LM INTELLIGENCE: NYT Bestseller Line Editor Pass ────────────────
+    console.log(`[write-section] NotebookLM: Running NYT Line Editor Polish for Ch${assignment.chapterNumber} §${assignment.sectionNumber}...`);
+    try {
+      const { text: polishedBody } = await generateText({
+         model: deepSeekModel,
+         system: `You are an elite NYT-Bestseller line editor. Enhance vocabulary, rhythm, and emotional resonance. Apply these rules strictly:\n\n${PREMIUM_BOOK_STYLE_RULES}\n\nDO NOT add any facts. ONLY edit prose.`,
+         prompt: `Polish this draft. Ensure it flows beautifully:\n\n${rawBody}`,
+         temperature: 0.4
+      });
+      if (polishedBody.trim().length > 100) {
+         rawBody = polishedBody.trim().replace(/^#{1,6}\s.*$/gm, "").trim();
+      }
+    } catch (err) {
+      console.warn("[write-section] Line Editor polish failed, proceeding with base draft.", err);
+    }
+
     const body = stripAudienceLanguage(normalizeReaderFacingProse(rawBody));
+    
     // ── Upgrade 8: Passive voice detection ───────────────────────────────
     const passiveHits = detectPassiveVoice(body);
     if (passiveHits.length > 0) {
