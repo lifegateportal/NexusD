@@ -82,6 +82,13 @@ ${PREMIUM_BOOK_STYLE_RULES}
 
 ${SCRIPTURE_FORMATTING_RULES}
 
+TENSE NORMALIZATION:
+- For narratives and stories: use PAST TENSE (was, did, said, happened)
+- For current truths and teachings: use PRESENT TENSE (is, are, means)
+- For universal principles: use PRESENT TENSE
+- For historical events from Bible or past: use PAST TENSE
+- Check every verb and ensure consistency within each paragraph
+
 ADDITIONAL RULES:
 - Output 3–6 prose paragraphs separated by blank lines — no headings, no markdown
 - Write shorter output rather than invent content`;
@@ -424,6 +431,13 @@ When Voice DNA is provided, you MUST:
 • Remove crowd cues: "say amen," "look at your neighbor," "clap your hands," applause calls
 • Rewrite live-room address ("today I want to tell you," "as you sit here") for individual reader
 • Strip stage prompts and house-response commands
+
+═══ TENSE NORMALIZATION ═══
+• For narratives and stories: use PAST TENSE (was, did, said, happened)
+• For current truths and teachings: use PRESENT TENSE (is, are, means)
+• For universal principles: use PRESENT TENSE
+• For historical events from Bible or past: use PAST TENSE
+• Check every verb and ensure consistency within each paragraph
 
 ═══ PARAGRAPH DISCIPLINE ═══
 • Return paragraphs as JSON array—each element is exactly ONE paragraph
