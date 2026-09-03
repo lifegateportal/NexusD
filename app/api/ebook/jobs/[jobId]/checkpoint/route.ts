@@ -13,7 +13,7 @@ function makeS3Client(accountId: string, accessKey: string, secretKey: string) {
   });
 }
 
-export async function POST(req: NextRequest, { params }: { params: { jobId: string } }) {
+export async function POST(req: NextRequest, { params }: { params: Promise<{ jobId: string }> }) {
   const { R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_BUCKET_NAME } = env;
   if (!R2_ACCOUNT_ID || !R2_ACCESS_KEY_ID || !R2_SECRET_ACCESS_KEY || !R2_BUCKET_NAME) {
     return NextResponse.json({ error: "R2 not configured" }, { status: 503 });
@@ -23,10 +23,11 @@ export async function POST(req: NextRequest, { params }: { params: { jobId: stri
     const s3 = makeS3Client(R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY);
     const body = await req.json();
     const parsed = EbookJobStateSchema.parse(body);
+    const { jobId } = await params;
 
     await s3.send(new PutObjectCommand({
       Bucket: R2_BUCKET_NAME,
-      Key: `jobs/${params.jobId}.json`,
+      Key: `jobs/${jobId}.json`,
       Body: JSON.stringify(parsed),
       ContentType: "application/json"
     }));
@@ -37,7 +38,7 @@ export async function POST(req: NextRequest, { params }: { params: { jobId: stri
   }
 }
 
-export async function GET(req: NextRequest, { params }: { params: { jobId: string } }) {
+export async function GET(req: NextRequest, { params }: { params: Promise<{ jobId: string }> }) {
   const { R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_BUCKET_NAME } = env;
   if (!R2_ACCOUNT_ID || !R2_ACCESS_KEY_ID || !R2_SECRET_ACCESS_KEY || !R2_BUCKET_NAME) {
     return NextResponse.json({ error: "R2 not configured" }, { status: 503 });
@@ -45,9 +46,11 @@ export async function GET(req: NextRequest, { params }: { params: { jobId: strin
 
   try {
     const s3 = makeS3Client(R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY);
+    const { jobId } = await params;
+    
     const res = await s3.send(new GetObjectCommand({
       Bucket: R2_BUCKET_NAME,
-      Key: `jobs/${params.jobId}.json`
+      Key: `jobs/${jobId}.json`
     }));
     const raw = await res.Body?.transformToString();
     if (!raw) return NextResponse.json({ error: "Not found" }, { status: 404 });
