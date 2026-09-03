@@ -114,26 +114,25 @@ ${input.architecture.chapters.map((c, i) => `Chapter ${i + 1}: "${c.title}"\n  C
       })(),
     }, { status: 200 });
 
-  // Try R1 first. If the API rejects it (plan restriction, temporary unavailability),
-  // fall back to V3 Pro — same quality for structured generation tasks.
+  // Try V3 first for speed. If it fails, fall back to R1 for maximum quality.
   try {
     const { object } = await generateObject({
-      model: deepSeekReasonerModel,
+      model: deepSeekModel,
       schema: IntroConclSchema,
       mode: "json",
-      temperature: 1,  // reasoner requires temperature=1
+      temperature: 0.4,  // V3: fast prose generation
       system: frontmatterSystem,
       prompt: frontmatterPrompt,
     });
     return buildResponse(object);
   } catch {
-    // R1 unavailable — fall back to V3 Pro
+    // V3 failed — fall back to R1 for maximum certainty
     try {
       const { object } = await generateObject({
-        model: deepSeekModel,
+        model: deepSeekReasonerModel,
         schema: IntroConclSchema,
         mode: "json",
-        temperature: 0.4,
+        temperature: 1,
         system: frontmatterSystem,
         prompt: frontmatterPrompt,
       });

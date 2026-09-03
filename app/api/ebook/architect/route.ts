@@ -264,10 +264,10 @@ async function architectOneChapterFromTranscript(
   }).join("\n\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n\n");
 
   const { object } = await generateObject({
-    model: deepSeekReasonerModel,
+    model: deepSeekModel,
     schema: SingleChapterPlanSchema,
     mode: "json",
-    temperature: 1,
+    temperature: 0.3,
     maxTokens: 8000,
     system: `You are a senior structural editor turning one teaching message into a premium book chapter.
 

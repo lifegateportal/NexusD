@@ -169,27 +169,27 @@ ${resourcesMentioned.length > 0 ? resourcesMentioned.map((r) => `• ${r}`).join
 
 Generate the glossary, reading group guide, and recommended resources.`;
 
-  // Try R1 first for highest quality. If it fails or times out, fall back to V3.
+  // Try V3 first for speed. If it fails, fall back to R1 for maximum quality.
   let object: Awaited<ReturnType<typeof generateObject<z.infer<typeof BackMatterSchema>>>>["object"] | null = null;
 
   try {
     const res = await generateObject({
-      model: deepSeekReasonerModel,
+      model: deepSeekModel,
       schema: BackMatterSchema.omit({ scriptureIndex: true }),
       mode: "json",
-      temperature: 1,  // R1 requires temperature=1
+      temperature: 0.3,  // V3: fast glossary/guide generation
       system: backmatterSystem,
       prompt: backmatterPrompt,
     });
     object = res.object;
   } catch {
-    // R1 failed — fall back to V3 Pro
+    // V3 failed — fall back to R1 for maximum certainty
     try {
       const res = await generateObject({
-        model: deepSeekModel,
+        model: deepSeekReasonerModel,
         schema: BackMatterSchema.omit({ scriptureIndex: true }),
         mode: "json",
-        temperature: 0.3,
+        temperature: 1,
         system: backmatterSystem,
         prompt: backmatterPrompt,
       });

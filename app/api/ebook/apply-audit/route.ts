@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { generateText } from "ai";
-import { deepSeekReasonerModel } from "@/lib/ai-providers";
+import { deepSeekModel, deepSeekReasonerModel } from "@/lib/ai-providers";
 import { z } from "zod";
 import { VoiceDNASchema } from "@/lib/schemas/ebook";
 import { SOURCE_LOCK_RULES, PROSE_MASTERY_RULES, PREMIUM_BOOK_STYLE_RULES, READER_NORMALIZATION_RULES } from "@/lib/editorial-style-bible";
@@ -186,9 +186,10 @@ async function reviseSectionBody(
 
   let text = "";
   try {
+    // Try V3 first for speed (0.25 maintains consistency)
     const result = await generateText({
-      model: deepSeekReasonerModel,
-      temperature: 1,  // reasoner models require temperature=1
+      model: deepSeekModel,
+      temperature: 0.25,  // V3: fast + strict rule adherence
       maxTokens,
       system:
         "You are a surgical book editor. Make only the minimum changes required by the task. Return ONLY the revised section body as plain prose — no JSON, no markdown, no commentary.",
@@ -218,8 +219,44 @@ ${PREMIUM_BOOK_STYLE_RULES}`,
     });
     text = result.text.trim();
   } catch (err) {
-    console.error("[apply-audit] LLM section rewrite failed:", err);
-    return body; // fall back to original
+    console.warn("[apply-audit] V3 rewrite failed, falling back to R1:", err instanceof Error ? err.message : err);
+    // V3 failed — try R1 for maximum certainty
+    try {
+      const result = await generateText({
+        model: deepSeekReasonerModel,
+        temperature: 1,
+        maxTokens,
+        system:
+          "You are a surgical book editor. Make only the minimum changes required by the task. Return ONLY the revised section body as plain prose — no JSON, no markdown, no commentary.",
+        prompt: `SECTION HEADING: ${heading}${voiceDnaBlock}
+
+SECTION BODY:
+${body}
+
+EDITORIAL TASK:
+${task}
+
+RULES:
+- Change ONLY what is necessary to address the task above
+- Preserve every scripture reference, quote, and theological teaching point
+- WORD COUNT: The original section is ${originalWordCount} words. Target ${minWords}–${maxWords} words (98–102% of original).
+- Return the revised body as plain prose text only
+
+${SOURCE_LOCK_RULES}
+
+${READER_NORMALIZATION_RULES}
+
+${PROSE_MASTERY_RULES}
+
+${SCRIPTURE_FORMATTING_RULES}
+
+${PREMIUM_BOOK_STYLE_RULES}`,
+      });
+      text = result.text.trim();
+    } catch (r1Err) {
+      console.error("[apply-audit] R1 fallback also failed:", r1Err instanceof Error ? r1Err.message : r1Err);
+      return body; // final fallback to original
+    }
   }
 
   if (!text) return body;

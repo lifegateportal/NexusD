@@ -191,10 +191,10 @@ ${excerptPayload}`;
   // We send a space every 15s; JSON.parse (used by res.json()) ignores leading whitespace.
   const encoder = new TextEncoder();
   const generatePromise = generateObject({
-    model: deepSeekReasonerModel,
+    model: deepSeekModel,
     schema: ChapterPlanLLMSchema,
     mode: "json",
-    temperature: 1, // reasoner requires temperature=1
+    temperature: 0.2, // V3 for speed, maintains deduplication
     system,
     prompt,
   });
