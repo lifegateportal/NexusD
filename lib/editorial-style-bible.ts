@@ -527,3 +527,106 @@ export function harmonizeBookManifest<T extends HarmonizeManifestInput>(manifest
 		chapters,
 	};
 }
+
+/**
+ * extractChapterOpeningQuote — Extracts a significant short quote from chapter body text
+ * to use as the chapter intro instead of AI-generating one.
+ *
+ * Strategy:
+ * 1. Split section bodies into sentences
+ * 2. Filter out filler, single-word sentences, and weak openers
+ * 3. Score sentences by:
+ *    - Length (2-25 words for optimal impact)
+ *    - Strength (active verbs, key concepts, direct statements)
+ *    - Position (first section weighted higher)
+ * 4. Return the highest-scoring sentence as a single powerful opening line
+ *
+ * @param sections Array of {body: string, sectionNumber: number}
+ * @returns Single powerful opening sentence, or empty string if no suitable quote found
+ */
+export function extractChapterOpeningQuote(sections: Array<{body?: string; sectionNumber?: number}>): string {
+	const allSentences: Array<{text: string; section: number; index: number}> = [];
+
+	// Extract sentences from all sections, weighted by position
+	for (const section of sections) {
+		if (!section.body?.trim()) continue;
+		const sectionNum = section.sectionNumber ?? 0;
+		// Split on sentence boundaries, preserve the sentence
+		const sentences = (section.body ?? "")
+			.split(/(?<=[.!?])\s+/)
+			.map((s) => s.trim())
+			.filter(Boolean);
+
+		sentences.forEach((sent, idx) => {
+			// Skip headings, markdown artifacts, filler
+			if (/^#{1,6}\s/.test(sent) || sent.length < 8 || sent.length > 150) return;
+			if (/^(the |a |an |to |so |but |and |or |this |that |what |which |when |where |why |how )/i.test(sent)) {
+				// Allow some common openers, but deprioritize
+				allSentences.push({text: sent, section: sectionNum, index: idx});
+				return;
+			}
+			allSentences.push({text: sent, section: sectionNum, index: idx});
+		});
+	}
+
+	if (allSentences.length === 0) return "";
+
+	// Score each sentence
+	const scored = allSentences.map(({text, section, index}) => {
+		let score = 0;
+
+		// Length scoring: reward 10-25 words (most impactful range)
+		const wordCount = text.split(/\s+/).length;
+		if (wordCount >= 10 && wordCount <= 25) score += 30;
+		else if (wordCount >= 8 && wordCount <= 35) score += 15;
+
+		// Strong opening verbs (avoid weak "is/are/be")
+		if (/\b(reveals|shows|teaches|demands|requires|transforms|breaks|shatters|builds|ignites|awakens|compels|declares|proclaims)\b/i.test(text)) {
+			score += 20;
+		} else if (/\b(is|are|was|were|be|being|become)\b/.test(text)) {
+			score -= 10; // Deprioritize weak verbs
+		}
+
+		// Presence of key theological/teaching words (without being too obvious)
+		if (/\b(faith|love|truth|power|freedom|grace|hope|justice|mercy|kingdom|covenant|believe|trust|surrender|obey|serve)\b/i.test(text)) {
+			score += 15;
+		}
+
+		// Rhetorical questions (high impact)
+		if (text.endsWith("?")) score += 20;
+
+		// Position bonus: first section weighted higher, earlier sentences weighted higher
+		if (section === 1) score += 25;
+		else if (section <= 3) score += 10;
+
+		// Deprioritize sentences starting with weak connectors
+		if (/^(however|therefore|thus|consequently|meanwhile|furthermore|moreover|additionally|also|too)/i.test(text)) {
+			score -= 15;
+		}
+
+		// Deprioritize sentences with too many commas (complex/secondary ideas)
+		const commaCount = (text.match(/,/g) ?? []).length;
+		if (commaCount > 2) score -= 5 * commaCount;
+
+		return { text, score, section, index };
+	});
+
+	// Sort by score, then by position
+	scored.sort((a, b) => {
+		if (b.score !== a.score) return b.score - a.score;
+		if (a.section !== b.section) return a.section - b.section;
+		return a.index - b.index;
+	});
+
+	// Return top candidate, ensure no markdown, no em dashes
+	const topCandidate = scored[0]?.text ?? "";
+	if (!topCandidate) return "";
+
+	return topCandidate
+		.replace(/\*\*/g, "")       // strip bold markers
+		.replace(/\*/g, "")          // strip italic markers
+		.replace(/__/g, "")          // strip alt bold
+		.replace(/_/g, "")           // strip alt italic
+		.replace(/\u2014/g, " ")     // replace em dash with space
+		.trim();
+}

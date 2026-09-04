@@ -38,19 +38,58 @@ ABSOLUTE CONTENT RULE — ZERO FABRICATION:
 Every sentence must come verbatim-idea from the provided transcript. You may not add content, context, or ideas not present in the audio/transcript — not even plausible extensions, inferred background, theological context the author "probably" knows, or biographical details you can reasonably assume. If you cannot point to the exact idea in the transcript text below, delete the sentence. Write shorter output rather than pad with invented content.
 
 ════════════════════════════════════════════
-INTRODUCTION
+INTRODUCTION — INDUSTRY STANDARDS
 ════════════════════════════════════════════
-- Speak in first person as the author introducing the book directly to the reader.
-- Focus on the book's purpose, core themes, and invitation to the reader.
-- Do not describe the author from a third-person perspective.
-- 3–5 paragraphs. Apply all preface guardrails above.
+DO NOT PREVIEW OR RECAP THE CHAPTERS. The introduction does not explain what the reader will find in Chapter 1, 2, 3, etc.
+
+STRUCTURE (first person, author voice):
+1. READER'S PROBLEM/NEED: Start with the specific tension, confusion, or hunger the reader brings to this book. Ground it in a real human situation, not abstract theology. Use a moment or truth from the author's own understanding.
+2. THE INVITATION: Why now? Why this book? Articulate the permission the reader needs to receive—not a command, but a genuine welcome into a conversation.
+3. WHAT'S AT STAKE: What changes for the reader if they engage deeply? Not a chapter preview, but a felt outcome. Make it visceral.
+4. HOW TO READ THIS: Brief guidance on voice and approach. The author's own methodology or rhythm for how to encounter the material.
+5. LANDING: A powerful forward motion into the text—not a summary, but a threshold the reader now crosses.
+
+HARD CONSTRAINTS:
+- NEVER state or foreshadow chapter titles, chapter themes, or the order of ideas in the book.
+- NEVER repeat examples, stories, illustrations, or scriptural grounds already used in chapter bodies.
+- NEVER create a "roadmap" or table-of-contents prose. Readers already know what chapters exist.
+- DO draw from the author's opening moment in the transcript (the first 3–4 minutes) for voice calibration, but DO NOT copy the opening's content directly.
+- DO use signature phrases and rhetorical patterns from Voice DNA naturally embedded (not quoted).
+
+TARGET: 3–5 paragraphs, 500–800 words maximum.
 
 ════════════════════════════════════════════
-BACK MATTER
+BACK MATTER — INDUSTRY STANDARDS
 ════════════════════════════════════════════
-- conclusion: Drawn from the closing moments of the teaching, rewritten as a book closing — not an altar call or dismissal. 2–4 paragraphs.
-- aboutAuthor: ONLY write if the author spoke about themselves, their background, or their story. Return null if not.
-- resourcesList: Books, tools, websites, or resources the author explicitly recommended. Return [] if none mentioned.
+
+CONCLUSION (NOT A RECAP):
+- Drawn from the closing moments of the teaching, rewritten as a book closing—NOT an altar call, dismissal, or sermon benediction.
+- NEVER recap individual chapters or remind the reader what each chapter taught.
+- NEVER restate the core teachings, examples, or arguments used throughout the book.
+
+STRUCTURE (first person, author voice):
+1. RETURN TO THE READER'S NEED: Echo the problem or hunger named in the introduction, but now contextualized by all the author has shared. Show how the journey through the book lands on that original question.
+2. THE COHESIVE IDEA: Articulate the ONE big idea that holds all chapters together—not a list, not a summary, but the connective tissue. What unifies this whole teaching?
+3. BEYOND THE BOOK: What is the reader's next move? Not "go read more" or "apply these principles abstractly," but a concrete forward orientation grounded in the author's own conviction about what happens after this book ends.
+4. FINAL GESTURE: A closing statement that honors the reader's time and sends them forward with permission, not obligation. Avoid manufactured emotion—let the author's authentic conviction land.
+
+HARD CONSTRAINTS:
+- NEVER list or summarize chapter content.
+- NEVER reintroduce illustrations, stories, or scripture examples from the chapter bodies.
+- NEVER add applications or implications the author did not voice explicitly.
+- DO synthesize the through-line that runs across all chapters (from Voice DNA and chapter architecture).
+- DO use the author's own closing sentiment from the transcript (final minutes) for emotional resonance, but DO NOT copy the closing verbatim or import its specific examples.
+
+TARGET: 2–4 paragraphs, 300–500 words maximum.
+
+ABOUT AUTHOR:
+- ONLY write if the author explicitly discussed their background, personal journey, credentials, or "how I came to this." Return null otherwise.
+- Focus on what makes the author credible to write THIS book—not a résumé.
+
+RESOURCES LIST:
+- Only include books, tools, websites, platforms the author explicitly recommended by name or direct reference.
+- Return [] if no resources were mentioned.
+- Do NOT add resources that "fit" the author's message but were not named.
 
 SCRIPTURE & QUOTE FORMATTING:
 ${SCRIPTURE_FORMATTING_RULES}

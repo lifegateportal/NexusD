@@ -3,8 +3,7 @@ import { generateText } from "ai";
 import { deepSeekModel } from "@/lib/ai-providers";
 import { z } from "zod";
 import { PolishChapterRequestSchema } from "@/lib/schemas/ebook";
-import { PREMIUM_BOOK_STYLE_RULES, PROSE_MASTERY_RULES, READER_NORMALIZATION_RULES, SOURCE_LOCK_RULES } from "@/lib/editorial-style-bible";
-import { stripAudienceLanguage } from "@/lib/editorial-style-bible";
+import { PREMIUM_BOOK_STYLE_RULES, PROSE_MASTERY_RULES, READER_NORMALIZATION_RULES, SOURCE_LOCK_RULES, stripAudienceLanguage, extractChapterOpeningQuote } from "@/lib/editorial-style-bible";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
@@ -128,6 +127,11 @@ export async function POST(req: NextRequest) {
         }).join("\n")}`
       : "";
 
+    // AMENDMENT: Extract chapter opening quote from first section instead of AI-generating intro
+    // This ensures the intro is a direct, powerful statement from the author's own teaching,
+    // not a fabricated opener. This matches industry standards for book intros.
+    const extractedIntro = extractChapterOpeningQuote(chapter.sections ?? []);
+
     let object: z.infer<typeof PolishOutputSchema>;
     try {
       const { text } = await generateText({
@@ -144,14 +148,7 @@ HUMANIZATION: Use contractions naturally. Avoid "not just...but", "not merely...
 
 Your tasks:
 1. EPIGRAPH: From the provided scripture candidates, pick the ONE most resonant opening quote for this chapter. Return it formatted as: "Quote text." — Reference (Translation). The translation abbreviation is REQUIRED and must never be omitted — every candidate below already gives you one to use. If no candidate strongly fits or none are provided, return an empty string. Never invent a quote.
-2. INTRO (CONSOLIDATED CHAPTER OPENER): Two sentences — no more, no less.
-   Sentence 1: ONE bold declarative statement — the north star thesis of this chapter. States what is at stake, what will be proven, or what the reader will discover. Present tense. Direct. Max 20 words.
-   Sentence 2: ONE provocative question that makes the reader feel the personal stakes and need to read on. Sharp, specific to this chapter's content — not generic.
-   The two sentences must work as a unit: the first declares, the second destabilizes. Together they are the door into the chapter.
-   WRONG: "In this chapter, we'll explore what it means to walk in faith. This is an important topic."
-   RIGHT: "Faith is not the absence of doubt — it is action taken despite it. So why do so many of us pray for more faith instead of just moving?"
-   CRITICAL: Do NOT copy the opening sentences of Section 1. Do NOT summarize the chapter contents.
-   CONNECTIVE TISSUE: If a "PREVIOUS CHAPTER FORWARD QUESTION" is provided, sentence 1 should feel like the answer beginning to form.
+2. INTRO: THIS FIELD IS NOW EXTRACTED (not generated). Skip generating intro — return empty string. The intro is automatically extracted from the chapter body as a significant opening quote.
 3. FORWARD QUESTION: ONE sentence — a preemptive question that plants anticipation for where the book goes next.
    This is the last thing the reader sees before turning the page. It should feel like an open door, not a closed summary.
    It must point forward, not backward. Never restate what the chapter covered.
@@ -187,12 +184,15 @@ Respond with ONLY a valid JSON object — no markdown, no code blocks, no explan
         prompt: `Finalize this chapter.\n\nCHAPTER ${chapter.number}: ${chapter.title}\n\nVOICE DNA:\n${JSON.stringify(voiceDNASlim)}\n\nSECTION SUMMARIES:\n${sectionsSummary}${epigraphCandidates ? `\n\nSCRIPTURE CANDIDATES FOR EPIGRAPH (pick the most resonant ONE, or return empty string if none fits):\n${epigraphCandidates}` : ""}${prevChapterBlock}${chapterPremiseBlock}${seriesArcBlock}${sectionBoundariesBlock}`,
       });
       const _jsonMatch = text.match(/\{[\s\S]*\}/);
-      object = PolishOutputSchema.parse(_jsonMatch ? JSON.parse(_jsonMatch[0]) : {});
+      const parsed = PolishOutputSchema.parse(_jsonMatch ? JSON.parse(_jsonMatch[0]) : {});
+      // AMENDMENT: Override with extracted intro (actual quote from chapter)
+      object = { ...parsed, intro: extractedIntro };
     } catch {
       try {
-        object = fallbackPolishOutput(chapter);
+        const fallback = fallbackPolishOutput(chapter);
+        object = { ...fallback, intro: extractedIntro };
       } catch {
-        object = { intro: "", forwardQuestion: "", keyTakeaways: [], reflectionQuestions: [] };
+        object = { intro: extractedIntro, forwardQuestion: "", keyTakeaways: [], reflectionQuestions: [] };
       }
     }
 
