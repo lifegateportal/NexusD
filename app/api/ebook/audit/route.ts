@@ -590,7 +590,7 @@ Respond ONLY with valid JSON (no markdown fences, no commentary outside the JSON
 }`;
 
   try {
-    const { text } = await generateText({ model: deepSeekReasonerModel, prompt, maxTokens: 24000 });
+    const { text } = await generateText({ model: deepSeekReasonerModel, prompt, maxTokens: 12000 });
     const jsonMatch = text.match(/\{[\s\S]*\}/);
     if (!jsonMatch) return { conceptDuplicates: [], phraseAmendments: [], wordAmendments: [] };
     return JSON.parse(jsonMatch[0]) as {

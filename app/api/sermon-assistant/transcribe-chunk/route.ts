@@ -72,7 +72,7 @@ export async function POST(request: NextRequest) {
 
   for (const attempt of buildAttempts(speechLanguage)) {
     const params = new URLSearchParams({
-      model: "nova-3",
+      model: "nova-2",
       punctuate: "true",
       smart_format: "true",
       paragraphs: "false",

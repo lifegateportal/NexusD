@@ -1,6 +1,6 @@
 import { generateObject } from "ai";
 import { NextRequest, NextResponse } from "next/server";
-import { deepSeekReasonerModel } from "@/lib/ai-providers";
+import { deepSeekModel } from "@/lib/ai-providers";
 import { IngestInputSchema, IngestResultSchema } from "@/lib/schemas/blueprint";
 
 export const runtime = "nodejs";
@@ -17,7 +17,7 @@ export async function POST(request: NextRequest) {
       : input.sourceText;
 
     const { object } = await generateObject({
-      model: deepSeekReasonerModel,
+      model: deepSeekModel,
       schema: IngestResultSchema,
       schemaName: "IngestResult",
       schemaDescription: "Structured blueprint extracted from source content",

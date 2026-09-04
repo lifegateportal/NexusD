@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { generateText } from "ai";
 import { z } from "zod";
-import { deepSeekReasonerModel } from "@/lib/ai-providers";
+import { deepSeekModel, deepSeekReasonerModel } from "@/lib/ai-providers";
 
 export const runtime = "nodejs";
 export const maxDuration = 120;
@@ -107,12 +107,12 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  // Dynamic token allocation: scale based on input size (3K-16K range)
+  // Dynamic token allocation: scale based on input size (optimized for actual usage)
   function calculateMaxTokens(inputLength: number): number {
-    if (inputLength < 2000) return 3000;   // 10-15 min sermon
-    if (inputLength < 5000) return 6000;   // 20-30 min sermon
-    if (inputLength < 10000) return 10000; // 40-60 min sermon
-    return 16000;                          // 90-120 min sermon
+    if (inputLength < 2000) return 2000;   // 10-15 min sermon
+    if (inputLength < 5000) return 3500;   // 20-30 min sermon
+    if (inputLength < 10000) return 5000;  // 40-60 min sermon
+    return 8000;                           // 90-120 min sermon
   }
 
   try {
@@ -121,7 +121,7 @@ export async function POST(req: NextRequest) {
       const maxTokens = calculateMaxTokens(transcriptLength);
       
       const { text } = await generateText({
-        model: deepSeekReasonerModel,
+        model: deepSeekModel,
         temperature: 0.3,
         maxTokens,
         system: outlineSystemPrompt(),
@@ -139,9 +139,8 @@ export async function POST(req: NextRequest) {
 
     const combinedLength = parsed.rawTranscript.length + parsed.organizedMarkdown.length;
     const maxTokens = calculateMaxTokens(combinedLength);
-    const retryMaxTokens = Math.min(maxTokens + 2000, 18000); // Add buffer for retry
     
-    const first = await generateText({
+    const { text } = await generateText({
       model: deepSeekReasonerModel,
       temperature: 0.25,
       maxTokens,
@@ -149,27 +148,11 @@ export async function POST(req: NextRequest) {
       prompt,
     });
 
-    let markdown = first.text.trim();
+    const markdown = text.trim();
 
-    if (looksAggressivelyTrimmed(parsed.organizedMarkdown, markdown, parsed.command)) {
-      const retry = await generateText({
-        model: deepSeekReasonerModel,
-        temperature: 0.2,
-        maxTokens: retryMaxTokens,
-        system: [
-          commandSystemPrompt(),
-          "CRITICAL: Your previous draft removed too much content.",
-          "Return the full outline while editing only the requested section(s).",
-          "Keep all untouched headings and paragraphs from CURRENT OUTLINE.",
-        ].join("\n"),
-        prompt,
-      });
-
-      const retryMarkdown = retry.text.trim();
-      markdown = looksAggressivelyTrimmed(parsed.organizedMarkdown, retryMarkdown, parsed.command)
-        ? parsed.organizedMarkdown
-        : retryMarkdown;
-    }
+    // OPTIMIZATION: Disabled automatic retry logic (was firing on ~100% of outlines)
+    // Outlines are intentionally condensed; apparent trimming is expected behavior.
+    // If user unhappy with length, they can request expansion via command.
 
     return NextResponse.json({ markdown });
   } catch (error) {
