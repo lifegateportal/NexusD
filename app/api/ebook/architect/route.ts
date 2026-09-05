@@ -105,134 +105,6 @@ function deriveBridgeConcept(
   return `${fromLastSection.heading.split(/\s+/).slice(0, 4).join(" ")} → ${toFirstSection.heading.split(/\s+/).slice(0, 4).join(" ")}`;
 }
 
-// ── Heading validation & improvement pass ────────────────────────────────────
-
-/** Detect if a heading violates quality standards */
-function isValidHeading(heading: string): boolean {
-  if (!heading || heading.trim().length === 0) return false;
-  
-  const trimmed = heading.trim();
-  const words = trimmed.split(/\s+/);
-  
-  // Check length: 4–8 words
-  if (words.length < 4 || words.length > 8) return false;
-  
-  // Check for banned prefixes (case-insensitive)
-  const BANNED_PREFIX = /^(introduction|intro|overview|opening|summary|conclusion|section|part|chapter)\s*[:\-]?\s*/i;
-  if (BANNED_PREFIX.test(trimmed)) return false;
-  
-  // Check for dangling endings (prepositions, conjunctions, pronouns)
-  const DANGLING_END = /\b(to|our|the|in|for|on|and|but|or|let|a|an|its|their|them|it)$/i;
-  if (DANGLING_END.test(trimmed)) return false;
-  
-  // Check for question fragments (starts with question but doesn't end with full answer)
-  if (trimmed.startsWith("Is ") || trimmed.startsWith("Are ") || trimmed.startsWith("Do ") || trimmed.startsWith("Can ")) {
-    if (!trimmed.includes("?") && words.length < 6) return false;
-  }
-  
-  return true;
-}
-
-/** Attempt to improve an invalid heading by extracting key concepts */
-function improveHeading(heading: string, keyPoints: string[]): string {
-  // Remove banned prefixes
-  const BANNED = /^(introduction|intro|overview|opening|summary|conclusion|section|part|chapter)\s*[:\-]?\s*/i;
-  let improved = heading.replace(BANNED, "").trim();
-  
-  // If still invalid, try using first keyPoint
-  if (!isValidHeading(improved) && keyPoints.length > 0) {
-    improved = keyPoints[0].replace(BANNED, "").trim();
-    // Compress to 6 words max
-    const words = improved.split(/\s+/);
-    if (words.length > 6) {
-      improved = words.slice(0, 6).join(" ");
-    }
-  }
-  
-  // Last resort: use compressHeading logic
-  if (!isValidHeading(improved)) {
-    improved = compressHeading(improved || heading);
-  }
-  
-  return improved.length > 0 ? improved : heading;
-}
-
-// ── Title/Subtitle improvement pass ──────────────────────────────────────────
-
-/** Check if a title meets quality standards (4–7 words, complete phrase) */
-function isValidTitle(title: string): boolean {
-  if (!title || title.trim().length === 0) return false;
-  
-  const trimmed = title.trim();
-  const words = trimmed.split(/\s+/);
-  
-  // Check length: 4–7 words (publishable title length)
-  if (words.length < 4 || words.length > 7) return false;
-  
-  // Check for banned patterns: "(", parenthetical asides, too academic
-  if (trimmed.includes("(") || trimmed.includes(")")) return false;
-  if (trimmed.includes("The [") || trimmed.includes("The dimensions")) return false;
-  if (trimmed.toLowerCase().includes("transformative encounter")) return false;
-  
-  // Check for dangling endings
-  const DANGLING = /\b(and|but|or|to|of|in|for|on)$/i;
-  if (DANGLING.test(trimmed)) return false;
-  
-  return true;
-}
-
-/** Check if a subtitle is generic filler */
-function isGenericSubtitle(subtitle: string): boolean {
-  const generic = [
-    "Drawn directly from the source teaching",
-    "From the original teaching",
-    "Extracted from the sermon series",
-    "Based on the teaching",
-    "Compiled from the source",
-  ];
-  return generic.some((g) => subtitle.toLowerCase().includes(g.toLowerCase()));
-}
-
-/** Improve title by truncating at soft break or extracting key concepts */
-function improveTitle(title: string): string {
-  const trimmed = title.trim();
-  const words = trimmed.split(/\s+/);
-  
-  // If already valid, return as-is
-  if (isValidTitle(trimmed)) return trimmed;
-  
-  // Too long: aggressive extraction for thesis-statement pattern
-  if (words.length > 7) {
-    // Detect thesis-statement patterns like "The X over/through/of/and Y"
-    // Extract just the core noun phrase (first 4-5 words)
-    const SOFT = /^(and|but|that|as|so|which|who|when|where|because|or|of|over|through|about|from|by|to|for|on|in|–|—|-|,)$/i;
-    
-    // Look for a soft break within words 3-6
-    let cutAt = 7;
-    for (let i = 3; i < Math.min(words.length, 8); i++) {
-      const clean = words[i].replace(/[,;:–—]$/, "");
-      if (SOFT.test(clean)) {
-        cutAt = i;
-        break;
-      }
-    }
-    
-    // Extract and clean up
-    const cut = words.slice(0, Math.min(cutAt, 7)).join(" ").replace(/[,;:–—]+$/, "").trim();
-    
-    // Ensure result is valid length
-    if (cut.length > 0 && cut.split(/\s+/).length >= 4 && cut.split(/\s+/).length <= 7) {
-      return cut;
-    }
-    
-    // Fallback: take first 6 words
-    return words.slice(0, 6).join(" ");
-  }
-  
-  // Too short (< 4 words): can't improve, return original
-  return trimmed;
-}
-
 // ── Absolute minimum schema — no keyPoints, no quotes, no nested arrays ──────
 // Everything gets rehydrated server-side from the contentMap after generation.
 const MinimalSectionSchema = z.object({
@@ -528,84 +400,33 @@ function normalizeArchitecture(
     }))
     .filter((chapter) => chapter.sections.length > 0);
 
-  // ── Heading quality pass: ENFORCE STANDARDS WITH AUTOMATIC CORRECTION ──────
-  // Invalid headings are automatically improved using fallback logic.
-  // This ensures the book never ships with dangling fragments or generic labels.
+  // ── Heading quality pass: warn-only, no mutation ────────────────────────────
+  // We deliberately do NOT compress or truncate headings here. The AI is
+  // instructed to produce complete 4–8 word phrases. Post-hoc truncation was
+  // the root cause of dangling fragments like "Pray until you are no longer".
+  // Warnings are logged for monitoring but headings are left as-is.
   const architectureWarnings: string[] = [];
   const allHeadingTokens: Array<{ heading: string; chapterNum: number; sectionNum: number }> = [];
-  const segmentMap = Object.fromEntries(input.contentMap.segments.map((s) => [s.id, s]));
 
   const DANGLING_END_RE = /\b(to|our|the|in|for|on|and|but|or|let|a|an|its|their|them|it)$/i;
-  const BANNED_PREFIX = /^(introduction|intro|overview|opening|summary|conclusion|section|part|chapter)\s*[:\-]?\s*/i;
 
-  // First pass: detect and improve invalid headings (both chapter titles and section headings)
   const targetChapters = chapters.length > 0 ? chapters : fallback.chapters;
-  const improvedChapters = targetChapters.map((chapter) => {
-    // Improve chapter title
-    const chapterTitleWords = chapter.title.trim().split(/\s+/);
-    const isInvalidChapterTitle = !isValidTitle(chapter.title);
-    const chapterTitleTooLong = chapterTitleWords.length > 7;
-    let improvedChapterTitle = chapter.title;
-    let chapterTitleCorrectionLog = "";
-
-    if (isInvalidChapterTitle || chapterTitleTooLong) {
-      improvedChapterTitle = improveTitle(chapter.title);
-      chapterTitleCorrectionLog = ` [auto-corrected]`;
-      if (chapterTitleTooLong) {
+  for (const chapter of targetChapters) {
+    for (const section of chapter.sections) {
+      const words = section.heading.trim().split(/\s+/);
+      if (words.length > 8) {
         architectureWarnings.push(
-          `Ch ${chapter.number} Title too long (${chapterTitleWords.length} words)${chapterTitleCorrectionLog}: "${chapter.title}" → "${improvedChapterTitle}"`
+          `Ch ${chapter.number} §${section.sectionNumber}: Heading too long (${words.length} words): "${section.heading}"`
         );
       }
-    }
-
-    // Improve section headings
-    const improvedSections = chapter.sections.map((section) => {
-      const words = section.heading.trim().split(/\s+/);
-      const isInvalid = !isValidHeading(section.heading);
-      const hasBannedPrefix = BANNED_PREFIX.test(section.heading.trim());
-      const hasDanglingEnd = DANGLING_END_RE.test(section.heading.trim());
-      const isTooLong = words.length > 8;
-
-      let improvedHeading = section.heading;
-      let correctionLog = "";
-
-      if (isInvalid || hasBannedPrefix || hasDanglingEnd || isTooLong) {
-        // Gather keypoints from source segments for context
-        const sourceSegments = (section.sourceSegmentIds ?? [])
-          .map((id) => segmentMap[id])
-          .filter(Boolean);
-        const keyPoints = sourceSegments.flatMap((s) => s?.keyPoints ?? []);
-
-        improvedHeading = improveHeading(section.heading, keyPoints);
-        correctionLog = ` [auto-corrected]`;
-
-        if (hasBannedPrefix) {
-          architectureWarnings.push(
-            `Ch ${chapter.number} §${section.sectionNumber}: Removed banned prefix "${section.heading}"${correctionLog} → "${improvedHeading}"`
-          );
-        }
-        if (hasDanglingEnd) {
-          architectureWarnings.push(
-            `Ch ${chapter.number} §${section.sectionNumber}: Fixed dangling ending "${section.heading}"${correctionLog} → "${improvedHeading}"`
-          );
-        }
-        if (isTooLong) {
-          architectureWarnings.push(
-            `Ch ${chapter.number} §${section.sectionNumber}: Compressed long heading (${words.length} words)${correctionLog}: "${section.heading}" → "${improvedHeading}"`
-          );
-        }
+      if (DANGLING_END_RE.test(section.heading.trim())) {
+        architectureWarnings.push(
+          `Ch ${chapter.number} §${section.sectionNumber}: Heading ends mid-thought: "${section.heading}"`
+        );
       }
-
-      allHeadingTokens.push({ heading: improvedHeading, chapterNum: chapter.number, sectionNum: section.sectionNumber });
-      return { ...section, heading: improvedHeading };
-    });
-
-    return {
-      ...chapter,
-      title: improvedChapterTitle,
-      sections: improvedSections,
-    };
-  });
+      allHeadingTokens.push({ heading: section.heading, chapterNum: chapter.number, sectionNum: section.sectionNumber });
+    }
+  }
 
   // Global cross-chapter dedup (check ALL chapter pairs, not just adjacent)
   for (let i = 0; i < allHeadingTokens.length; i++) {
@@ -621,24 +442,17 @@ function normalizeArchitecture(
   }
 
   if (architectureWarnings.length > 0) {
-    console.info("[architect] Heading corrections applied:", architectureWarnings);
+    console.warn("[architect] Heading quality warnings:", architectureWarnings);
   }
 
   return {
-    bookTitle: improveTitle((minimal.bookTitle || "").trim() || fallback.bookTitle),
-    subtitle: (() => {
-      const raw = (minimal.subtitle || "").trim() || fallback.subtitle || "";
-      // Prefer targetAudience or teachingArc if subtitle is generic
-      if (isGenericSubtitle(raw)) {
-        return input.contentMap.targetAudience?.trim() || input.contentMap.teachingArc?.trim() || raw || "Drawn directly from the source teaching";
-      }
-      return raw;
-    })(),
+    bookTitle: (minimal.bookTitle || "").trim() || fallback.bookTitle,
+    subtitle: (minimal.subtitle || "").trim(),
     authorName: (minimal.authorName || "").trim() || fallback.authorName,
     estimatedTotalWords: Math.max(0, Math.trunc(minimal.estimatedTotalWords || 0)) || fallback.estimatedTotalWords,
     frontMatterNotes: (minimal.frontMatterNotes || "").trim() || fallback.frontMatterNotes,
     backMatterNotes: (minimal.backMatterNotes || "").trim() || fallback.backMatterNotes,
-    chapters: improvedChapters.length > 0 ? improvedChapters : fallback.chapters,
+    chapters: chapters.length > 0 ? chapters : fallback.chapters,
     architectureWarnings,
   };
 }
