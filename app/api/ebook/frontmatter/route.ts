@@ -38,9 +38,12 @@ ABSOLUTE CONTENT RULE — ZERO FABRICATION:
 Every sentence must come verbatim-idea from the provided transcript. You may not add content, context, or ideas not present in the audio/transcript — not even plausible extensions, inferred background, theological context the author "probably" knows, or biographical details you can reasonably assume. If you cannot point to the exact idea in the transcript text below, delete the sentence. Write shorter output rather than pad with invented content.
 
 ════════════════════════════════════════════
-INTRODUCTION — INDUSTRY STANDARDS
+INTRODUCTION — INDUSTRY STANDARDS (CRITICAL — MOST COMMON FAILURE: table-of-contents style previews)
 ════════════════════════════════════════════
-DO NOT PREVIEW OR RECAP THE CHAPTERS. The introduction does not explain what the reader will find in Chapter 1, 2, 3, etc.
+🚨 INTRODUCTION MANDATE: Write as the author speaking DIRECTLY to the reader about why they need THIS book RIGHT NOW. Never explain what chapters exist or what readers will learn. Never preview or list chapter content.
+
+NO CHAPTER PREVIEWS. NO ROADMAP PROSE. NEVER.
+The introduction does NOT list, foreshadow, or reference chapter titles, themes, or sequence. Readers already see the table of contents. Your job is not to restate it.
 
 STRUCTURE (first person, author voice):
 1. READER'S PROBLEM/NEED: Start with the specific tension, confusion, or hunger the reader brings to this book. Ground it in a real human situation, not abstract theology. Use a moment or truth from the author's own understanding.
@@ -59,13 +62,12 @@ HARD CONSTRAINTS:
 TARGET: 3–5 paragraphs, 500–800 words maximum.
 
 ════════════════════════════════════════════
-BACK MATTER — INDUSTRY STANDARDS
+CONCLUSION — INDUSTRY STANDARDS (CRITICAL — MOST COMMON FAILURE: chapter recap/summary mode)
 ════════════════════════════════════════════
+🚨 CONCLUSION MANDATE: This is NOT a recap. Never remind the reader what each chapter taught. Never summarize the book's structure. Write as the author returning to complete a conversation, not closing a sermon.
 
-CONCLUSION (NOT A RECAP):
-- Drawn from the closing moments of the teaching, rewritten as a book closing—NOT an altar call, dismissal, or sermon benediction.
-- NEVER recap individual chapters or remind the reader what each chapter taught.
-- NEVER restate the core teachings, examples, or arguments used throughout the book.
+NO RECAP MODE. NO CHAPTER SUMMARY. NEVER.
+The conclusion does NOT list chapter themes, remind readers of chapter content, or summarize what each section covered. Readers already read the book. Your job is not to tell them what they just learned.
 
 STRUCTURE (first person, author voice):
 1. RETURN TO THE READER'S NEED: Echo the problem or hunger named in the introduction, but now contextualized by all the author has shared. Show how the journey through the book lands on that original question.
@@ -108,7 +110,24 @@ ${READER_NORMALIZATION_RULES}
 
 ${PROSE_MASTERY_RULES}
 
-${PREMIUM_BOOK_STYLE_RULES}${authorConfigBlock}${quoteDedupBlock}`;
+${PREMIUM_BOOK_STYLE_RULES}
+
+════════════════════════════════════════════
+COMPLIANCE CHECKPOINT — BEFORE FINALIZING OUTPUT
+════════════════════════════════════════════
+✅ INTRODUCTION: Before returning, scan for:
+  - Does it preview chapter titles, themes, or sequence? DELETE those sentences.
+  - Does it repeat examples, stories, or scripture already in chapter bodies? DELETE those sentences.
+  - Does it sound like a table of contents or roadmap? REWRITE entirely.
+  - Is every sentence grounded in the transcript? If not, DELETE.
+
+✅ CONCLUSION: Before returning, scan for:
+  - Does it recap or summarize chapter content? DELETE those sentences.
+  - Does it remind readers what they learned? DELETE those sentences.
+  - Does it reprint stories, scripture, or illustrations from chapters? DELETE those sentences.
+  - Is every sentence grounded in the transcript? If not, DELETE.
+
+If after removing these violations the introduction or conclusion is very short, that is CORRECT. Short and true beats long and padded.${authorConfigBlock}${quoteDedupBlock}`;
 
   const frontmatterPrompt = `Write the front and back matter for this ebook.
 
