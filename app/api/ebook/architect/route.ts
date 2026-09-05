@@ -247,26 +247,30 @@ ${transcriptBlock}`,
       estimatedTotalWords: chapters.flatMap((c) => c.sections).reduce((sum, s) => sum + s.targetWordCount, 0),
       frontMatterNotes: minimal.frontMatterNotes,
       backMatterNotes: minimal.backMatterNotes,
-      chapters: chapters.map((ch) => ({
-        number: ch.number,
-        title: ch.title,
-        keyTheme: ch.keyTheme,
-        sections: ch.sections.map((sec) => {
-          const segs = sec.sourceSegmentIds.map((id) => segmentMap[id]).filter(Boolean);
-          const quotes = segs.flatMap((s) => s?.quotes ?? [])
-            .map((q) => quoteMap[q.id] ?? q)
-            .filter((q, i, arr) => arr.findIndex((x) => x.id === q.id) === i);
-          
-          return {
-            sectionNumber: sec.sectionNumber,
-            heading: sec.heading,
-            sourceSegmentIds: sec.sourceSegmentIds,
-            targetWordCount: sec.targetWordCount,
-            keyPoints: segs.flatMap((s) => s?.keyPoints ?? []),
-            quotesInSection: quotes,
-          };
-        }),
-      })),
+      chapters: chapters.map((ch) => {
+        const chapterSegmentIds = [...new Set(ch.sections.flatMap((s) => s.sourceSegmentIds))];
+        return {
+          number: ch.number,
+          title: ch.title,
+          keyTheme: ch.keyTheme,
+          sourceSegmentIds: chapterSegmentIds,
+          sections: ch.sections.map((sec) => {
+            const segs = sec.sourceSegmentIds.map((id) => segmentMap[id]).filter(Boolean);
+            const quotes = segs.flatMap((s) => s?.quotes ?? [])
+              .map((q) => quoteMap[q.id] ?? q)
+              .filter((q, i, arr) => arr.findIndex((x) => x.id === q.id) === i);
+            
+            return {
+              sectionNumber: sec.sectionNumber,
+              heading: sec.heading,
+              sourceSegmentIds: sec.sourceSegmentIds,
+              targetWordCount: sec.targetWordCount,
+              keyPoints: segs.flatMap((s) => s?.keyPoints ?? []),
+              quotesInSection: quotes,
+            };
+          }),
+        };
+      }),
     };
 
     return NextResponse.json(result);
