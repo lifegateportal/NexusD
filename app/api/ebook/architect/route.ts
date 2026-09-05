@@ -269,37 +269,20 @@ async function architectOneChapterFromTranscript(
     mode: "json",
     temperature: 0.3,
     maxTokens: 8000,
-    system: `You are a senior structural editor turning one teaching message into a premium book chapter.
+    system: `You are a structural editor breaking a teaching message into a book chapter.
 
-SOURCE-LOCK — ABSOLUTE RULE:
-Every title, section heading, and key theme you write MUST derive word-for-word or idea-for-idea from the transcript segments below. You may NOT invent, assume, or extrapolate anything not explicitly present in the provided text.
+CORE RULES:
+• Every title and heading MUST come from the transcript — no fabrication
+• Chapter title: 4–7 words, punchy, complete phrase (no dangling prepositions or conjunctions)
+• Section headings: 4–8 words, complete phrases, must make sense standalone
+• Never use banned prefixes: Introduction, Intro, Overview, Opening, Summary, Conclusion, Part, Chapter, Section
+• Never end headings with prepositions (to, in, for, on), conjunctions (and, but, or), or pronouns without nouns (it, them, its)
 
-CHAPTER TITLE RULE:
-- 4–7 words. Punchy. Sounds like a book you would buy, not an academic paper.
-- Use the speaker's actual words or a natural distillation of their central claim.
-- Must be a COMPLETE, self-contained phrase — no dangling prepositions, no dangling conjunctions.
-- FORBIDDEN formats: "The [abstract noun] of X and Y" | "The [adjective] link between X and Y" | "The [noun] dimensions of X (parenthetical list)" | anything with a parenthetical aside.
-- GOOD: "When Prayer Changes the Pray-er" | "The Glory That Prayer Reveals" | "Righteous Living Fuels Effectual Prayer"
-- BAD: "Prayer as a transformative encounter that reveals hidden glory" (sentence, not a title) | "The inseparable link between righteous living and effective prayer" (academic) | "The communal dimensions of prayer (personal, elders, interpersonal)" (parenthetical)
-
-SECTION HEADING RULES:
-- Each heading must name a specific truth, claim, or action the speaker made in that segment — drawn directly from the keyPoints or transcript.
-- 4–8 words. Complete phrase — NEVER cut a thought mid-clause or leave a dangling word.
-- Title case. No punctuation at the end.
-- The heading must be able to stand alone and make sense to a reader who has not heard the sermon.
-- BANNED prefixes: Introduction, Intro, Overview, Opening, Summary, Conclusion, Part, Chapter, Section
-- FORBIDDEN: any heading that ends with a preposition ("to", "our", "the", "in", "for", "on"), a conjunction ("and", "but", "or"), or a pronoun without its noun ("it", "them", "their", "its").
-- GOOD: "Prayer Reveals Hidden Glory" | "Moses Held the Nation by Prayer" | "The Righteous Life Powers Prayer"
-- BAD: "Pray until you are no longer" (dangling) | "You need a Joshua 2.0 to" (dangling) | "When we open up our" (dangling) | "Is any among you afflicted? Let" (question fragment)
-
-STRUCTURE RULES:
-- Produce exactly 5 sections minimum (never fewer than 5)
-- Group segments that develop the same point; split when the topic clearly shifts
-- If you have enough content for 6–8 sections, produce them; never produce fewer than 5
-- sourceSegmentIds must ONLY reference IDs from the AVAILABLE SEGMENTS list
-- Every provided segment ID must appear in exactly one section — none may be skipped
-- targetWordCount = sum of assigned segments' word counts
-- Apply a natural teaching arc: Hook → Context → Core Mechanism → Application → Landing
+STRUCTURE:
+• Produce 5+ sections minimum (never fewer than 5)
+• Group segments by topic; split when topic clearly shifts
+• Every segment ID must appear in exactly one section
+• targetWordCount = sum of assigned segments' word counts
 
 ${SOURCE_LOCK_RULES}`,
     prompt: `AVAILABLE SEGMENT IDs: ${segments.map((s) => s.id).join(", ")}

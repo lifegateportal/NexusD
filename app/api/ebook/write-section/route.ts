@@ -389,61 +389,20 @@ function filterConsumedExcerptEntries(
   return { filtered: filtered.length > 0 ? filtered : entries.slice(0, 1), removedCount };
 }
 
-const EDITORIAL_SYSTEM = `You are an elite ghostwriter transforming raw sermon transcripts into premium published prose. Every sentence must trace to the transcript—zero fabrication.
+const EDITORIAL_SYSTEM = `You are a professional ghostwriter transforming raw sermon transcripts into clear, publishable book prose.
 
-═══ CORE MANDATES ═══
-• FIRST PERSON ONLY: Write as the author speaking directly to the reader. Never "the speaker," "the preacher," or third-person references.
-• ZERO FABRICATION: If it's not in the transcript, don't write it. Write shorter rather than pad with invented content.
-• SECTION BOUNDARIES: Never preview, foreshadow, or reference content from future sections. Each section is sealed.
-• SYNTHESIS NOT TRANSCRIPTION: Extract insights and rebuild into a linear narrative arc—not sentence-by-sentence cleanup.
-• NO HEADINGS IN OUTPUT: Return only prose paragraphs. The section heading is already displayed by the layout.
-
-═══ PROSE QUALITY (enforce on every paragraph) ═══
-RHYTHM & STRUCTURE:
-• Vary sentence length deliberately. Longest must be 2× shortest. Short punch after long explanation.
-• Every 3+ sentence paragraph needs one complex sentence with "although," "because," "while," "since," "which," or "who."
-• No 3 consecutive sentences may start with the same word. Adjacent paragraphs must start differently.
-• One-sentence paragraphs only for fragments ≤12 words. Longer single sentences need follow-up development.
-
-WORD CHOICE & VOICE:
-• Concrete nouns, active verbs, precise language. Remove vague words and unnecessary adverbs.
-• Use contractions naturally (it's, don't, can't). Break perfect parallel structure.
-• Never restate a paragraph's opening in its close. Land the point or create forward pull.
-• BANNED AI PHRASES: "indeed," "ultimately," "at its core," "in essence," "transformative," "crucial," "journey" (metaphor), "Let's delve into," "It's important to note."
-
-ARGUMENT FLOW:
-• Each paragraph advances the argument. No restating prior points.
-• SHOW BEFORE TELL: Lead with story/example, then state the principle.
-• No em dashes (—) anywhere. Use commas, colons, semicolons, or subordinate clauses instead.
-• After scripture quotes, ADVANCE the argument—never restate what the verse just said.
+═══ CORE RULES ═══
+• First person: write as the author speaking to the reader
+• Zero fabrication: every sentence must trace to the provided transcript
+• One idea per paragraph: 3-5 sentences, one concept per JSON array element
+• No headings: return only prose paragraphs (the heading is already displayed)
+• Section boundaries: never preview future sections or foreshadow
+• Remove audience language: strip "say amen," "turn to your neighbor," live-event cues
+• Active voice, strong verbs, natural contractions
+• No em dashes (—); use commas, colons, or semicolons instead
+• Vary sentence length: short punch after long explanation
 
 ${SCRIPTURE_FORMATTING_RULES}
-
-═══ VOICE DNA ENFORCEMENT ═══
-When Voice DNA is provided, you MUST:
-• Use signature phrases verbatim as they appear
-• Match the stated tone profile, sentence rhythm, pacing
-• Use preferred terminology consistently
-• Never use words in the avoidWords list
-• Replicate rhetorical patterns exactly
-
-═══ AUDIENCE NORMALIZATION ═══
-• Remove crowd cues: "say amen," "look at your neighbor," "clap your hands," applause calls
-• Rewrite live-room address ("today I want to tell you," "as you sit here") for individual reader
-• Strip stage prompts and house-response commands
-
-═══ TENSE NORMALIZATION ═══
-• For narratives and stories: use PAST TENSE (was, did, said, happened)
-• For current truths and teachings: use PRESENT TENSE (is, are, means)
-• For universal principles: use PRESENT TENSE
-• For historical events from Bible or past: use PAST TENSE
-• Check every verb and ensure consistency within each paragraph
-
-═══ PARAGRAPH DISCIPLINE ═══
-• Return paragraphs as JSON array—each element is exactly ONE paragraph
-• One idea per paragraph, 3-5 sentences
-• New point/scripture/example = new array element
-• Never put two paragraphs in one element or split one across two
 
 ${SOURCE_LOCK_RULES}
 
@@ -471,15 +430,8 @@ AUTHOR BOOK CONFIGURATION (highest priority)
 ════════════════════════════════════════════${authorConfig.targetAudience ? `\nTARGET AUDIENCE: ${authorConfig.targetAudience}\nWrite at the vocabulary level, cultural register, and depth appropriate for this specific audience. Every example, illustration, and application point must land for this reader.` : ""}${authorConfig.instructions ? `\nAUTHOR WRITING INSTRUCTIONS: ${authorConfig.instructions}\nThese are the author's direct instructions for how the book should read. Honor them on every paragraph. They override any default style preference where they conflict.` : ""}`
     : "";
 
-  // ── Upgrade 2: Readability grade target ─────────────────────────────────
-  const readabilityBlock = `\n\n════════════════════════════════════════════
-READABILITY TARGET — ENFORCE BEFORE RETURNING
-════════════════════════════════════════════
-Target Flesch-Kincaid Grade Level: 9–11. This means:
-• Average sentence length of 18–22 words across the section.
-• Vocabulary is precise and elevated, but not academic or dense.
-• Deliberate length variation: some sentences under 10 words (punch), some over 30 (explanation). Never five consecutive medium-length sentences.
-• After drafting, scan for any paragraph where all sentences are approximately the same length — break it with a short punch or a long explanatory sentence.`;
+  // ── Readability target removed: trust the LLM ─────────────────────────────────
+  const readabilityBlock = ``;
 
   // ── Upgrade 3: Book thesis threading ────────────────────────────────────
   const coreThesisBlock = assignment.coreThesis
@@ -490,14 +442,8 @@ BOOK'S CORE THESIS — THREAD THROUGH THIS SECTION
 Every section you write must feel like it advances this thesis. Not by repeating it verbatim, but by adding a new dimension, a new piece of evidence, or a new application of it. If a paragraph has no traceable connection to this thesis, it is filler. Readers feel thesis-less sections as "padding" even if they can't name why.`
     : "";
 
-  // ── Upgrade 4: Illustration / story dedup block ──────────────────────────
-  const usedIllustrationsBlock = (assignment.usedIllustrations ?? []).length > 0
-    ? `\n\n════════════════════════════════════════════
-USED STORIES & ILLUSTRATIONS — DO NOT REPEAT
-════════════════════════════════════════════
-The following personal stories, illustrations, parables, and named examples have ALREADY appeared in earlier sections of this book. Do NOT retell, re-describe, paraphrase, or re-introduce them as illustrations. If the transcript mentions them, extract ONLY the principle they illustrate — never the narrative wrapper:
-${(assignment.usedIllustrations ?? []).map((s) => `• "${s}"`).join("\n")}`
-    : "";
+  // ── Story dedup removed: trust the LLM to avoid repetition naturally ──────────
+  const usedIllustrationsBlock = ``;
 
   // ── Scripture Amendment 4: Primary translation block ─────────────────────
   // Injected into the prompt so the LLM uses the book's dominant translation
@@ -510,41 +456,29 @@ The speaker's dominant Bible translation is: ${assignment.primaryTranslation}
 When quoting a verse for which the speaker did not specify a translation, use (${assignment.primaryTranslation}) as the parenthetical label. Never mix translations within the same passage or apply a different default to achieve variety — consistency is correctness here.`
     : "";
 
-  // ── Amendment 1: Coverage Ledger ─────────────────────────────────────────
-  // Each entry is a section that has ALREADY been written. The LLM must not
-  // re-establish any insight that is summarised here — reference it at most once.
+  // ── Coverage Ledger (simplified) ──────────────────────────────────────────
   const coverageLedger = assignment.coverageLedger ?? [];
   const coverageLedgerBlock = coverageLedger.length > 0
     ? `\n\n════════════════════════════════════════════
-COVERAGE LEDGER — NEVER RE-EXPLAIN THESE SECTIONS
+PRIOR SECTIONS — REFERENCE, DO NOT REPEAT
 ════════════════════════════════════════════
-Every section below has ALREADY BEEN WRITTEN and delivered to the reader. Do NOT re-introduce, re-define, re-explain, or re-develop the ideas they established — not even in passing. You may presuppose the reader already knows each one. Reference an entry at most once (inline citation only, e.g. "as we saw in [heading]") and only when it directly supports NEW content:
-${coverageLedger.map((e) => `• [${e.heading}] — Established: "${e.summary}"`).join("\n")}`
+These sections have already been written. You may reference them but do not re-explain their core ideas:
+${coverageLedger.map((e) => `• [${e.heading}]`).join("\n")}`
     : "";
 
-  // ── Amendment 4: Banned Recaps ────────────────────────────────────────────
-  // These are the exact opening thesis sentences from prior sections. The LLM
-  // must not rephrase, echo, or restate any of them — not even loosely.
+  // ── Banned Recaps (simplified) ────────────────────────────────────────────
   const bannedRecaps = assignment.bannedRecaps ?? [];
   const bannedRecapsBlock = bannedRecaps.length > 0
     ? `\n\n════════════════════════════════════════════
-BANNED RECAPS — DO NOT REPHRASE OR RESTATE
+BANNED OPENING CLAIMS — AVOID RESTATING
 ════════════════════════════════════════════
-The following sentences are the opening claims of sections already written. You MUST NOT rephrase, echo, paraphrase, or restate any sentence in this list — not in full, not in part, not with synonyms, not as a summary. Write entirely new argumentation:
-${bannedRecaps.map((s) => `• "${s}"`).join("\n")}`
+Do not restate these opening thesis lines from prior sections:
+${bannedRecaps.slice(0, 10).map((s) => `• "${s.slice(0, 100)}"`).join("\n")}`
     : "";
 
-  // ── Amendment 6: Lexical Fingerprint Exclusion ───────────────────────────
-  // The most-repeated 3-grams from all written sections. The LLM should avoid
-  // these unless quoting scripture or transcript directly.
+  // ── Lexical dedup (simplified) ────────────────────────────────────────────
   const overusedPhrases = assignment.overusedPhrases ?? [];
-  const lexicalFingerprintBlock = overusedPhrases.length > 0
-    ? `\n\n════════════════════════════════════════════
-OVERUSED PHRASES — FIND FRESHER LANGUAGE
-════════════════════════════════════════════
-The following 3-word phrases appear too frequently across the sections already written. Unless you are quoting scripture or the transcript verbatim, AVOID these phrases. Use semantically equivalent but lexically distinct language:
-${overusedPhrases.map((p) => `• "${p}"`).join("\n")}`
-    : "";
+  const lexicalFingerprintBlock = ``;
 
   // ── Amendment 7: Diminishing Permission Rule ─────────────────────────────
   // Section 1 in a chapter may introduce 3 new core concepts.

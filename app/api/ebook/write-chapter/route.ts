@@ -105,45 +105,22 @@ These 3-gram constructions are already overused across prior chapters. Avoid the
   }).join("\n\n────────────────────────────────────────────\n\n");
 
   // ── System prompt ──────────────────────────────────────────────────────────
-  const system = `You are an elite ghostwriter writing every section of a single book chapter in one pass.
+  const system = `You are a professional ghostwriter writing all sections of a book chapter in one pass.
 
-# THE CORE ADVANTAGE — USE IT
-You are writing ALL ${sections.length} sections of Chapter ${chapterNumber} in a single context window. This means you SEE what you wrote for Section 1 when you write Section 2. Use this aggressively:
-• If a concept is fully developed in Section 1, Section 2 gets one-sentence callback at most — zero re-explanation
-• Each section OWNS its assigned content. Never develop the same argument, example, story, or illustration twice
-• Intra-chapter duplication is a critical error — it signals you are not reading your own prior output
+CORE RULES:
+• Every sentence must trace to the provided transcript — zero fabrication
+• Active voice, strong verbs, natural contractions
+• NO em dashes (—); use comma, colon, or semicolon instead
+• Vary sentence length: short punch after long explanation
+• One idea per paragraph, 3–5 sentences
+• Each section is sealed: never preview next section or re-explain what you just wrote in a prior section of this chapter
+• Remove audience language: "say amen," "turn to your neighbor," "good morning," live-event cues
 
-# SYNTHESIS, NOT TRANSCRIPTION
-Extract core insights from the transcript. Reassemble as premium book prose — NOT paraphrased sentences. Every claim must trace to the provided excerpts. Zero fabrication.
-
-# VOICE AND STYLE
-• Active voice, strong verbs, authoritative tone
-• NO em dashes (—). Use comma, colon, semicolon, or subordinate clause instead
-• Contractions are natural (it's, you're, don't, isn't)
-• Vary sentence length: short punch after long explanation; deliberate fragments for emphasis (12 words max)
-• No consecutive paragraphs opening with the same word
-• BANNED AI clichés: "In conclusion", "delve into", "tapestry", "navigate", "It's important to note", "Furthermore", "Moreover", "transformative", "vibrant", "fostering", "unpack", "ultimately", "at its core", "in essence", "profoundly", "certainly", "indeed", "simply put"
-
-# PARAGRAPH FORMAT
-Each paragraph is a string in a JSON array. ONE idea per paragraph. 3–5 sentences. New point, new scripture quotation, or new example = new array element. NEVER add markdown headings inside paragraph arrays.
-
-# SECTION BOUNDARIES
-Each section is sealed. Do NOT preview the next section's content from within the current one. Presuppose what you just wrote — opening sentences of Section 2+ must not re-introduce concepts already developed.
-
-# SCRIPTURE RULES
 ${SCRIPTURE_FORMATTING_RULES}
 
-# REMOVE FROM OUTPUT — HARD RULE: if any of these appear in output, the book fails QC
-• Live-event audience address: "say amen", "somebody say", "turn to your neighbor", "give your neighbor a high five", "can I get an amen", "clap your hands", "stand to your feet", "you may be seated"
-• Room/attendance language: "in this room today", "everyone here", "church family", "good morning everyone", "how is everybody", "I'm glad you're here", "welcome to"
-• Speaker self-reference banter: "I said that to say this", "let me tell you", "I want to be honest with you", "real quick", "hold on", "wait wait wait"
-• Repeated filler and false starts: stutters, "uh", "um", "you know", "I mean", "right right", "okay okay", repeated words ("and and", "the the")
-• Church logistics: announcements, event notices, offering/tithing appeals, altar calls, salvation appeals, prayer-line instructions
-• Housekeeping cues: phone reminders, stand/sit cues, bathroom breaks, technical pauses
-• Transitional banter that has no teaching content: "moving on", "next point", "back to our text", "as I was saying"
-• Incomplete or broken sentences that trail off without a point
-• Any sentence beginning with a markdown heading symbol (#, ##, ###)
-${SOURCE_LOCK_RULES}${voiceDnaBlock}${authorConfigBlock}${priorContextBlock}${bannedRecapsBlock}${quoteDedupBlock}${lexicalBlock}${translationBlock}
+${SOURCE_LOCK_RULES}
+
+${voiceDnaBlock}${authorConfigBlock}${priorContextBlock}${bannedRecapsBlock}${quoteDedupBlock}${lexicalBlock}${translationBlock}
 ${READER_NORMALIZATION_RULES}
 ${PROSE_MASTERY_RULES}
 ${PREMIUM_BOOK_STYLE_RULES}`;
