@@ -193,7 +193,7 @@ function isGenericSubtitle(subtitle: string): boolean {
   return generic.some((g) => subtitle.toLowerCase().includes(g.toLowerCase()));
 }
 
-/** Improve title by truncating at soft break or word boundary */
+/** Improve title by truncating at soft break or extracting key concepts */
 function improveTitle(title: string): string {
   const trimmed = title.trim();
   const words = trimmed.split(/\s+/);
@@ -201,22 +201,35 @@ function improveTitle(title: string): string {
   // If already valid, return as-is
   if (isValidTitle(trimmed)) return trimmed;
   
-  // Too long: truncate at first soft word after position 4 (preferring earlier break)
+  // Too long: aggressive extraction for thesis-statement pattern
   if (words.length > 7) {
-    const SOFT = /^(and|but|that|as|so|which|who|when|where|because|or|–|—|-|,)$/i;
+    // Detect thesis-statement patterns like "The X over/through/of/and Y"
+    // Extract just the core noun phrase (first 4-5 words)
+    const SOFT = /^(and|but|that|as|so|which|who|when|where|because|or|of|over|through|about|from|by|to|for|on|in|–|—|-|,)$/i;
+    
+    // Look for a soft break within words 3-6
     let cutAt = 7;
-    for (let i = 4; i < words.length && i < 8; i++) {
+    for (let i = 3; i < Math.min(words.length, 8); i++) {
       const clean = words[i].replace(/[,;:–—]$/, "");
       if (SOFT.test(clean)) {
         cutAt = i;
         break;
       }
     }
+    
+    // Extract and clean up
     const cut = words.slice(0, Math.min(cutAt, 7)).join(" ").replace(/[,;:–—]+$/, "").trim();
-    return cut.length >= 8 ? cut : words.slice(0, 7).join(" ");
+    
+    // Ensure result is valid length
+    if (cut.length > 0 && cut.split(/\s+/).length >= 4 && cut.split(/\s+/).length <= 7) {
+      return cut;
+    }
+    
+    // Fallback: take first 6 words
+    return words.slice(0, 6).join(" ");
   }
   
-  // Too short: can't fix, return original and log
+  // Too short (< 4 words): can't improve, return original
   return trimmed;
 }
 
@@ -525,11 +538,28 @@ function normalizeArchitecture(
   const DANGLING_END_RE = /\b(to|our|the|in|for|on|and|but|or|let|a|an|its|their|them|it)$/i;
   const BANNED_PREFIX = /^(introduction|intro|overview|opening|summary|conclusion|section|part|chapter)\s*[:\-]?\s*/i;
 
-  // First pass: detect and improve invalid headings
+  // First pass: detect and improve invalid headings (both chapter titles and section headings)
   const targetChapters = chapters.length > 0 ? chapters : fallback.chapters;
-  const improvedChapters = targetChapters.map((chapter) => ({
-    ...chapter,
-    sections: chapter.sections.map((section) => {
+  const improvedChapters = targetChapters.map((chapter) => {
+    // Improve chapter title
+    const chapterTitleWords = chapter.title.trim().split(/\s+/);
+    const isInvalidChapterTitle = !isValidTitle(chapter.title);
+    const chapterTitleTooLong = chapterTitleWords.length > 7;
+    let improvedChapterTitle = chapter.title;
+    let chapterTitleCorrectionLog = "";
+
+    if (isInvalidChapterTitle || chapterTitleTooLong) {
+      improvedChapterTitle = improveTitle(chapter.title);
+      chapterTitleCorrectionLog = ` [auto-corrected]`;
+      if (chapterTitleTooLong) {
+        architectureWarnings.push(
+          `Ch ${chapter.number} Title too long (${chapterTitleWords.length} words)${chapterTitleCorrectionLog}: "${chapter.title}" → "${improvedChapterTitle}"`
+        );
+      }
+    }
+
+    // Improve section headings
+    const improvedSections = chapter.sections.map((section) => {
       const words = section.heading.trim().split(/\s+/);
       const isInvalid = !isValidHeading(section.heading);
       const hasBannedPrefix = BANNED_PREFIX.test(section.heading.trim());
@@ -568,8 +598,14 @@ function normalizeArchitecture(
 
       allHeadingTokens.push({ heading: improvedHeading, chapterNum: chapter.number, sectionNum: section.sectionNumber });
       return { ...section, heading: improvedHeading };
-    }),
-  }));
+    });
+
+    return {
+      ...chapter,
+      title: improvedChapterTitle,
+      sections: improvedSections,
+    };
+  });
 
   // Global cross-chapter dedup (check ALL chapter pairs, not just adjacent)
   for (let i = 0; i < allHeadingTokens.length; i++) {
