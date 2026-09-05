@@ -722,14 +722,44 @@ HARD RULES for this section's close:
     : "";
 
   const hookBlock = assignment.sectionNumber === 1
-    ? `\nCHAPTER OPENER REQUIREMENT: This is the FIRST section of the chapter. The very first sentence must be a compelling hook — a bold provocative claim, a pointed question, or an immersive specific detail drawn directly from the transcript. Do not open with a general context-setting statement. Drop the reader immediately into the argument.\nHEADING ECHO BAN: The section heading is "${assignment.heading}". The first sentence of the body must NOT restate, echo, paraphrase, or summarise this heading — not even loosely. The heading is already displayed above; repeating it as the first sentence is a critical error. Begin with entirely new content from the transcript.`
-    : `\nHEADING ECHO BAN: The section heading is "${assignment.heading}". The first sentence of the body must NOT restate, echo, paraphrase, or summarise this heading. The heading is already displayed above. Begin immediately with the argument, scripture, or story from the transcript.`;
+    ? `\n════ CHAPTER OPENING ARCHITECTURE (PREMIUM STANDARD) ════
+This is the FIRST section of the chapter. The opening THREE SENTENCES must work together to create a compelling entry point.
+
+SENTENCE 1 (THE HOOK) — Select ONE form:
+• INVERSE CLAIM: "X is not what we think" (challenges assumed belief)
+• PARADOX: "Yet we live as if..." (creates productive tension)
+• NARRATIVE MOMENT: "The day everything shifted..." (drops reader into story)
+• READER POSITIONING: "You've felt this tension" (addresses reader emotionally)
+
+MUST-HAVE: Concrete anchor from transcript (name, place, action, scripture reference, or image). No abstract openers.
+LENGTH: 10–18 words. VERB: Active, strong. TEMPERATURE: Establishes this chapter's emotional key (urgent? contemplative? confrontational?).
+
+SENTENCE 2 (THE GROUND) — Tighten specificity:
+• Add new detail, quote, or image from transcript that echoes Sentence 1's logic
+• Do NOT repeat Sentence 1; deepen it
+• 8–15 words
+• Reader begins to sense where chapter is moving
+
+SENTENCE 3 (THE PIVOT) — Forward momentum:
+• Shift perspective OR deepen claim
+• Create bridge: "This matters because..." OR "The cost is..." OR "But there's more..."
+• 12–20 words
+• Pull reader from context into argument
+
+BY END OF SENTENCE 3: Reader feels the chapter's central question or tension. Not stated; embodied.
+
+HEADING RESONANCE (NOT REPETITION):
+The section heading is "${assignment.heading}". Your opening must NOT echo it. Instead, your opening and heading should feel like different angles on the same truth—heading frames it from above; opening enters it from within.
+
+CONCRETE ANCHOR REQUIREMENT:
+Every opening MUST ground Sentences 1–2 in something specific from the transcript: a name, a scripture verse, a moment, an image, a direct quote, an action. Abstraction kills premium openings.`
+    : `\nHEADING ECHO BAN: The section heading is "${assignment.heading}". Your opening must NOT restate, echo, paraphrase, or summarise it. The heading is already displayed above. Begin immediately with new content from the transcript — either the argument, a scripture, a story, or a concrete detail.`;
 
   // ── S7: Chapter premise anchor ──────────────────────────────────────────
-  // First paragraph's opening sentence should echo (not quote) the chapter premise
-  // so the reader feels immediate orientation within the chapter's thesis.
-  const chapterPremiseBlock = assignment.chapterPremise
-    ? `\n\nCHAPTER PREMISE (north star for this chapter):\n"${assignment.chapterPremise}"\nThe opening sentence of the FIRST paragraph of this section should echo the spirit of this premise — not quote it verbatim, but orient the reader toward the same central tension or claim. Subsequent paragraphs should build from it.`
+  // First 3 sentences of opening must collectively EMBODY the chapter premise
+  // Reader should feel the chapter's thesis without it being stated explicitly
+  const chapterPremiseBlock = assignment.sectionNumber === 1 && assignment.chapterPremise
+    ? `\n\nCHAPTER PREMISE (the heartbeat of this chapter):\n"${assignment.chapterPremise}"\n\nPREMISE EMBODIMENT (not statement):\nYour THREE opening sentences must collectively EMBODY this premise. Do not state it or paraphrase it. Instead:\n• Sentence 1 plants the central question or tension the premise addresses\n• Sentence 2 grounds it in concrete detail from the transcript\n• Sentence 3 pivots toward the direction the chapter will take\n\nBy the end of Sentence 3, readers should *feel* the premise's weight without having been told it. This is the difference between amateur and premium: readers arrive at understanding through experience, not explanation.`
     : "";
 
   const prompt = `Write the prose for this section of the ebook. Transform the transcript excerpts into polished written prose.

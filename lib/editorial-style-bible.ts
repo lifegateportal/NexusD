@@ -143,6 +143,14 @@ OPENING SENTENCES:
 - Never open with a generalization when a specific detail from the transcript is available.
 - Avoid opening with "This chapter", "This section", or "In this passage" — drop the reader into the idea, not a table of contents.
 
+CHAPTER OPENING SENTENCES (PREMIUM STANDARD — FIRST THREE SENTENCES OF FIRST SECTION):
+- **Sentence 1 (The Hook):** One of four forms: inverse claim ("X is not...") | paradox ("Yet we...") | narrative moment ("The day...") | reader positioning ("You've felt..."). Concrete anchor REQUIRED: name, place, action, scripture, or image from transcript. Active verb. 10–18 words. Establishes chapter's emotional temperature (urgent, contemplative, confrontational).
+- **Sentence 2 (The Ground):** Tighten specificity with new detail, quote, or image from transcript. Echo Sentence 1's logic without repeating it. 8–15 words. Reader begins to sense where chapter moves.
+- **Sentence 3 (The Pivot):** Forward momentum. Shift perspective or deepen claim. Bridge toward argument: "This matters because..." or "The cost is..." or "But there's more...". 12–20 words. Pull reader from context into argument.
+- **By End of Sentence 3:** Reader *feels* the chapter's central question or tension. Embodied, not stated.
+- **Premise Embodiment:** The three opening sentences must collectively embody (not state or paraphrase) the chapter's premise. Readers arrive at understanding through experience, not explanation.
+- **Concrete Anchor Mandate:** Every chapter opening must ground Sentences 1–2 in something specific from the transcript. Abstraction kills premium openings. No generic context-setting; drop reader into the teaching immediately.
+
 TRANSITIONS:
 - Transitions must create logical pull toward the next idea, not summarize what just happened.
 - Mid-chapter summary transitions ("So, as we have seen...", "To summarize...") are forbidden.
