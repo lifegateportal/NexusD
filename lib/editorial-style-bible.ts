@@ -183,6 +183,12 @@ const AUDIENCE_PATTERNS = [
 	/\bthe person next to you\b/gi,
 	/\byour neighbor\b/gi,
 	/\bthis audience\b/gi,
+	// Extended audience plurals and addressing
+	/\b(y'all|you\s+all|everybody|somebody|someone|anybody|anybody\s+here)\b/gi,
+	/,?\s*(church|saints|family|believers|church\s+family),?\s+/gi,
+	/\b(look\s+around|shake\s+your\s+neighbor|wave\s+at|nod\s+if)\b/gi,
+	// Worship/response language
+	/\b(praise\s+god|thank\s+god|bless\s+the\s+lord|glory\s+to\s+god)\b/gi,
 ];
 
 const NON_BOOK_PATTERNS = [
@@ -205,6 +211,11 @@ const NON_BOOK_PATTERNS = [
 	/\blet\s+me\s+say\s+this\s+again[,.]?\s*/gi,
 	/\byou\s+know\s+what\s+i('m|\s+am)\s+saying[,?]?\s*/gi,
 	/\bdo\s+you\s+understand\s+what\s+i('m|\s+am)\s+saying[?.]?\s*/gi,
+	// Extended filler prefixes
+	/\b(let\s+me\s+(tell|be|make|put|show)\s+you|i'm\s+telling\s+you|listen\s+to\s+me)\b/gi,
+	/\b(you\s+know\s+what|think\s+about|picture\s+this|imagine\s+if|follow\s+me)\b/gi,
+	/\b(i\s+feel\s+like|i\s+sense|sense\s+the\s+spirit|anointing|the\s+flow)\b/gi,
+	/\b(give\s+a\s+(hand|shout)|take\s+your\s+neighbor|praise\s+break|testimony\s+time)\b/gi,
 ];
 
 const NON_BOOK_SENTENCE_PATTERNS = [
@@ -219,6 +230,12 @@ const NON_BOOK_SENTENCE_PATTERNS = [
 	/^\s*say\s+amen\s+if\s+you\s+(hear|receive|believe)\b.*$/i,
 	/^\s*somebody\s+shout\b.*$/i,
 	/^\s*give\s+god\s+a\s+(praise|shout|hand)\b.*$/i,
+	// Extended testimony/story cues
+	/\b(some\s+of\s+you\s+(got\s+a\s+story|can\s+testify)|somebody\s+can\s+testify|i'?m\s+preaching\s+to\s+somebody)\b/i,
+	// Charismatic service language
+	/\b(praise\s+break|worship\s+moment|before\s+we\s+pray|close\s+your\s+eyes|prayer\s+time|rededicate\s+your\s+life|renew\s+your\s+commitment)\b/i,
+	// Rededication/invitation language
+	/\b(been\s+running\s+from\s+god|tired\s+of\s+sin|worn\s+out|if\s+you'?re\s+serious\s+about|today\s+is\s+your\s+day)\b/i,
 ];
 
 // F6 — altar call and salvation appeal sentences (mid-sermon or tail)
