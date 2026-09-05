@@ -3271,87 +3271,11 @@ export function EbookPipeline({
           currentChapterProse = "";
           currentChapterNum = assignment.chapterNumber;
 
-          // ── Chapter-level planner: plan ALL sections before writing any ──
-          // Builds the concept-ownership contract for this chapter in one call.
-          // Falls back gracefully (chapterPlanMap stays empty) if the call fails.
-          if (chapterPlanBuiltForChapter !== assignment.chapterNumber) {
-            chapterPlanBuiltForChapter = assignment.chapterNumber;
-            chapterPlanMap.clear();
-            // Include ALL sections in chapter-plan (even completed ones) so the planner
-            // can see the full chapter structure. Completed sections' excerpts are already
-            // filtered out by consumedSegmentIds, so no duplication risk.
-            const chapterAssignments = assignments.filter(
-              (a) => a.chapterNumber === assignment.chapterNumber
-            );
-            const incompleteCount = chapterAssignments.filter(
-              (a) => !completedSectionKeys.has(`${a.chapterNumber}-${a.sectionNumber}`)
-            ).length;
-            if (incompleteCount > 0) {
-              addLog(`  📋 Planning Chapter ${assignment.chapterNumber} (${incompleteCount} sections remaining)…`);
-              try {
-                const chapterPlanResult = await postJson<{ sectionPlans: Array<{ sectionNumber: number; paragraphPlan: Array<{ purpose: string; supportedExcerptNumbers: number[]; minExcerptNumber?: number }> }> }>(
-                  "/api/ebook/chapter-plan",
-                  {
-                    chapterNumber: assignment.chapterNumber,
-                    chapterTitle: assignment.chapterTitle,
-                    nextChapterTitle: (() => {
-                      const lastChapterAssignment = chapterAssignments[chapterAssignments.length - 1];
-                      const lastIdx = assignments.indexOf(lastChapterAssignment);
-                      return assignments[lastIdx + 1]?.chapterTitle;
-                    })(),
-                    coreThesis: contentMap.coreThesis || undefined,
-                    voiceDNA,
-                    priorSectionsSample: buildProseSampleForDedup(assignment.chapterNumber),
-                    // Feed prior-chapter coverage into the planner's PRIOR CHAPTERS HARD SKIP block.
-                    // Previously [] meant the planner had zero knowledge of what earlier chapters
-                    // established — it could (and did) re-plan the same concepts across chapters.
-                    alreadyCoveredPoints: buildCoverageLedger(
-                      allSections.filter((s) => s.chapterNumber !== assignment.chapterNumber),
-                      assignmentKeyPointsLookup
-                    ).map((e) => `[${e.heading}]: ${e.summary}`),
-                    sections: chapterAssignments.map((a) => ({
-                      sectionNumber: a.sectionNumber,
-                      heading: a.heading,
-                      keyPoints: a.keyPoints ?? [],
-                      transcriptExcerpts: (a.transcriptExcerpts ?? []).filter((_, idx) => {
-                        const segId = (a.sourceSegmentIds ?? [])[idx];
-                        // FIX 3: Hard chapter boundary — only include excerpts from segments
-                        // that belong to the current chapter. This prevents chapter spillage.
-                        if (segId && segmentToChapter.has(segId)) {
-                          const excerptChapter = segmentToChapter.get(segId)!;
-                          if (excerptChapter !== assignment.chapterNumber) {
-                            return false; // This excerpt belongs to a different chapter
-                          }
-                        }
-                        return !segId || !consumedSegmentIds.has(segId);
-                      }),
-                      nextSectionHeading: (() => {
-                        const idx = assignments.indexOf(a);
-                        const next = assignments[idx + 1];
-                        return next?.chapterNumber === a.chapterNumber ? next.heading : undefined;
-                      })(),
-                      isLastSectionInChapter: (() => {
-                        const idx = assignments.indexOf(a);
-                        const next = assignments[idx + 1];
-                        return !next || next.chapterNumber !== a.chapterNumber;
-                      })(),
-                    })),
-                  }
-                );
-                for (const sp of chapterPlanResult.sectionPlans ?? []) {
-                  if ((sp.paragraphPlan ?? []).length > 0) {
-                    chapterPlanMap.set(sp.sectionNumber, sp.paragraphPlan);
-                  }
-                }
-                addLog(`  ✓ Chapter ${assignment.chapterNumber} plan ready (${chapterPlanMap.size} sections planned)`);
-              } catch (planErr) {
-                addLog(`  ⚠ Chapter plan failed — pipeline will stop at write-section (Fix 2: no fallback planner)`);
-                console.warn("[chapter-plan] failed:", planErr);
-                // FIX 2: No fallback planner. Write-section will return 400 error.
-                // This forces the user to retry with a working chapter-plan.
-              }
-            }
-          }
+          // ── Chapter-plan SKIPPED ──
+          // Removed to trust LLM directly in write-section stage. Write-section now uses
+          // coverageLedger + bannedRecaps to prevent concept duplication across sections.
+          // Cost savings: ~30 sec + ~$0.10-0.20 per chapter
+          // Quality: LLM handles concept ownership naturally without intermediate planning stage
 
           // ── Proposal 2: single-call chapter writer ──────────────────────
           // When useChapterWriter is on, write ALL sections of this chapter
