@@ -105,6 +105,121 @@ function deriveBridgeConcept(
   return `${fromLastSection.heading.split(/\s+/).slice(0, 4).join(" ")} → ${toFirstSection.heading.split(/\s+/).slice(0, 4).join(" ")}`;
 }
 
+// ── Heading validation & improvement pass ────────────────────────────────────
+
+/** Detect if a heading violates quality standards */
+function isValidHeading(heading: string): boolean {
+  if (!heading || heading.trim().length === 0) return false;
+  
+  const trimmed = heading.trim();
+  const words = trimmed.split(/\s+/);
+  
+  // Check length: 4–8 words
+  if (words.length < 4 || words.length > 8) return false;
+  
+  // Check for banned prefixes (case-insensitive)
+  const BANNED_PREFIX = /^(introduction|intro|overview|opening|summary|conclusion|section|part|chapter)\s*[:\-]?\s*/i;
+  if (BANNED_PREFIX.test(trimmed)) return false;
+  
+  // Check for dangling endings (prepositions, conjunctions, pronouns)
+  const DANGLING_END = /\b(to|our|the|in|for|on|and|but|or|let|a|an|its|their|them|it)$/i;
+  if (DANGLING_END.test(trimmed)) return false;
+  
+  // Check for question fragments (starts with question but doesn't end with full answer)
+  if (trimmed.startsWith("Is ") || trimmed.startsWith("Are ") || trimmed.startsWith("Do ") || trimmed.startsWith("Can ")) {
+    if (!trimmed.includes("?") && words.length < 6) return false;
+  }
+  
+  return true;
+}
+
+/** Attempt to improve an invalid heading by extracting key concepts */
+function improveHeading(heading: string, keyPoints: string[]): string {
+  // Remove banned prefixes
+  const BANNED = /^(introduction|intro|overview|opening|summary|conclusion|section|part|chapter)\s*[:\-]?\s*/i;
+  let improved = heading.replace(BANNED, "").trim();
+  
+  // If still invalid, try using first keyPoint
+  if (!isValidHeading(improved) && keyPoints.length > 0) {
+    improved = keyPoints[0].replace(BANNED, "").trim();
+    // Compress to 6 words max
+    const words = improved.split(/\s+/);
+    if (words.length > 6) {
+      improved = words.slice(0, 6).join(" ");
+    }
+  }
+  
+  // Last resort: use compressHeading logic
+  if (!isValidHeading(improved)) {
+    improved = compressHeading(improved || heading);
+  }
+  
+  return improved.length > 0 ? improved : heading;
+}
+
+// ── Title/Subtitle improvement pass ──────────────────────────────────────────
+
+/** Check if a title meets quality standards (4–7 words, complete phrase) */
+function isValidTitle(title: string): boolean {
+  if (!title || title.trim().length === 0) return false;
+  
+  const trimmed = title.trim();
+  const words = trimmed.split(/\s+/);
+  
+  // Check length: 4–7 words (publishable title length)
+  if (words.length < 4 || words.length > 7) return false;
+  
+  // Check for banned patterns: "(", parenthetical asides, too academic
+  if (trimmed.includes("(") || trimmed.includes(")")) return false;
+  if (trimmed.includes("The [") || trimmed.includes("The dimensions")) return false;
+  if (trimmed.toLowerCase().includes("transformative encounter")) return false;
+  
+  // Check for dangling endings
+  const DANGLING = /\b(and|but|or|to|of|in|for|on)$/i;
+  if (DANGLING.test(trimmed)) return false;
+  
+  return true;
+}
+
+/** Check if a subtitle is generic filler */
+function isGenericSubtitle(subtitle: string): boolean {
+  const generic = [
+    "Drawn directly from the source teaching",
+    "From the original teaching",
+    "Extracted from the sermon series",
+    "Based on the teaching",
+    "Compiled from the source",
+  ];
+  return generic.some((g) => subtitle.toLowerCase().includes(g.toLowerCase()));
+}
+
+/** Improve title by truncating at soft break or word boundary */
+function improveTitle(title: string): string {
+  const trimmed = title.trim();
+  const words = trimmed.split(/\s+/);
+  
+  // If already valid, return as-is
+  if (isValidTitle(trimmed)) return trimmed;
+  
+  // Too long: truncate at first soft word after position 4 (preferring earlier break)
+  if (words.length > 7) {
+    const SOFT = /^(and|but|that|as|so|which|who|when|where|because|or|–|—|-|,)$/i;
+    let cutAt = 7;
+    for (let i = 4; i < words.length && i < 8; i++) {
+      const clean = words[i].replace(/[,;:–—]$/, "");
+      if (SOFT.test(clean)) {
+        cutAt = i;
+        break;
+      }
+    }
+    const cut = words.slice(0, Math.min(cutAt, 7)).join(" ").replace(/[,;:–—]+$/, "").trim();
+    return cut.length >= 8 ? cut : words.slice(0, 7).join(" ");
+  }
+  
+  // Too short: can't fix, return original and log
+  return trimmed;
+}
+
 // ── Absolute minimum schema — no keyPoints, no quotes, no nested arrays ──────
 // Everything gets rehydrated server-side from the contentMap after generation.
 const MinimalSectionSchema = z.object({
@@ -148,8 +263,8 @@ function groupSegmentsIntoSections(
   }
 
   // Greedily merge consecutive segments when they share topic keywords.
-  // Always produce between 3 and maxSections buckets.
-  const minSections = Math.min(3, segs.length);
+  // Always produce between 5 and maxSections buckets — minimum 5 ensures adequate section development.
+  const minSections = Math.min(5, segs.length);
   const buckets: typeof segs[] = [];
   let current: typeof segs = [segs[0]];
 
@@ -293,8 +408,9 @@ SECTION HEADING RULES:
 - BAD: "Pray until you are no longer" (dangling) | "You need a Joshua 2.0 to" (dangling) | "When we open up our" (dangling) | "Is any among you afflicted? Let" (question fragment)
 
 STRUCTURE RULES:
-- Produce exactly 3–5 sections
+- Produce exactly 5 sections minimum (never fewer than 5)
 - Group segments that develop the same point; split when the topic clearly shifts
+- If you have enough content for 6–8 sections, produce them; never produce fewer than 5
 - sourceSegmentIds must ONLY reference IDs from the AVAILABLE SEGMENTS list
 - Every provided segment ID must appear in exactly one section — none may be skipped
 - targetWordCount = sum of assigned segments' word counts
@@ -399,33 +515,61 @@ function normalizeArchitecture(
     }))
     .filter((chapter) => chapter.sections.length > 0);
 
-  // ── Heading quality pass: warn-only, no mutation ────────────────────────────
-  // We deliberately do NOT compress or truncate headings here. The AI is
-  // instructed to produce complete 4–8 word phrases. Post-hoc truncation was
-  // the root cause of dangling fragments like "Pray until you are no longer".
-  // Warnings are logged for monitoring but headings are left as-is.
+  // ── Heading quality pass: ENFORCE STANDARDS WITH AUTOMATIC CORRECTION ──────
+  // Invalid headings are automatically improved using fallback logic.
+  // This ensures the book never ships with dangling fragments or generic labels.
   const architectureWarnings: string[] = [];
   const allHeadingTokens: Array<{ heading: string; chapterNum: number; sectionNum: number }> = [];
+  const segmentMap = Object.fromEntries(input.contentMap.segments.map((s) => [s.id, s]));
 
   const DANGLING_END_RE = /\b(to|our|the|in|for|on|and|but|or|let|a|an|its|their|them|it)$/i;
+  const BANNED_PREFIX = /^(introduction|intro|overview|opening|summary|conclusion|section|part|chapter)\s*[:\-]?\s*/i;
 
+  // First pass: detect and improve invalid headings
   const targetChapters = chapters.length > 0 ? chapters : fallback.chapters;
-  for (const chapter of targetChapters) {
-    for (const section of chapter.sections) {
+  const improvedChapters = targetChapters.map((chapter) => ({
+    ...chapter,
+    sections: chapter.sections.map((section) => {
       const words = section.heading.trim().split(/\s+/);
-      if (words.length > 8) {
-        architectureWarnings.push(
-          `Ch ${chapter.number} §${section.sectionNumber}: Heading too long (${words.length} words): "${section.heading}"`
-        );
+      const isInvalid = !isValidHeading(section.heading);
+      const hasBannedPrefix = BANNED_PREFIX.test(section.heading.trim());
+      const hasDanglingEnd = DANGLING_END_RE.test(section.heading.trim());
+      const isTooLong = words.length > 8;
+
+      let improvedHeading = section.heading;
+      let correctionLog = "";
+
+      if (isInvalid || hasBannedPrefix || hasDanglingEnd || isTooLong) {
+        // Gather keypoints from source segments for context
+        const sourceSegments = (section.sourceSegmentIds ?? [])
+          .map((id) => segmentMap[id])
+          .filter(Boolean);
+        const keyPoints = sourceSegments.flatMap((s) => s?.keyPoints ?? []);
+
+        improvedHeading = improveHeading(section.heading, keyPoints);
+        correctionLog = ` [auto-corrected]`;
+
+        if (hasBannedPrefix) {
+          architectureWarnings.push(
+            `Ch ${chapter.number} §${section.sectionNumber}: Removed banned prefix "${section.heading}"${correctionLog} → "${improvedHeading}"`
+          );
+        }
+        if (hasDanglingEnd) {
+          architectureWarnings.push(
+            `Ch ${chapter.number} §${section.sectionNumber}: Fixed dangling ending "${section.heading}"${correctionLog} → "${improvedHeading}"`
+          );
+        }
+        if (isTooLong) {
+          architectureWarnings.push(
+            `Ch ${chapter.number} §${section.sectionNumber}: Compressed long heading (${words.length} words)${correctionLog}: "${section.heading}" → "${improvedHeading}"`
+          );
+        }
       }
-      if (DANGLING_END_RE.test(section.heading.trim())) {
-        architectureWarnings.push(
-          `Ch ${chapter.number} §${section.sectionNumber}: Heading ends mid-thought: "${section.heading}"`
-        );
-      }
-      allHeadingTokens.push({ heading: section.heading, chapterNum: chapter.number, sectionNum: section.sectionNumber });
-    }
-  }
+
+      allHeadingTokens.push({ heading: improvedHeading, chapterNum: chapter.number, sectionNum: section.sectionNumber });
+      return { ...section, heading: improvedHeading };
+    }),
+  }));
 
   // Global cross-chapter dedup (check ALL chapter pairs, not just adjacent)
   for (let i = 0; i < allHeadingTokens.length; i++) {
@@ -441,17 +585,24 @@ function normalizeArchitecture(
   }
 
   if (architectureWarnings.length > 0) {
-    console.warn("[architect] Heading quality warnings:", architectureWarnings);
+    console.info("[architect] Heading corrections applied:", architectureWarnings);
   }
 
   return {
-    bookTitle: (minimal.bookTitle || "").trim() || fallback.bookTitle,
-    subtitle: (minimal.subtitle || "").trim(),
+    bookTitle: improveTitle((minimal.bookTitle || "").trim() || fallback.bookTitle),
+    subtitle: (() => {
+      const raw = (minimal.subtitle || "").trim() || fallback.subtitle || "";
+      // Prefer targetAudience or teachingArc if subtitle is generic
+      if (isGenericSubtitle(raw)) {
+        return input.contentMap.targetAudience?.trim() || input.contentMap.teachingArc?.trim() || raw || "Drawn directly from the source teaching";
+      }
+      return raw;
+    })(),
     authorName: (minimal.authorName || "").trim() || fallback.authorName,
     estimatedTotalWords: Math.max(0, Math.trunc(minimal.estimatedTotalWords || 0)) || fallback.estimatedTotalWords,
     frontMatterNotes: (minimal.frontMatterNotes || "").trim() || fallback.frontMatterNotes,
     backMatterNotes: (minimal.backMatterNotes || "").trim() || fallback.backMatterNotes,
-    chapters: chapters.length > 0 ? chapters : fallback.chapters,
+    chapters: improvedChapters.length > 0 ? improvedChapters : fallback.chapters,
     architectureWarnings,
   };
 }
@@ -579,7 +730,7 @@ This content is a sermon series. The author's preaching sequence IS the book's s
 - sourceSegmentIds MUST reference actual segment IDs from the provided segment list (e.g. "seg-1"). Never invent IDs.
 - SEGMENT UNIQUENESS — NON-NEGOTIABLE: Each segment ID must appear in EXACTLY ONE section across the entire book. Never assign the same segment ID to two or more sections or chapters. If two sections seem to need the same content, merge them into one section.
 - Each chapter must draw segments from only one sourceAudio. A single sourceAudio may produce multiple consecutive chapters if the content depth warrants it.
-- Each chapter: 3–5 sections; each section covers one focused teaching point.
+- Each chapter: 5 sections minimum (never fewer than 5); each section covers one focused teaching point.
 - targetWordCount per section = sum of that section's segments' estimatedWordCount.
 - bookTitle and authorName must come from the content; use "the Author" if name is unknown.
 - estimatedTotalWords = sum of all section targetWordCounts.
