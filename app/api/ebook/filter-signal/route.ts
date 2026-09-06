@@ -1,8 +1,15 @@
 import { NextRequest, NextResponse } from "next/server";
 import { generateText } from "ai";
 import { z } from "zod";
-import { deepSeekFlashModel } from "@/lib/ai-providers";
-import { cleanTranscriptForBook } from "@/lib/editorial-style-bible";
+import { cleanTranscriptForBook, SOURCE_LOCK_RULES } from "@/lib/editorial-style-bible";
+import { createOpenAI } from "@ai-sdk/openai";
+import { env } from "@/lib/env";
+
+const deepSeek = createOpenAI({
+  apiKey: env.DEEPSEEK_API_KEY,
+  baseURL: "https://api.deepseek.com/v1"
+});
+const deepSeekChat = deepSeek("deepseek-chat");
 
 export const runtime = "nodejs";
 export const maxDuration = 120;
@@ -69,11 +76,13 @@ export async function POST(req: NextRequest) {
 
   try {
     const { text } = await generateText({
-      model: deepSeekFlashModel,
+      model: deepSeekChat,
       temperature: 0.1,
       system: `You are a content signal filter for a book production pipeline.
 
-Your job is to find the VERBATIM start and end markers of the core teaching so the server can trim only the genuine non-teaching edges. BE CONSERVATIVE — when in doubt, keep content.
+${SOURCE_LOCK_RULES}
+
+Your job is to find the VERBATIM start and end markers of the core teaching so the server can trim only the genuine non-teaching edges. BE CONSERVATIVE — when in doubt, keep content. Only identify teaching boundaries that genuinely exist in the provided transcript — never fabricate or infer teaching content that isn't explicitly present.
 
 ═══════════════════════════════════════════
 NON-TEACHING content (trim only these):
