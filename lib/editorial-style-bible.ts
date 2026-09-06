@@ -227,6 +227,8 @@ const NON_BOOK_PATTERNS = [
 ];
 
 const NON_BOOK_SENTENCE_PATTERNS = [
+	// Backend editing instructions — numbered list format (1. "..." replaces...)
+	/^\s*\d+\.\s*"[^"]*"\s+(replaces|tightens|gives|transforms|builds|removes?|removes?\s+the|stands?\s+alone|contrast)/i,
 	/\b(that\s+hand\s+clap\s+was\s+for\s+me|let'?s\s+do\s+it\s+for\s+jesus\s+christ|what\s+a\s+mighty\s+god\s+we\s+serve)\b/i,
 	/\b(father,?\s+we\s+thank\s+you|thank\s+you,?\s+holy\s+spirit|blessed\s+be\s+the\s+name\s+of\s+the\s+lord|you\s+deserve\s+all\s+glory|you\s+deserve\s+all\s+adoration|we\s+bless\s+your\s+holy\s+name|great\s+is\s+your\s+faithfulness)\b/i,
 	/\b(the\s+spirit\s+of\s+god\s+was\s+ministering\s+to\s+me|god\s+is\s+healing\s+you\s+today|that\s+issue\s+will\s+not\s+repeat\s+itself|he'?s\s+touching\s+you)\b/i,
@@ -276,6 +278,9 @@ function stripTranscriptArtifacts(input: string): string {
 		.replace(/\[(inaudible|crosstalk|noise|laughter|music|applause|unclear|indistinct)\]/gi, "")
 		// Numeric confidence scores: (0.92)
 		.replace(/\(\d+\.\d+\)/g, "")
+		// Backend editing instructions: numbered list format (1. "..." replaces..., 2. "..." tightens...)
+		// Strip entire sequences of numbered instruction items
+		.replace(/\d+\.\s*"[^"]*"\s+(replaces?|tightens?|gives?|transforms?|builds?|removes?|removes?\s+the|stands?\s+alone|contrast)[^.]*\.\s*(?=\d+\.|$)/gi, "")
 		.replace(/[ \t]{2,}/g, " ")
 		.replace(/\n{3,}/g, "\n\n")
 		.trim();
