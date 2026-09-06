@@ -155,7 +155,7 @@ ${sectionPayload}`;
           schema: WriteChapterOutputSchema,
           mode: "json",
           maxTokens: 16_000, // G2: explicit ceiling for full-chapter output
-          temperature: 0.45, // G1: lower temp for cross-section coherence + speed
+          temperature: 0.55, // Balanced temp for cross-section coherence
           system,
           prompt,
         });

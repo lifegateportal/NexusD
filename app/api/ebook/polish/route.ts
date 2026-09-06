@@ -136,7 +136,7 @@ export async function POST(req: NextRequest) {
     try {
       const { text } = await generateText({
         model: deepSeekModel,
-        temperature: 0.2,
+        temperature: 0.25,
         system: `You are an editorial assistant finalizing a chapter of a published teaching book.
 
 ABSOLUTE CONTENT RULE: Every sentence must come from the provided transcript content.

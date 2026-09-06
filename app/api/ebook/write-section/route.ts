@@ -98,7 +98,7 @@ ADDITIONAL RULES:
   // retry twice before giving up to the unedited excerpt text as the absolute last resort.
   for (let attempt = 0; attempt < 3; attempt++) {
     try {
-      const { text } = await generateText({ model: deepSeekModel, temperature: 0.35, maxTokens: 1200, system, prompt });
+      const { text } = await generateText({ model: deepSeekModel, temperature: 0.5, maxTokens: 1200, system, prompt });
       if (text.trim()) return text.trim();
     } catch (err) {
       console.error(`[write-section] fallbackSectionBody attempt ${attempt + 1} failed:`, err instanceof Error ? err.message : err);
@@ -808,7 +808,7 @@ ${isAbsoluteFirstSection ? "" : "\nTRANSITIONAL OPENING: Open with \"Having seen
       model: deepSeekModel,
       schema: SectionBodySchema,
       mode: "json",
-      temperature: 0.35,
+      temperature: 0.5,
       system: deduplicatedSystem,
       prompt: paragraphPlan.length > 0
         ? `${prompt}\n\nPARAGRAPH PLAN (must follow in order):\n${JSON.stringify(paragraphPlan)}`

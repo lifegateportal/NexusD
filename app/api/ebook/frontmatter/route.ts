@@ -178,7 +178,7 @@ ${input.architecture.chapters.map((c, i) => `Chapter ${i + 1}: "${c.title}"\n  C
       model: deepSeekModel,
       schema: IntroConclSchema,
       mode: "json",
-      temperature: 0.4,  // V3: fast prose generation
+      temperature: 0.35,  // V3: balanced prose generation
       system: frontmatterSystem,
       prompt: frontmatterPrompt,
     });
@@ -190,7 +190,7 @@ ${input.architecture.chapters.map((c, i) => `Chapter ${i + 1}: "${c.title}"\n  C
         model: deepSeekReasonerModel,
         schema: IntroConclSchema,
         mode: "json",
-        temperature: 1,
+        temperature: 0.35,
         system: frontmatterSystem,
         prompt: frontmatterPrompt,
       });

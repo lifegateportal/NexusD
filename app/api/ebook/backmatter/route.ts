@@ -177,7 +177,7 @@ Generate the glossary, reading group guide, and recommended resources.`;
       model: deepSeekModel,
       schema: BackMatterSchema.omit({ scriptureIndex: true }),
       mode: "json",
-      temperature: 0.3,  // V3: fast glossary/guide generation
+      temperature: 0.35,  // V3: balanced glossary/guide generation
       system: backmatterSystem,
       prompt: backmatterPrompt,
     });
@@ -189,7 +189,7 @@ Generate the glossary, reading group guide, and recommended resources.`;
         model: deepSeekReasonerModel,
         schema: BackMatterSchema.omit({ scriptureIndex: true }),
         mode: "json",
-        temperature: 1,
+        temperature: 0.35,
         system: backmatterSystem,
         prompt: backmatterPrompt,
       });

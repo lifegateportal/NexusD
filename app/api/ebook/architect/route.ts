@@ -125,7 +125,7 @@ export async function POST(req: NextRequest) {
               model: deepSeekModel,
               schema: MinimalChapterSchema,
               mode: "json",
-              temperature: 0.3,
+              temperature: 0.2,
               maxTokens: 8000,
               system: `You are a structural editor. Transform a sermon into a book chapter.
 
