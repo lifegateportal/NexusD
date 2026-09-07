@@ -459,6 +459,7 @@ export const ContentMapRequestSchema = z.object({
 export const ArchitectRequestSchema = z.object({
   contentMap: ContentMapSchema,
   voiceDNA: VoiceDNASchema,
+  authorConfig: AuthorConfigSchema.optional(),
   /** When true, skip the LLM and map each uploaded audio file to exactly one chapter */
   oneChapterPerUpload: z.boolean().default(false),
 });

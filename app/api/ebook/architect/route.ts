@@ -81,6 +81,13 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: err instanceof Error ? err.message : "Invalid input" }, { status: 400 });
   }
 
+  const authorConfig = input.authorConfig;
+  const authorConfigBlock = (authorConfig?.instructions || authorConfig?.targetAudience)
+    ? `\n\n════════════════════════════════════════════
+AUTHOR BOOK CONFIGURATION (shapes chapter design)
+════════════════════════════════════════════${authorConfig.targetAudience ? `\nTARGET AUDIENCE: ${authorConfig.targetAudience}\nEvery chapter heading, section depth, and conceptual progression must be appropriate for this specific audience. Adjust complexity, terminology, and pacing accordingly.` : ""}${authorConfig.instructions ? `\nAUTHOR WRITING INSTRUCTIONS: ${authorConfig.instructions}\nThese instructions apply to how the book is structured AND written. Honor them when designing chapters and sections.` : ""}`
+    : "";
+
   const segmentMap = Object.fromEntries(input.contentMap.segments.map((s) => [s.id, s]));
   const validSegmentIds = new Set(input.contentMap.segments.map((s) => s.id));
   const quoteMap = Object.fromEntries((input.contentMap.allQuotes ?? []).map((q) => [q.id, q]));
@@ -140,7 +147,8 @@ RULES:
 • Every segment ID appears in exactly one section
 • targetWordCount = sum of assigned segments' word counts
 
-${SOURCE_LOCK_RULES}`,
+${SOURCE_LOCK_RULES}${authorConfigBlock}`,
+
               prompt: `SEGMENT IDs: ${segs.map((s) => s.id).join(", ")}
 THEME: ${chapterHint}
 CORE THESIS: ${input.contentMap.coreThesis}
