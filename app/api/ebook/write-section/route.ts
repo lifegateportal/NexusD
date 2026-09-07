@@ -426,8 +426,16 @@ export async function POST(req: NextRequest) {
   const authorConfig = input.authorConfig;
   const authorConfigBlock = (authorConfig?.instructions || authorConfig?.targetAudience)
     ? `\n\n════════════════════════════════════════════
-AUTHOR BOOK CONFIGURATION (highest priority)
-════════════════════════════════════════════${authorConfig.targetAudience ? `\nTARGET AUDIENCE: ${authorConfig.targetAudience}\nWrite at the vocabulary level, cultural register, and depth appropriate for this specific audience. Every example, illustration, and application point must land for this reader.` : ""}${authorConfig.instructions ? `\nAUTHOR WRITING INSTRUCTIONS: ${authorConfig.instructions}\nThese are the author's direct instructions for how the book should read. Honor them on every paragraph. They override any default style preference where they conflict.` : ""}`
+AUTHOR BOOK CONFIGURATION (tone & audience only)
+════════════════════════════════════════════${authorConfig.targetAudience ? `\nTARGET AUDIENCE: ${authorConfig.targetAudience}\nWrite at the vocabulary level, cultural register, and depth appropriate for this specific audience. Every example, illustration, and application point must land for this reader.` : ""}${authorConfig.instructions ? `\nAUTHOR WRITING INSTRUCTIONS: ${authorConfig.instructions}\nThese are the author's direct instructions for how the book should read. Honor them on every paragraph. They override any default style preference where they conflict.` : ""}
+
+⚠️ CRITICAL BOUNDARY: Author configuration applies ONLY to tone, vocabulary, pacing, and style. It DOES NOT grant permission to:
+  • Add examples, illustrations, or applications NOT in the transcript
+  • Introduce new concepts or theological extensions
+  • Invent supporting details or expand on thin source material
+  • Override SOURCE-LOCK-RULES in ANY way
+
+When author instructions would require content not in the transcript, prioritize SOURCE-LOCK-RULES instead. Write less rather than invent.`
     : "";
 
   // ── Readability target removed: trust the LLM ─────────────────────────────────

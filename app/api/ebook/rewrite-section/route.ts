@@ -116,6 +116,8 @@ ${SCRIPTURE_FORMATTING_RULES}
 
 ${SOURCE_LOCK_RULES}
 
+⚠️ CRITICAL: Author configuration (below) is for TONE and AUDIENCE only. It does NOT override SOURCE-LOCK-RULES. Never add content not in the transcript to satisfy author instructions. Write less rather than invent.
+
 ${READER_NORMALIZATION_RULES}
 
 ${PROSE_MASTERY_RULES}

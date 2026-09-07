@@ -84,8 +84,16 @@ export async function POST(req: NextRequest) {
   const authorConfig = input.authorConfig;
   const authorConfigBlock = (authorConfig?.instructions || authorConfig?.targetAudience)
     ? `\n\n════════════════════════════════════════════
-AUTHOR BOOK CONFIGURATION (shapes chapter design)
-════════════════════════════════════════════${authorConfig.targetAudience ? `\nTARGET AUDIENCE: ${authorConfig.targetAudience}\nEvery chapter heading, section depth, and conceptual progression must be appropriate for this specific audience. Adjust complexity, terminology, and pacing accordingly.` : ""}${authorConfig.instructions ? `\nAUTHOR WRITING INSTRUCTIONS: ${authorConfig.instructions}\nThese instructions apply to how the book is structured AND written. Honor them when designing chapters and sections.` : ""}`
+AUTHOR BOOK CONFIGURATION (tone & audience only)
+════════════════════════════════════════════${authorConfig.targetAudience ? `\nTARGET AUDIENCE: ${authorConfig.targetAudience}\nEvery chapter heading, section depth, and conceptual progression must be appropriate for this specific audience. Adjust complexity, terminology, and pacing accordingly.` : ""}${authorConfig.instructions ? `\nAUTHOR WRITING INSTRUCTIONS: ${authorConfig.instructions}\nThese instructions apply to how the book is structured AND written. Honor them when designing chapters and sections.` : ""}
+
+⚠️ CRITICAL BOUNDARY: Author configuration applies ONLY to tone, vocabulary, pacing, and audience calibration. It DOES NOT grant permission to:
+  • Fabricate chapter themes or section breakdowns
+  • Add structure that requires content not in the source material
+  • Split or reorganize segments to achieve the author's style
+  • Override SOURCE-LOCK-RULES in ANY way
+
+Every chapter heading and section must come from the actual transcript. When author instructions would require new content, prioritize the actual teaching material instead.`
     : "";
 
   const segmentMap = Object.fromEntries(input.contentMap.segments.map((s) => [s.id, s]));
