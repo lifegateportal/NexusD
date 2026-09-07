@@ -456,6 +456,11 @@ export const ContentMapRequestSchema = z.object({
   voiceDNA: VoiceDNASchema,
 });
 
+export const AuthorConfigSchema = z.object({
+  instructions: z.string().default(""),  // author's custom writing instructions
+  targetAudience: z.string().default(""), // e.g. "Pentecostal believers aged 25–50"
+});
+
 export const ArchitectRequestSchema = z.object({
   contentMap: ContentMapSchema,
   voiceDNA: VoiceDNASchema,
@@ -468,11 +473,6 @@ export const AssignSegmentsRequestSchema = z.object({
   architecture: BookArchitectureSchema,
   contentMap: ContentMapSchema,
   voiceDNA: VoiceDNASchema,
-});
-
-export const AuthorConfigSchema = z.object({
-  instructions: z.string().default(""),  // author's custom writing instructions
-  targetAudience: z.string().default(""), // e.g. "Pentecostal believers aged 25–50"
 });
 
 export const WriteSectionRequestSchema = z.object({
