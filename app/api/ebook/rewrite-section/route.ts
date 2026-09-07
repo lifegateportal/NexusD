@@ -94,14 +94,17 @@ PRESERVATION RULES:
 3. KEEP existing scripture quotes and their exact formatting
 4. KEEP existing stories, illustrations, and applications
 
-ADDITION RULES:
-1. Write NEW paragraphs ONLY for excerpts marked [MUST INCLUDE]
-2. Insert new paragraphs at the NATURAL POSITION where these ideas appear in the transcript sequence
-3. If a [MUST INCLUDE] excerpt extends or enriches an existing paragraph, MERGE it into that paragraph rather than duplicating
-4. If a [MUST INCLUDE] excerpt is already substantially covered in the existing prose, DO NOT add it
+ADDITION RULES (NON-NEGOTIABLE):
+1. EVERY excerpt marked [MUST INCLUDE] MUST appear in the rewritten section — no exceptions
+2. If the user provided an instruction, prioritize their direction over any detection of "coverage"
+3. Write NEW paragraphs for [MUST INCLUDE] excerpts that are NOT yet present
+4. Insert new paragraphs at the NATURAL POSITION where these ideas appear in the transcript sequence
+5. If a [MUST INCLUDE] excerpt extends or enriches an existing paragraph, MERGE it into that paragraph (with more detail/nuance)
+6. Expand existing paragraphs that touch on [MUST INCLUDE] content to include full details from the excerpt
 
 OUTPUT REQUIREMENT:
 Return the FULL section body with both preserved and new content in proper sequence.
+Verify that EVERY [MUST INCLUDE] excerpt is represented in your output before returning.
 `
     : `
 ═══ FULL SECTION REWRITE MODE ═══
@@ -125,9 +128,20 @@ ${PROSE_MASTERY_RULES}
 ${PREMIUM_BOOK_STYLE_RULES}
 
 ADDITIONAL FIDELITY RULES:
-• [MUST INCLUDE] excerpts → core idea must appear clearly
+• [MUST INCLUDE] excerpts → GUARANTEED inclusion. Non-negotiable. User selected these intentionally.
+• User instruction + [MUST INCLUDE] excerpts → honor both. Adjust existing prose to accommodate.
+• If in ADDITIVE mode and excerpts were selected, the output MUST be different from the currentBody. Failure to add new content is a critical error.
 • Thin material → write shorter brilliantly (never pad)
 • Preserve theological sequence from transcript
+• Second/nth rewrites → trust the user's judgment. If they ask for more detail or different treatment, they know what they want.
+
+CRITICAL OUTPUT VERIFICATION (ADDITIVE MODE ONLY):
+Before returning, verify that:
+1. Every [MUST INCLUDE] excerpt has been integrated into the prose
+2. The returned body is MATERIALLY DIFFERENT from the input currentBody
+3. If an excerpt was already somewhat present, you have EXPANDED or ENRICHED how that content is presented
+
+If you cannot add new substantive content for the selected excerpts, explain why in a brief error message instead of returning the unchanged body.
 
 Output clean prose paragraphs separated by double newlines. Do NOT wrap in JSON.`;
 
@@ -170,10 +184,14 @@ ${usedScriptures.map(q => `• ${q.reference} — DO NOT REPRODUCE TEXT`).join("
     `SECTION ${assignment.sectionNumber}: ${assignment.heading}`,
     `TARGET WORD COUNT: ${assignment.targetWordCount}`,
     "",
+    rewriteMode === "additive" 
+      ? `⚠️ ADDITIVE REWRITE CONTEXT:\nUser has selected ${includeExcerptNumbers.length} excerpt(s) marked [MUST INCLUDE] below.\nThese MUST appear in your rewritten section.\n${instruction.trim() ? `\nAdditional user instruction:\n${instruction.trim()}\n` : ""}`
+      : instruction.trim()
+      ? `USER INSTRUCTION:\n${instruction.trim()}\n`
+      : "",
     "CURRENT SECTION BODY:",
     currentBody || "(empty)",
     "",
-    instruction.trim() ? `USER REWRITE INSTRUCTION:\n${instruction.trim()}\n` : "",
     authorConfig?.instructions?.trim()
       ? `AUTHOR WRITING INSTRUCTION:\n${authorConfig.instructions.trim()}\n`
       : "",
