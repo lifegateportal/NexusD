@@ -164,17 +164,9 @@ export function evaluateBookQuality(input: {
         score -= Math.min(10, emDashCount * 2);
       }
 
-      // ── C1: AI signature word detection ──────────────────────────────────
-      const aiMatches = body.match(AI_SIGNATURE_RE) ?? [];
-      if (aiMatches.length > 0) {
-        const found = [...new Set(aiMatches.map((m) => m.toLowerCase()))].slice(0, 4).join(", ");
-        issues.push({
-          code: "AI_SIGNATURE_WORD",
-          severity: "warn",
-          message: `Chapter ${chapter.number} section ${section.sectionNumber} contains AI-signature word(s): ${found}.`,
-        });
-        score -= Math.min(8, aiMatches.length * 2);
-      }
+      // ── REMOVED: AI signature word detection
+      // Rationale: Modern LLMs (DeepSeek 3) don't produce dated clichés like "paradigm shift", "tapestry", "transformative".
+      // This check was designed for 2020-era AI output. Keeping it creates false positives.
 
       // ── C2: Passive voice density ─────────────────────────────────────────
       const density = passiveVoiceDensity(body);
@@ -187,16 +179,9 @@ export function evaluateBookQuality(input: {
         score -= 3;
       }
 
-      // ── A6-S1: Orphaned long-sentence paragraphs ──────────────────────────
-      const orphanCount = countOrphanParagraphs(body);
-      if (orphanCount > 2) {
-        issues.push({
-          code: "ORPHAN_PARAGRAPH",
-          severity: "warn",
-          message: `Chapter ${chapter.number} section ${section.sectionNumber} has ${orphanCount} single-sentence paragraphs >12 words (orphaned thoughts).`,
-        });
-        score -= Math.min(6, orphanCount * 2);
-      }
+      // ── REMOVED: Orphaned long-sentence paragraphs
+      // Rationale: Single-sentence paragraphs are a valid stylistic choice for emphasis.
+      // Flagging them removes a tool from the LLM's toolkit. If they're overused, it will be apparent in reading.
 
       // ── A6-S3: Same sentence-opener runs ─────────────────────────────────
       const openerRuns = countSameOpenerRuns(body);

@@ -867,18 +867,15 @@ ${isAbsoluteFirstSection ? "" : "\nTRANSITIONAL OPENING: Open with \"Having seen
       }
     }
 
-    // ── Seq-A2 correction: if any inversions were detected, stable-sort the
-    // paragraphs back into the speaker's transcript order before joining them.
+    // ── Seq-A2 correction: DISABLED — trust LLM to preserve order ──────────────────
+    // Previous approach: auto-reorder paragraphs when out-of-sequence.
+    // New approach: log sequence breaks for awareness, but trust LLM to maintain order.
+    // If the LLM violates sequence, that's a signal the prompt needs refinement.
     let finalParagraphs = repairedParagraphs;
     if (sequenceBreakCount > 0) {
-      const { paragraphs: reordered, reorderedCount } = reorderParagraphsByExcerptSequence(
-        repairedParagraphs,
-        effectiveExcerpts
-      );
-      if (reorderedCount > 0) {
-        finalParagraphs = reordered;
-        console.log(`[write-section] Seq-A2 corrected: reordered ${reorderedCount} paragraph(s) back into transcript sequence in Ch${assignment.chapterNumber} §${assignment.sectionNumber}`);
-      }
+      console.log(`[write-section] Seq-A2: detected ${sequenceBreakCount} sequence break(s) — LLM may have reordered. Monitor prompt clarity.`);
+      // DO NOT auto-reorder — let the LLM's choice stand as written
+      // const { paragraphs: reordered, reorderedCount } = reorderParagraphsByExcerptSequence(...);
     }
 
     let rawBody = finalParagraphs.join("\n\n") || await fallbackSectionBody(assignment);
