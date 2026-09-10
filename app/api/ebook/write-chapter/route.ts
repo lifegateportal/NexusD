@@ -1,13 +1,47 @@
 import { NextRequest, NextResponse } from "next/server";
-import { generateObject } from "ai";
+import { generateObject, generateText } from "ai";
 import { z } from "zod";
 import { deepSeekModel } from "@/lib/ai-providers";
 import { WriteChapterRequestSchema, WriteChapterOutputSchema } from "@/lib/schemas/ebook";
 import { SOURCE_LOCK_RULES, PROSE_MASTERY_RULES, READER_NORMALIZATION_RULES, PREMIUM_BOOK_STYLE_RULES, stripAudienceLanguage, cleanTranscriptForBook } from "@/lib/editorial-style-bible";
-import { SCRIPTURE_FORMATTING_RULES } from "@/lib/scripture-formatter";
+import { SCRIPTURE_FORMATTING_RULES, validateScriptureFormatting } from "@/lib/scripture-formatter";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
+
+async function enforceScriptureFormatting(body: string, primaryTranslation?: string): Promise<string> {
+  const report = validateScriptureFormatting(body);
+  if (report.violations.length === 0) return body;
+
+  try {
+    const translationLine = primaryTranslation
+      ? `Primary translation fallback: ${primaryTranslation}.`
+      : "Primary translation fallback: use a valid translation abbreviation for every scripture quote.";
+
+    const { text } = await generateText({
+      model: deepSeekModel,
+      temperature: 0.1,
+      maxTokens: 2600,
+      system: `You are a scripture-format compliance editor. Repair formatting only while preserving meaning and source fidelity.
+
+${SCRIPTURE_FORMATTING_RULES}
+
+${translationLine}
+
+Rules:
+- Keep non-scripture prose intact except minimal transition text needed for the mandatory 3-part scripture pattern.
+- Convert inline scripture to mandatory blockquote format.
+- Enforce intro sentence ending with colon, blockquote with reference line, and immediate application paragraph.
+- Keep citation form: — Book Chapter:Verse (Translation).`,
+      prompt: `Repair this chapter section text so all scripture formatting is compliant:\n\n${body}`,
+    });
+
+    const repaired = text.trim();
+    return repaired || body;
+  } catch {
+    return body;
+  }
+}
 
 export async function POST(req: NextRequest) {
   const body = await req.json() as unknown;
@@ -165,15 +199,29 @@ ${sectionPayload}`;
         // Clean each section's paragraphs — two passes:
         // 1. stripAudienceLanguage (deterministic regex)
         // 2. Drop heading-prefixed lines and empty results
-        const cleaned = {
-          sections: (object.sections ?? []).map((sec) => ({
-            ...sec,
-            paragraphs: (sec.paragraphs ?? [])
-              .map((p) => stripAudienceLanguage(p.trim()))
-              .filter(Boolean)
-              .filter((p) => !(/^#{1,6}\s/.test(p))),
-          })),
-        };
+        const cleanedSections = (object.sections ?? []).map((sec) => ({
+          ...sec,
+          paragraphs: (sec.paragraphs ?? [])
+            .map((p) => stripAudienceLanguage(p.trim()))
+            .filter(Boolean)
+            .filter((p) => !(/^#{1,6}\s/.test(p))),
+        }));
+
+        const normalizedSections = await Promise.all(
+          cleanedSections.map(async (sec) => {
+            const joined = (sec.paragraphs ?? []).join("\n\n");
+            const repaired = await enforceScriptureFormatting(joined, primaryTranslation);
+            return {
+              ...sec,
+              paragraphs: repaired
+                .split(/\n\n+/)
+                .map((p) => p.trim())
+                .filter(Boolean),
+            };
+          })
+        );
+
+        const cleaned = { sections: normalizedSections };
 
         clearInterval(ping);
         controller.enqueue(encoder.encode(`data: ${JSON.stringify(cleaned)}\n\n`));

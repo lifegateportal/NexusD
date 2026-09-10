@@ -5,7 +5,7 @@ import { deepSeekModel } from "@/lib/ai-providers";
 import { WriteSectionRequestSchema } from "@/lib/schemas/ebook";
 import { PREMIUM_BOOK_STYLE_RULES, PROSE_MASTERY_RULES, READER_NORMALIZATION_RULES, SOURCE_LOCK_RULES } from "@/lib/editorial-style-bible";
 import { stripAudienceLanguage } from "@/lib/editorial-style-bible";
-import { SCRIPTURE_FORMATTING_RULES } from "@/lib/scripture-formatter";
+import { SCRIPTURE_FORMATTING_RULES, validateScriptureFormatting } from "@/lib/scripture-formatter";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
@@ -115,6 +115,40 @@ function normalizeReaderFacingProse(text: string): string {
     .replace(/[ \t]{2,}/g, " ")   // collapse only horizontal whitespace, never newlines
     .replace(/\n{3,}/g, "\n\n")
     .trim();
+}
+
+async function enforceScriptureFormatting(body: string, primaryTranslation?: string): Promise<string> {
+  const report = validateScriptureFormatting(body);
+  if (report.violations.length === 0) return body;
+
+  try {
+    const translationLine = primaryTranslation
+      ? `Primary translation fallback: ${primaryTranslation}.`
+      : "Primary translation fallback: use a valid translation abbreviation for every scripture quote.";
+
+    const { text } = await generateText({
+      model: deepSeekModel,
+      temperature: 0.1,
+      maxTokens: 2200,
+      system: `You are a scripture-format compliance editor. Repair formatting only while preserving meaning and source fidelity.
+
+${SCRIPTURE_FORMATTING_RULES}
+
+${translationLine}
+
+Rules:
+- Keep all non-scripture prose intact unless a minimal bridge sentence is needed for the 3-part pattern.
+- Convert any inline scripture quotation to mandatory blockquote format.
+- Ensure each scripture uses INTRO sentence ending with colon, then blockquote, then application paragraph.
+- Keep citations in the format: — Book Chapter:Verse (Translation).`,
+      prompt: `Repair this section so it is fully compliant with scripture formatting rules:\n\n${body}`,
+    });
+
+    const repaired = text.trim();
+    return repaired || body;
+  } catch {
+    return body;
+  }
 }
 
 // ── Upgrade 8: Passive voice detector ────────────────────────────────────────
@@ -934,7 +968,8 @@ ${isAbsoluteFirstSection ? "" : "\nTRANSITIONAL OPENING: Open with \"Having seen
       console.warn("[write-section] Line Editor polish failed, proceeding with base draft.", err);
     }
 
-    const body = stripAudienceLanguage(normalizeReaderFacingProse(rawBody));
+    let body = stripAudienceLanguage(normalizeReaderFacingProse(rawBody));
+    body = await enforceScriptureFormatting(body, assignment.primaryTranslation);
     
     // ── Upgrade 8: Passive voice detection ───────────────────────────────
     const passiveHits = detectPassiveVoice(body);
@@ -956,7 +991,8 @@ ${isAbsoluteFirstSection ? "" : "\nTRANSITIONAL OPENING: Open with \"Having seen
         sequenceBreakCount,
       };
     } catch (err) {
-      const fallbackBody = stripAudienceLanguage(normalizeReaderFacingProse(await fallbackSectionBody(assignment)));
+      let fallbackBody = stripAudienceLanguage(normalizeReaderFacingProse(await fallbackSectionBody(assignment)));
+      fallbackBody = await enforceScriptureFormatting(fallbackBody, assignment.primaryTranslation);
       return {
         body: fallbackBody,
         claimLedger: [],

@@ -1,10 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
-import { generateObject, streamText } from "ai";
+import { generateObject, generateText, streamText } from "ai";
 import { z } from "zod";
 import { deepSeekModel } from "@/lib/ai-providers";
 import { SectionAssignmentSchema } from "@/lib/schemas/ebook";
 import { PREMIUM_BOOK_STYLE_RULES, PROSE_MASTERY_RULES, SOURCE_LOCK_RULES, READER_NORMALIZATION_RULES } from "@/lib/editorial-style-bible";
-import { SCRIPTURE_FORMATTING_RULES } from "@/lib/scripture-formatter";
+import { SCRIPTURE_FORMATTING_RULES, validateScriptureFormatting } from "@/lib/scripture-formatter";
 
 export const runtime = "nodejs";
 export const maxDuration = 180;
@@ -46,6 +46,40 @@ function splitParagraphs(body: string): string[] {
     .split(/\n\n+/)
     .map((paragraph) => paragraph.trim())
     .filter(Boolean);
+}
+
+async function enforceScriptureFormatting(body: string, primaryTranslation?: string): Promise<string> {
+  const report = validateScriptureFormatting(body);
+  if (report.violations.length === 0) return body;
+
+  try {
+    const translationLine = primaryTranslation
+      ? `Primary translation fallback: ${primaryTranslation}.`
+      : "Primary translation fallback: use a valid translation abbreviation for every scripture quote.";
+
+    const { text } = await generateText({
+      model: deepSeekModel,
+      temperature: 0.1,
+      maxTokens: 2200,
+      system: `You are a scripture-format compliance editor. Repair formatting only while preserving meaning and source fidelity.
+
+${SCRIPTURE_FORMATTING_RULES}
+
+${translationLine}
+
+Rules:
+- Keep non-scripture prose intact except minimal transition text needed for the 3-part scripture pattern.
+- Convert inline scripture to mandatory blockquote format.
+- Enforce intro sentence ending with colon, blockquote with reference line, and immediate application paragraph.
+- Keep citation form: — Book Chapter:Verse (Translation).`,
+      prompt: `Repair this section so all scripture formatting is compliant:\n\n${body}`,
+    });
+
+    const repaired = text.trim();
+    return repaired || body;
+  } catch {
+    return body;
+  }
 }
 
 // Helper function removed - grounding validation is redundant with LLM fidelity rules
@@ -315,7 +349,12 @@ ELEVATION RULES (apply before returning):
 - CLOSING SENTENCE: Must either land a definitive statement with force OR create forward pull via an unresolved implication. Never close by summarizing what the paragraph just said.
 - FIRST PERSON: Write entirely as the author. No "the speaker," "the preacher," or any third-person reference to the author.
 - NO EM DASHES: Never use — in any form. Use commas, colons, or subordinate clauses instead.
-- SOURCE FIDELITY: Every sentence must trace to the transcript excerpts. Zero fabrication, zero extension.`,
+- SOURCE FIDELITY: Every sentence must trace to the transcript excerpts. Zero fabrication, zero extension.
+
+SCRIPTURE EXCEPTION TO DASH RULE:
+- Scripture citation lines MUST follow SCRIPTURE_FORMATTING_RULES and therefore MUST use em-dash in citation lines only.
+
+${SCRIPTURE_FORMATTING_RULES}`,
         prompt: refinePrompt,
       });
 
@@ -326,7 +365,8 @@ ELEVATION RULES (apply before returning):
 
       const merged = [...paragraphs];
       merged[paragraphIndex] = refinedParagraph;
-      const mergedBody = merged.join("\n\n");
+      let mergedBody = merged.join("\n\n");
+      mergedBody = await enforceScriptureFormatting(mergedBody, assignment.primaryTranslation);
       const usage = (object.excerptUsage ?? []).filter((n) => n > 0);
 
       return NextResponse.json({ body: mergedBody, excerptUsage: usage }, { status: 200 });
@@ -345,10 +385,11 @@ ELEVATION RULES (apply before returning):
       fullText += chunk;
     }
 
-    const trimmedBody = fullText.trim();
+    let trimmedBody = fullText.trim();
     if (!trimmedBody) {
       return NextResponse.json({ error: "Rewrite returned empty output" }, { status: 422 });
     }
+    trimmedBody = await enforceScriptureFormatting(trimmedBody, assignment.primaryTranslation);
 
     return NextResponse.json(
       {
