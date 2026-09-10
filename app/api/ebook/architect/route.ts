@@ -251,6 +251,7 @@ ${transcriptBlock}`,
         number: ch.number,
         title: ch.title,
         keyTheme: ch.keyTheme,
+        sourceSegmentIds: ch.sections.flatMap((s) => s.sourceSegmentIds),
         sections: ch.sections.map((sec) => {
           const segs = sec.sourceSegmentIds.map((id) => segmentMap[id]).filter(Boolean);
           const quotes = segs.flatMap((s) => s?.quotes ?? [])
