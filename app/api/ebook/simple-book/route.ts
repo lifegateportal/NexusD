@@ -27,6 +27,7 @@ const SectionSchema = z.object({
   heading: z.string().default(""),
   body: z.string().default(""),
   keyClaims: z.array(z.string()).default([]),
+  coveredBlockIds: z.array(z.string()).optional().default([]),
 });
 
 const ChapterSchema = z.object({
@@ -80,6 +81,73 @@ function clampSlotTranscript(text: string, maxChars = 22000): string {
   const head = text.slice(0, Math.floor(maxChars * 0.65));
   const tail = text.slice(-Math.floor(maxChars * 0.35));
   return `${head}\n\n[... slot transcript middle omitted for length ...]\n\n${tail}`;
+}
+
+function countWords(text: string): number {
+  const tokens = text.trim().match(/\S+/g);
+  return tokens ? tokens.length : 0;
+}
+
+type TeachingBlock = {
+  id: string;
+  wordCount: number;
+  excerpt: string;
+};
+
+function buildTeachingBlocks(text: string, maxBlocks = 18): TeachingBlock[] {
+  const paragraphs = text
+    .split(/\n\s*\n/g)
+    .map((p) => p.replace(/\s+/g, " ").trim())
+    .filter((p) => p.length > 30);
+
+  const chunks: string[] = [];
+  let current = "";
+  let currentWords = 0;
+  const targetWordsPerBlock = 180;
+
+  for (const para of paragraphs) {
+    const paraWords = countWords(para);
+    if (currentWords >= targetWordsPerBlock && chunks.length < maxBlocks - 1) {
+      chunks.push(current.trim());
+      current = para;
+      currentWords = paraWords;
+      continue;
+    }
+    current = current ? `${current} ${para}` : para;
+    currentWords += paraWords;
+  }
+  if (current.trim()) chunks.push(current.trim());
+
+  if (chunks.length === 0) {
+    const fallbackSentences = text
+      .replace(/\s+/g, " ")
+      .split(/(?<=[.!?])\s+/)
+      .filter(Boolean);
+    const merged = fallbackSentences.join(" ");
+    if (merged.trim()) chunks.push(merged.trim());
+  }
+
+  const sampled = chunks.slice(0, maxBlocks).map((chunk, idx) => ({
+    id: `B${idx + 1}`,
+    wordCount: countWords(chunk),
+    excerpt: chunk.slice(0, 360),
+  }));
+
+  return sampled;
+}
+
+function chapterWordCount(chapter: z.infer<typeof ChapterSchema>): number {
+  return (chapter.sections ?? []).reduce((sum, section) => sum + countWords(section.body || ""), 0);
+}
+
+function missingTeachingBlocks(chapter: z.infer<typeof SlotChapterSchema>, blocks: TeachingBlock[]): string[] {
+  const covered = new Set(
+    (chapter.sections ?? [])
+      .flatMap((section) => section.coveredBlockIds ?? [])
+      .map((id) => id.trim())
+      .filter(Boolean)
+  );
+  return blocks.map((b) => b.id).filter((id) => !covered.has(id));
 }
 
 function extractFirstJsonObject(text: string): string | null {
@@ -231,7 +299,8 @@ export async function POST(req: NextRequest) {
       return {
         sourceId,
         label: slot.label,
-        text: clampSlotTranscript(slot.text, 22000),
+        fullText: slot.text,
+        text: clampSlotTranscript(slot.text, 90000),
       };
     });
 
@@ -265,6 +334,7 @@ NON-NEGOTIABLE RULES:
 13) Story discipline: setup, tension, and payoff must stay in order and attach to the section argument.
 14) Never duplicate a full story in multiple sections. If recalled later, reference briefly and move forward.
 15) Remove all pulpit and live-audience language from narration. Forbidden examples: "say amen", "turn to your neighbor", "lift your hands", "good morning church".
+16) Thoroughness is mandatory: cover the full transcript and all significant teaching blocks, not just highlights.
 
 ${SOURCE_LOCK_RULES}`;
 
@@ -329,7 +399,8 @@ ${sourceBlock}`;
       "sectionNumber": 1,
       "heading": "...",
       "body": "...",
-      "keyClaims": ["..."]
+      "keyClaims": ["..."],
+      "coveredBlockIds": ["B1", "B2"]
     }
   ]
 }`;
@@ -348,6 +419,10 @@ ${sourceBlock}`;
       for (let i = 0; i < slotBlocks.length; i++) {
         const slot = slotBlocks[i];
         const chapterNumber = i + 1;
+        const teachingBlocks = buildTeachingBlocks(slot.fullText, 20);
+        const teachingBlockManifest = teachingBlocks.length > 0
+          ? teachingBlocks.map((b) => `- ${b.id} (${b.wordCount} words): ${b.excerpt}`).join("\n")
+          : "- B1: (no extracted block; use full transcript coverage)";
         const priorClaimsBlock = allSectionClaims.length > 0
           ? `\n\nPRIOR CHAPTER CLAIMS (DO NOT REPEAT IN FULL):\n${allSectionClaims.slice(-30).map((c) => `- ${c}`).join("\n")}`
           : "";
@@ -365,6 +440,15 @@ TARGET AUDIENCE: ${input.targetAudience || "(not provided)"}
 CORE THESIS: ${input.coreThesis || "(not provided)"}
 VOICE TONE: ${input.voiceTone || "(not provided)"}
 AUTHOR INSTRUCTIONS: ${input.authorInstructions || "(not provided)"}
+
+TEACHING BLOCK COVERAGE CONTRACT (HARD REQUIREMENT):
+- Every significant teaching block listed below must be covered in this chapter.
+- Each section must declare coveredBlockIds.
+- No block may be skipped.
+- You may cover multiple blocks in one section when naturally related.
+
+SIGNIFICANT TEACHING BLOCKS:
+${teachingBlockManifest}
 
 ${storyIntegrationBlock}
 
@@ -420,6 +504,40 @@ ${slot.text}${priorClaimsBlock}`;
 
         if (!chapterObject) {
           chapterObject = buildFallbackSlotChapter(slot, chapterNumber, input.targetAudience);
+        }
+
+        const sourceWordCount = countWords(slot.fullText);
+        const minChapterWords = sourceWordCount >= 4500 ? 3000 : sourceWordCount >= 2500 ? 1800 : 900;
+        let missingBlocks = missingTeachingBlocks(chapterObject, teachingBlocks);
+        let draftWordCount = chapterWordCount(normalizeSlotChapter(chapterObject, chapterNumber));
+
+        if (missingBlocks.length > 0 || draftWordCount < minChapterWords) {
+          const repairPrompt = `${slotPrompt}
+
+REVISION REQUIRED:
+- Missing blocks: ${missingBlocks.length > 0 ? missingBlocks.join(", ") : "none"}
+- Current chapter words: ${draftWordCount}
+- Minimum target for this source: ${minChapterWords}
+
+Rewrite the full chapter object to satisfy coverage and depth.
+Return only JSON in the slot chapter shape.`;
+
+          try {
+            const { object } = await generateObject({
+              model: deepSeekReasonerModel,
+              schema: SlotChapterSchema,
+              mode: "json",
+              temperature: 0.2,
+              maxTokens,
+              system,
+              prompt: repairPrompt,
+            });
+            chapterObject = object;
+            missingBlocks = missingTeachingBlocks(chapterObject, teachingBlocks);
+            draftWordCount = chapterWordCount(normalizeSlotChapter(chapterObject, chapterNumber));
+          } catch {
+            // Keep best available chapterObject.
+          }
         }
 
         const normalizedChapter = normalizeSlotChapter(chapterObject, chapterNumber);
