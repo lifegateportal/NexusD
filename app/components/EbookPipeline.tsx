@@ -3027,29 +3027,54 @@ export function EbookPipeline({
         acc.voiceDNA = simpleVoiceDNA;
 
         setStage("architecting");
-        addLog("Simple Direct Book Mode: generating book in one pass…");
+        addLog("Simple Direct Book Mode: preparing slot-by-slot generation…");
         const slotTranscripts = (acc.transcripts ?? sourceTranscripts)
           .filter((slot) => (slot.text ?? "").trim().length > 0)
           .slice(0, 10)
           .map((slot) => ({ label: slot.label, text: slot.text }));
         const desiredChapters = Math.max(3, Math.min(12, slotTranscripts.length > 0 ? slotTranscripts.length : (activeSlotCount > 0 ? activeSlotCount : 6)));
-        const simple = await postJson<SimpleBookResponse>("/api/ebook/simple-book", {
-          rawTranscript: teachingTranscript,
-          slotTranscripts,
-          targetAudience,
-          coreThesis: "",
-          voiceTone: simpleVoiceDNA.toneProfile,
-          authorInstructions,
-          desiredChapters,
-          oneChapterPerSlot: true,
-        });
-
         setStage("writing");
-        const builtChapters: ChapterDraft[] = (simple.chapters ?? []).map((chapter, chapterIndex) => {
+        const builtChapters: ChapterDraft[] = [];
+        const slotWriteList = slotTranscripts.length > 0
+          ? slotTranscripts
+          : [{ label: "Slot-1", text: teachingTranscript }];
+
+        setProgress({ total: slotWriteList.length, completed: 0 });
+
+        let bookTitleFromRuns = "";
+        let subtitleFromRuns = "";
+        let authorNameFromRuns = "the Author";
+
+        for (let slotIndex = 0; slotIndex < slotWriteList.length; slotIndex++) {
+          const slot = slotWriteList[slotIndex];
+          addLog(`Simple Direct Book Mode: writing chapter ${slotIndex + 1}/${slotWriteList.length} from ${slot.label}…`);
+
+          const simple = await postJson<SimpleBookResponse>("/api/ebook/simple-book", {
+            rawTranscript: slot.text,
+            slotTranscripts: [slot],
+            targetAudience,
+            coreThesis: "",
+            voiceTone: simpleVoiceDNA.toneProfile,
+            authorInstructions,
+            desiredChapters,
+            oneChapterPerSlot: true,
+          });
+
+          if (!bookTitleFromRuns) bookTitleFromRuns = (simple.bookTitle || "").trim();
+          if (!subtitleFromRuns) subtitleFromRuns = (simple.subtitle || "").trim();
+          authorNameFromRuns = (simple.authorName || authorNameFromRuns).trim();
+
+          const chapter = simple.chapters?.[0];
+          if (!chapter) {
+            addLog(`⚠ ${slot.label} returned no chapter; skipping`);
+            setProgress({ total: slotWriteList.length, completed: slotIndex + 1 });
+            continue;
+          }
+
           const builtSections = (chapter.sections ?? []).map((section, sectionIndex) => {
             const body = (section.body ?? "").trim();
             return {
-              chapterNumber: chapterIndex + 1,
+              chapterNumber: slotIndex + 1,
               sectionNumber: sectionIndex + 1,
               heading: (section.heading || `Section ${sectionIndex + 1}`).trim(),
               body,
@@ -3057,9 +3082,10 @@ export function EbookPipeline({
               status: "complete" as const,
             };
           });
-          return {
-            number: chapterIndex + 1,
-            title: (chapter.title || `Chapter ${chapterIndex + 1}`).trim(),
+
+          const builtChapter: ChapterDraft = {
+            number: slotIndex + 1,
+            title: (chapter.title || `Chapter ${slotIndex + 1}`).trim(),
             intro: chapter.premise?.trim() || "",
             epigraph: "",
             sections: builtSections,
@@ -3069,7 +3095,12 @@ export function EbookPipeline({
             totalWordCount: builtSections.reduce((sum, section) => sum + section.wordCount, 0),
             status: "complete" as const,
           };
-        }).filter((chapter) => chapter.sections.length > 0);
+
+          builtChapters.push(builtChapter);
+          setChapters([...builtChapters]);
+          setProgress({ total: slotWriteList.length, completed: slotIndex + 1 });
+          addLog(`✓ ${slot.label} complete — ${builtChapter.totalWordCount.toLocaleString()} words`);
+        }
 
         const frontMatter: FrontBackMatter = {
           preface: "",
@@ -3082,9 +3113,9 @@ export function EbookPipeline({
 
         const simpleManifest: EbookManifest = {
           jobId,
-          bookTitle: (simple.bookTitle || "Untitled").trim(),
-          subtitle: (simple.subtitle || "A transcript-grounded teaching journey").trim(),
-          authorName: (simple.authorName || "the Author").trim(),
+          bookTitle: bookTitleFromRuns || (builtChapters[0]?.title || "Untitled"),
+          subtitle: subtitleFromRuns || "A transcript-grounded teaching journey",
+          authorName: authorNameFromRuns || "the Author",
           frontMatter,
           chapters: builtChapters,
           totalWordCount: builtChapters.reduce((sum, chapter) => sum + chapter.totalWordCount, 0),

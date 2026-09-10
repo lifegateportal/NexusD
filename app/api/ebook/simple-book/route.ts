@@ -145,6 +145,62 @@ function normalizeSlotChapter(object: z.infer<typeof SlotChapterSchema>, chapter
   };
 }
 
+function sentenceChunks(text: string): string[] {
+  return text
+    .replace(/\s+/g, " ")
+    .split(/(?<=[.!?])\s+/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
+function pickChapterTitle(label: string, text: string, chapterNumber: number): string {
+  const cleanLabel = label.replace(/^slot-?/i, "").trim();
+  if (cleanLabel.length >= 4) return cleanLabel.slice(0, 72);
+  const firstLine = text.split(/\n+/).map((s) => s.trim()).find((s) => s.length >= 8) || "";
+  if (firstLine) return firstLine.split(/[.!?]/)[0].slice(0, 72);
+  return `Chapter ${chapterNumber}`;
+}
+
+function buildFallbackSlotChapter(
+  slot: { label: string; text: string },
+  chapterNumber: number,
+  targetAudience: string,
+): z.infer<typeof ChapterSchema> {
+  const sentences = sentenceChunks(slot.text);
+  const sectionCount = sentences.length >= 30 ? 5 : 4;
+  const bucketSize = Math.max(4, Math.ceil(sentences.length / sectionCount));
+  const sections = Array.from({ length: sectionCount }, (_v, i) => {
+    const start = i * bucketSize;
+    const end = Math.min(sentences.length, start + bucketSize);
+    const slice = sentences.slice(start, end);
+    const headingSeed = slice[0] || `Core movement ${i + 1}`;
+    const heading = headingSeed.split(/[,:;.!?]/)[0].trim().split(/\s+/).slice(0, 7).join(" ") || `Core movement ${i + 1}`;
+    const body = slice.join(" ").trim();
+    return {
+      sectionNumber: i + 1,
+      heading,
+      body,
+      keyClaims: body
+        .split(/(?<=[.!?])\s+/)
+        .slice(0, 2)
+        .map((s) => s.trim())
+        .filter((s) => s.length > 20),
+    };
+  }).filter((section) => section.body.length > 0);
+
+  const chapterTitle = pickChapterTitle(slot.label, slot.text, chapterNumber);
+  const premise = targetAudience.trim()
+    ? `This chapter applies the sermon's teaching to ${targetAudience.trim()}.`
+    : "This chapter develops the sermon's core teaching with grounded examples and application.";
+
+  return {
+    number: chapterNumber,
+    title: chapterTitle,
+    premise,
+    sections,
+  };
+}
+
 export async function POST(req: NextRequest) {
   const body = await req.json() as unknown;
   let input: z.infer<typeof RequestSchema>;
@@ -331,39 +387,41 @@ ${slot.text}${priorClaimsBlock}`;
         }
 
         if (!chapterObject) {
-          const { text } = await generateText({
-            model: deepSeekReasonerModel,
-            temperature: 0.2,
-            maxTokens,
-            system,
-            prompt: `${slotPrompt}\n\nReturn ONLY JSON in this exact shape:\n${slotChapterTemplate}`,
-          });
-          const json = extractFirstJsonObject(text);
-          if (!json) {
-            return NextResponse.json(
-              { error: `Simple book generation failed: slot ${chapterNumber} returned non-parseable JSON` },
-              { status: 502 }
-            );
+          try {
+            const { text } = await generateText({
+              model: deepSeekReasonerModel,
+              temperature: 0.2,
+              maxTokens,
+              system,
+              prompt: `${slotPrompt}\n\nReturn ONLY JSON in this exact shape:\n${slotChapterTemplate}`,
+            });
+            const json = extractFirstJsonObject(text);
+            if (json) {
+              const parsed = SlotChapterSchema.safeParse(JSON.parse(json));
+              if (parsed.success) {
+                chapterObject = parsed.data;
+              }
+            }
+          } catch {
+            // Use deterministic fallback below.
           }
-          const parsed = SlotChapterSchema.safeParse(JSON.parse(json));
-          if (!parsed.success) {
-            return NextResponse.json(
-              {
-                error: `Simple book generation failed: slot ${chapterNumber} JSON shape invalid`,
-                details: parsed.error.issues.slice(0, 5),
-              },
-              { status: 502 }
-            );
-          }
-          chapterObject = parsed.data;
+        }
+
+        if (!chapterObject) {
+          chapterObject = buildFallbackSlotChapter(slot, chapterNumber, input.targetAudience);
         }
 
         const normalizedChapter = normalizeSlotChapter(chapterObject, chapterNumber);
         if (normalizedChapter.sections.length === 0) {
-          return NextResponse.json(
-            { error: `Simple book generation failed: slot ${chapterNumber} produced no section content` },
-            { status: 502 }
-          );
+          const fallbackChapter = buildFallbackSlotChapter(slot, chapterNumber, input.targetAudience);
+          if (fallbackChapter.sections.length === 0) {
+            return NextResponse.json(
+              { error: `Simple book generation failed: slot ${chapterNumber} produced no section content` },
+              { status: 502 }
+            );
+          }
+          chapters.push(fallbackChapter);
+          continue;
         }
 
         chapters.push(normalizedChapter);
