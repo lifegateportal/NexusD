@@ -194,7 +194,7 @@ ${excerptPayload}`;
     model: deepSeekModel,
     schema: ChapterPlanLLMSchema,
     mode: "json",
-    temperature: 0.7, // balance between reasoning and speed
+    temperature: 0.3, // deterministic structural planning: consistent concept ownership & excerpt locking
     system,
     prompt,
   });
