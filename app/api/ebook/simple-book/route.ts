@@ -78,9 +78,14 @@ function clampTranscript(text: string, maxChars = 140000): string {
 
 function clampSlotTranscript(text: string, maxChars = 22000): string {
   if (text.length <= maxChars) return text;
-  const head = text.slice(0, Math.floor(maxChars * 0.65));
-  const tail = text.slice(-Math.floor(maxChars * 0.35));
-  return `${head}\n\n[... slot transcript middle omitted for length ...]\n\n${tail}`;
+  const headChars = Math.floor(maxChars * 0.4);
+  const middleChars = Math.floor(maxChars * 0.25);
+  const tailChars = maxChars - headChars - middleChars;
+  const midStart = Math.max(0, Math.floor((text.length - middleChars) / 2));
+  const head = text.slice(0, headChars);
+  const middle = text.slice(midStart, midStart + middleChars);
+  const tail = text.slice(-tailChars);
+  return `${head}\n\n[... slot transcript middle sample ...]\n\n${middle}\n\n[... slot transcript tail sample ...]\n\n${tail}`;
 }
 
 function countWords(text: string): number {
@@ -184,6 +189,54 @@ function extractFirstJsonObject(text: string): string | null {
   return null;
 }
 
+function normalizeForComparison(text: string): string {
+  return text
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function sectionVerbatimScore(sectionBody: string, sourceNormalized: string): number {
+  const body = normalizeForComparison(sectionBody);
+  if (!body || body.length < 320 || !sourceNormalized) return 0;
+
+  const windowSize = 180;
+  const sampleCount = 5;
+  const maxStart = Math.max(0, body.length - windowSize);
+  const step = Math.max(1, Math.floor(maxStart / Math.max(1, sampleCount - 1)));
+
+  let sampled = 0;
+  let matched = 0;
+  for (let i = 0; i <= maxStart && sampled < sampleCount; i += step) {
+    const fragment = body.slice(i, i + windowSize).trim();
+    if (fragment.length < windowSize - 20) continue;
+    sampled++;
+    if (sourceNormalized.includes(fragment)) {
+      matched++;
+    }
+  }
+
+  if (sampled === 0) return 0;
+  return matched / sampled;
+}
+
+function looksLikeUnprocessedTranscript(
+  chapter: z.infer<typeof ChapterSchema>,
+  sourceText: string,
+): boolean {
+  const sourceNormalized = normalizeForComparison(sourceText);
+  if (!sourceNormalized) return false;
+
+  const sections = chapter.sections ?? [];
+  if (sections.length === 0) return true;
+
+  const copiedSections = sections.filter((section) => sectionVerbatimScore(section.body || "", sourceNormalized) >= 0.6).length;
+  const copiedRatio = copiedSections / sections.length;
+
+  return copiedSections >= 2 && copiedRatio >= 0.5;
+}
+
 function normalizeSimpleBook(object: z.infer<typeof SimpleBookSchema>, input: z.infer<typeof RequestSchema>) {
   return {
     ...object,
@@ -223,62 +276,6 @@ function normalizeSlotChapter(object: z.infer<typeof SlotChapterSchema>, chapter
   };
 }
 
-function sentenceChunks(text: string): string[] {
-  return text
-    .replace(/\s+/g, " ")
-    .split(/(?<=[.!?])\s+/)
-    .map((s) => s.trim())
-    .filter(Boolean);
-}
-
-function pickChapterTitle(label: string, text: string, chapterNumber: number): string {
-  const cleanLabel = label.replace(/^slot-?/i, "").trim();
-  if (cleanLabel.length >= 4) return cleanLabel.slice(0, 72);
-  const firstLine = text.split(/\n+/).map((s) => s.trim()).find((s) => s.length >= 8) || "";
-  if (firstLine) return firstLine.split(/[.!?]/)[0].slice(0, 72);
-  return `Chapter ${chapterNumber}`;
-}
-
-function buildFallbackSlotChapter(
-  slot: { label: string; text: string },
-  chapterNumber: number,
-  targetAudience: string,
-): z.infer<typeof ChapterSchema> {
-  const sentences = sentenceChunks(slot.text);
-  const sectionCount = Math.max(3, Math.min(12, Math.ceil(sentences.length / 8)));
-  const bucketSize = Math.max(4, Math.ceil(sentences.length / sectionCount));
-  const sections = Array.from({ length: sectionCount }, (_v, i) => {
-    const start = i * bucketSize;
-    const end = Math.min(sentences.length, start + bucketSize);
-    const slice = sentences.slice(start, end);
-    const headingSeed = slice[0] || `Core movement ${i + 1}`;
-    const heading = headingSeed.split(/[,:;.!?]/)[0].trim().split(/\s+/).slice(0, 7).join(" ") || `Core movement ${i + 1}`;
-    const body = cleanGeneratedBody(slice.join(" ").trim());
-    return {
-      sectionNumber: i + 1,
-      heading,
-      body,
-      keyClaims: body
-        .split(/(?<=[.!?])\s+/)
-        .slice(0, 2)
-        .map((s) => s.trim())
-        .filter((s) => s.length > 20),
-    };
-  }).filter((section) => section.body.length > 0);
-
-  const chapterTitle = pickChapterTitle(slot.label, slot.text, chapterNumber);
-  const premise = targetAudience.trim()
-    ? `This chapter applies the sermon's teaching to ${targetAudience.trim()}.`
-    : "This chapter develops the sermon's core teaching with grounded examples and application.";
-
-  return {
-    number: chapterNumber,
-    title: chapterTitle,
-    premise,
-    sections,
-  };
-}
-
 export async function POST(req: NextRequest) {
   const body = await req.json() as unknown;
   let input: z.infer<typeof RequestSchema>;
@@ -300,7 +297,7 @@ export async function POST(req: NextRequest) {
         sourceId,
         label: slot.label,
         fullText: slot.text,
-        text: clampSlotTranscript(slot.text, 90000),
+        text: clampSlotTranscript(slot.text, 32000),
       };
     });
 
@@ -335,6 +332,7 @@ NON-NEGOTIABLE RULES:
 14) Never duplicate a full story in multiple sections. If recalled later, reference briefly and move forward.
 15) Remove all pulpit and live-audience language from narration. Forbidden examples: "say amen", "turn to your neighbor", "lift your hands", "good morning church".
 16) Thoroughness is mandatory: cover the full transcript and all significant teaching blocks, not just highlights.
+17) Never paste transcript blocks verbatim. Rewrite into publication-ready prose with clear section flow and transitions.
 
 ${SOURCE_LOCK_RULES}`;
 
@@ -463,7 +461,10 @@ ${slot.text}${priorClaimsBlock}`;
 
         let chapterObject: z.infer<typeof SlotChapterSchema> | null = null;
 
-        for (let attempt = 0; attempt < 2; attempt++) {
+        for (let attempt = 0; attempt < 3; attempt++) {
+          const attemptPrompt = attempt === 0
+            ? slotPrompt
+            : `${slotPrompt}\n\nREVISION REQUIRED:\n- Prior attempt copied transcript phrasing too closely or failed structure.\n- Rewrite with stronger synthesis, cleaner transitions, and no long verbatim transcript spans.\n- Keep strict source grounding and keep all significant teaching blocks covered.`;
           try {
             const { object } = await generateObject({
               model: deepSeekReasonerModel,
@@ -472,12 +473,19 @@ ${slot.text}${priorClaimsBlock}`;
               temperature: attempt === 0 ? 0.3 : 0.2,
               maxTokens,
               system,
-              prompt: slotPrompt,
+              prompt: attemptPrompt,
             });
+            const normalizedCandidate = normalizeSlotChapter(object, chapterNumber);
+            if (normalizedCandidate.sections.length === 0) {
+              continue;
+            }
+            if (looksLikeUnprocessedTranscript(normalizedCandidate, slot.fullText)) {
+              continue;
+            }
             chapterObject = object;
             break;
           } catch {
-            // Try fallback pass below.
+            // Try text-mode JSON salvage pass below.
           }
         }
 
@@ -494,29 +502,36 @@ ${slot.text}${priorClaimsBlock}`;
             if (json) {
               const parsed = SlotChapterSchema.safeParse(JSON.parse(json));
               if (parsed.success) {
-                chapterObject = parsed.data;
+                const normalizedCandidate = normalizeSlotChapter(parsed.data, chapterNumber);
+                if (normalizedCandidate.sections.length > 0 && !looksLikeUnprocessedTranscript(normalizedCandidate, slot.fullText)) {
+                  chapterObject = parsed.data;
+                }
               }
             }
           } catch {
-            // Use deterministic fallback below.
+            // No local fallback: fail closed if model output cannot be parsed.
           }
         }
 
         if (!chapterObject) {
-          chapterObject = buildFallbackSlotChapter(slot, chapterNumber, input.targetAudience);
+          return NextResponse.json(
+            { error: `Simple book generation failed: slot ${chapterNumber} did not return valid chapter JSON` },
+            { status: 502 }
+          );
         }
 
         const normalizedChapter = normalizeSlotChapter(chapterObject, chapterNumber);
         if (normalizedChapter.sections.length === 0) {
-          const fallbackChapter = buildFallbackSlotChapter(slot, chapterNumber, input.targetAudience);
-          if (fallbackChapter.sections.length === 0) {
-            return NextResponse.json(
-              { error: `Simple book generation failed: slot ${chapterNumber} produced no section content` },
-              { status: 502 }
-            );
-          }
-          chapters.push(fallbackChapter);
-          continue;
+          return NextResponse.json(
+            { error: `Simple book generation failed: slot ${chapterNumber} produced no section content` },
+            { status: 502 }
+          );
+        }
+        if (looksLikeUnprocessedTranscript(normalizedChapter, slot.fullText)) {
+          return NextResponse.json(
+            { error: `Simple book generation failed: slot ${chapterNumber} returned unprocessed transcript-like output` },
+            { status: 502 }
+          );
         }
 
         chapters.push(normalizedChapter);
