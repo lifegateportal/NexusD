@@ -257,7 +257,7 @@ export async function POST(req: NextRequest) {
     : null;
 
   // Dynamic token allocation: scale based on manuscript size (3K-16K range)
-  function calculateMaxTokens(manifest: typeof parsedInput.manifest): number {
+  function calculateMaxTokens(manifest: typeof input.manifest): number {
     const chapterCount = manifest.chapters.length;
     const totalWords = manifest.chapters.reduce((sum, ch) => sum + ch.totalWordCount, 0);
     
@@ -268,7 +268,7 @@ export async function POST(req: NextRequest) {
   }
 
   try {
-    const maxTokens = calculateMaxTokens(parsedInput.manifest);
+    const maxTokens = calculateMaxTokens(input.manifest);
     
     const { object } = await generateObject({
       model: selectedModel,

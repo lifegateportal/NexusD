@@ -98,7 +98,7 @@ ADDITIONAL RULES:
   // retry twice before giving up to the unedited excerpt text as the absolute last resort.
   for (let attempt = 0; attempt < 3; attempt++) {
     try {
-      const { text } = await generateText({ model: deepSeekModel, temperature: 0.35, maxTokens: 1200, system, prompt });
+      const { text } = await generateText({ model: deepSeekModel, temperature: 0.5, maxTokens: 1200, system, prompt });
       if (text.trim()) return text.trim();
     } catch (err) {
       console.error(`[write-section] fallbackSectionBody attempt ${attempt + 1} failed:`, err instanceof Error ? err.message : err);
@@ -426,8 +426,16 @@ export async function POST(req: NextRequest) {
   const authorConfig = input.authorConfig;
   const authorConfigBlock = (authorConfig?.instructions || authorConfig?.targetAudience)
     ? `\n\n════════════════════════════════════════════
-AUTHOR BOOK CONFIGURATION (highest priority)
-════════════════════════════════════════════${authorConfig.targetAudience ? `\nTARGET AUDIENCE: ${authorConfig.targetAudience}\nWrite at the vocabulary level, cultural register, and depth appropriate for this specific audience. Every example, illustration, and application point must land for this reader.` : ""}${authorConfig.instructions ? `\nAUTHOR WRITING INSTRUCTIONS: ${authorConfig.instructions}\nThese are the author's direct instructions for how the book should read. Honor them on every paragraph. They override any default style preference where they conflict.` : ""}`
+AUTHOR BOOK CONFIGURATION (tone & audience only)
+════════════════════════════════════════════${authorConfig.targetAudience ? `\nTARGET AUDIENCE: ${authorConfig.targetAudience}\nWrite at the vocabulary level, cultural register, and depth appropriate for this specific audience. Every example, illustration, and application point must land for this reader.` : ""}${authorConfig.instructions ? `\nAUTHOR WRITING INSTRUCTIONS: ${authorConfig.instructions}\nThese are the author's direct instructions for how the book should read. Honor them on every paragraph. They override any default style preference where they conflict.` : ""}
+
+⚠️ CRITICAL BOUNDARY: Author configuration applies ONLY to tone, vocabulary, pacing, and style. It DOES NOT grant permission to:
+  • Add examples, illustrations, or applications NOT in the transcript
+  • Introduce new concepts or theological extensions
+  • Invent supporting details or expand on thin source material
+  • Override SOURCE-LOCK-RULES in ANY way
+
+When author instructions would require content not in the transcript, prioritize SOURCE-LOCK-RULES instead. Write less rather than invent.`
     : "";
 
   // ── Readability target removed: trust the LLM ─────────────────────────────────
@@ -808,7 +816,7 @@ ${isAbsoluteFirstSection ? "" : "\nTRANSITIONAL OPENING: Open with \"Having seen
       model: deepSeekModel,
       schema: SectionBodySchema,
       mode: "json",
-      temperature: 0.35,
+      temperature: 0.5,
       system: deduplicatedSystem,
       prompt: paragraphPlan.length > 0
         ? `${prompt}\n\nPARAGRAPH PLAN (must follow in order):\n${JSON.stringify(paragraphPlan)}`
@@ -859,18 +867,15 @@ ${isAbsoluteFirstSection ? "" : "\nTRANSITIONAL OPENING: Open with \"Having seen
       }
     }
 
-    // ── Seq-A2 correction: if any inversions were detected, stable-sort the
-    // paragraphs back into the speaker's transcript order before joining them.
+    // ── Seq-A2 correction: DISABLED — trust LLM to preserve order ──────────────────
+    // Previous approach: auto-reorder paragraphs when out-of-sequence.
+    // New approach: log sequence breaks for awareness, but trust LLM to maintain order.
+    // If the LLM violates sequence, that's a signal the prompt needs refinement.
     let finalParagraphs = repairedParagraphs;
     if (sequenceBreakCount > 0) {
-      const { paragraphs: reordered, reorderedCount } = reorderParagraphsByExcerptSequence(
-        repairedParagraphs,
-        effectiveExcerpts
-      );
-      if (reorderedCount > 0) {
-        finalParagraphs = reordered;
-        console.log(`[write-section] Seq-A2 corrected: reordered ${reorderedCount} paragraph(s) back into transcript sequence in Ch${assignment.chapterNumber} §${assignment.sectionNumber}`);
-      }
+      console.log(`[write-section] Seq-A2: detected ${sequenceBreakCount} sequence break(s) — LLM may have reordered. Monitor prompt clarity.`);
+      // DO NOT auto-reorder — let the LLM's choice stand as written
+      // const { paragraphs: reordered, reorderedCount } = reorderParagraphsByExcerptSequence(...);
     }
 
     let rawBody = finalParagraphs.join("\n\n") || await fallbackSectionBody(assignment);

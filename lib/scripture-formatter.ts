@@ -125,13 +125,18 @@ export function containsScripture(text: string): boolean {
  * copies drift (comma placement, translation fallback wording, dash style)
  * and produce inconsistent citations across the manuscript.
  */
-export const SCRIPTURE_FORMATTING_RULES = `═══ SCRIPTURE FORMATTING — PRODUCTION-GRADE CITATION STANDARD (Chicago Manual of Style + SBL citation conventions + Premium Print) ═══
+export const SCRIPTURE_FORMATTING_RULES = `═══ SCRIPTURE FORMATTING — BLOCKQUOTE-ONLY STANDARD (Chicago Manual of Style + SBL citation conventions + Premium Print) ═══
 
 SCRIPTURE PLACEMENT — BLOCKQUOTE ONLY (ALL LENGTHS):
 • EVERY scripture quote MUST be a standalone blockquote, never inline prose.
-• NO exceptions — even single-verse quotes (10-15 words) are blockquotes.
+• NO exceptions — even single-verse quotes (10–15 words) are blockquotes.
 • Introduction sentence MUST end with a colon (:) immediately before the blockquote.
 • Blank line between intro sentence and blockquote opening.
+
+THREE-PART PATTERN (mandatory for every scripture):
+1. INTRODUCTION: Sentence ending with colon (e.g., "Jesus gave this command:")
+2. BLOCKQUOTE: Verse text in markdown blockquote with reference on separate line
+3. APPLICATION: Next paragraph must advance meaning, never restate the verse
 
 EXAMPLE (ANY LENGTH):
 Jesus issued a sharp command:
@@ -139,7 +144,7 @@ Jesus issued a sharp command:
 > "Hold thy peace, and come out of him."
 > — Mark 1:25 (KJV)
 
-The demon obeyed immediately.
+The demon obeyed immediately, showing Christ's authority over spiritual forces.
 
 BLOCKQUOTE FORMAT (all scriptures):
 > Verse text here (use exact speaker quotation or verbatim translation).
@@ -180,9 +185,6 @@ VERBATIM ACCURACY — ABSOLUTE:
 
 PLACEMENT AND SEQUENCING:
 • INTRODUCTION SENTENCE + BLOCKQUOTE + APPLICATION: Every scripture must follow this 3-part pattern.
-  1. Introduction ends with colon (e.g., "Jesus gave this command:")
-  2. Blockquote with reference on separate line
-  3. Application paragraph (next para) must advance meaning, not restate verse
 • When a central passage anchors the section, place it as the first blockquote, after the section opening.
 • No post-quote restatement. The sentence after scripture must advance, apply, or land an implication, not echo what the verse just said.
 • Include original Greek or Hebrew terms exactly as stated in the source: the Greek word *transliteration*, meaning "definition."

@@ -2491,6 +2491,7 @@ export function EbookPipeline({
         const newArchitecture = await postJson<BookArchitecture>("/api/ebook/architect", {
           contentMap: sourceContentMap,
           voiceDNA,
+          authorConfig: (authorInstructions || targetAudience) ? { instructions: authorInstructions, targetAudience } : undefined,
           oneChapterPerUpload: true,
         });
         
@@ -2541,6 +2542,7 @@ export function EbookPipeline({
         const chapterArchitecture = await postJson<BookArchitecture>("/api/ebook/architect", {
           contentMap: hybridContentMap,
           voiceDNA,
+          authorConfig: (authorInstructions || targetAudience) ? { instructions: authorInstructions, targetAudience } : undefined,
           oneChapterPerUpload: false,
         });
 
@@ -3030,7 +3032,7 @@ export function EbookPipeline({
       if (!architecture) {
         setStage("architecting");
         addLog("Designing chapter structure…");
-        architecture = await postJson<BookArchitecture>("/api/ebook/architect", { contentMap, voiceDNA, oneChapterPerUpload });
+        architecture = await postJson<BookArchitecture>("/api/ebook/architect", { contentMap, voiceDNA, authorConfig: (authorInstructions || targetAudience) ? { instructions: authorInstructions, targetAudience } : undefined, oneChapterPerUpload });
         const totalSections = architecture.chapters.reduce((a, c) => a + c.sections.length, 0);
         addLog(`✓ Architecture: "${architecture.bookTitle}" — ${architecture.chapters.length} chapters, ${totalSections} sections`);
         acc.architecture = architecture;

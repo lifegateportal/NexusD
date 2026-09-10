@@ -71,7 +71,9 @@ export async function POST(req: NextRequest) {
   const { input: chapter } = input;
   const authorConfig = input.authorConfig;
   const authorConfigBlock = (authorConfig?.instructions || authorConfig?.targetAudience)
-    ? `\n\nAUTHOR BOOK CONFIGURATION (highest priority):\n${authorConfig.targetAudience ? `TARGET AUDIENCE: ${authorConfig.targetAudience}` : ""}${authorConfig.instructions ? `\nAUTHOR WRITING INSTRUCTIONS: ${authorConfig.instructions}` : ""}`
+    ? `\n\nAUTHOR BOOK CONFIGURATION (tone & audience only):\n${authorConfig.targetAudience ? `TARGET AUDIENCE: ${authorConfig.targetAudience}` : ""}${authorConfig.instructions ? `\nAUTHOR WRITING INSTRUCTIONS: ${authorConfig.instructions}` : ""}
+
+⚠️ CRITICAL: Author config is for TONE and AUDIENCE only. Never fabricate examples, context, or takeaways. All intro text, key takeaways, and reflection questions must derive from section headings and content already in the chapter body.`
     : "";
 
   try {
@@ -136,7 +138,7 @@ export async function POST(req: NextRequest) {
     try {
       const { text } = await generateText({
         model: deepSeekModel,
-        temperature: 0.2,
+        temperature: 0.25,
         system: `You are an editorial assistant finalizing a chapter of a published teaching book.
 
 ABSOLUTE CONTENT RULE: Every sentence must come from the provided transcript content.
