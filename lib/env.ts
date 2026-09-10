@@ -7,7 +7,7 @@ const EnvironmentSchema = z.object({
   ANTHROPIC_API_KEY: z.string().min(1, "Missing Anthropic API key"),
   DEEPGRAM_API_KEY: z.string().optional(),
   GEMINI_MODEL: z.string().default("gemini-2.0-flash"),
-  DEEPSEEK_MODEL: z.string().default("deepseek-v4-pro"),
+  DEEPSEEK_MODEL: z.string().default("deepseek-chat"),
   CLAUDE_MODEL: z.string().default("claude-haiku-4-5"),
   CURATOR_MODEL: z.string().default("claude-sonnet-4-5"),
   // Personal login gate — set both to enable password protection

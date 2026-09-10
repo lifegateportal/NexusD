@@ -25,7 +25,6 @@ const anthropicCurator = createAnthropic({
 
 export const geminiModel = google(env.GEMINI_MODEL);
 export const deepSeekModel = deepSeek(env.DEEPSEEK_MODEL);
-export const deepSeekFlashModel = deepSeek("deepseek-v4-flash");
 export const deepSeekReasonerModel = deepSeek("deepseek-reasoner");
 export const claudeModel = anthropic(env.CLAUDE_MODEL);
 export const curatorModel = anthropicCurator(env.CURATOR_MODEL);

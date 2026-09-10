@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { generateText } from "ai";
 import { z } from "zod";
-import { deepSeekFlashModel } from "@/lib/ai-providers";
+import { deepSeekModel } from "@/lib/ai-providers";
 import { cleanTranscriptForBook } from "@/lib/editorial-style-bible";
 
 export const runtime = "nodejs";
@@ -69,7 +69,7 @@ export async function POST(req: NextRequest) {
 
   try {
     const { text } = await generateText({
-      model: deepSeekFlashModel,
+      model: deepSeekModel,
       temperature: 0.1,
       system: `You are a content signal filter for a book production pipeline.
 
