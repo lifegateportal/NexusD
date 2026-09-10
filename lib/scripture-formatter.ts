@@ -125,30 +125,46 @@ export function containsScripture(text: string): boolean {
  * copies drift (comma placement, translation fallback wording, dash style)
  * and produce inconsistent citations across the manuscript.
  */
-export const SCRIPTURE_FORMATTING_RULES = `═══ SCRIPTURE FORMATTING — PRODUCTION-GRADE CITATION STANDARD (Chicago Manual of Style + SBL citation conventions + Premium Print) ═══
+export const SCRIPTURE_FORMATTING_RULES = `═══ SCRIPTURE FORMATTING — BLOCKQUOTE-ONLY STANDARD (Chicago Manual of Style + SBL citation conventions + Premium Print) ═══
 
-FORMAT BY LENGTH:
-SHORT INLINE (under 40 words, woven into sentence):
-*"verse text"* (Book Chapter:Verse Translation)
-Example: Paul writes *"I can do all things through Christ who strengthens me"* (Philippians 4:13 NIV).
+SCRIPTURE PLACEMENT — BLOCKQUOTE ONLY (ALL LENGTHS):
+• EVERY scripture quote MUST be a standalone blockquote, never inline prose.
+• NO exceptions — even single-verse quotes (10–15 words) are blockquotes.
+• Introduction sentence MUST end with a colon (:) immediately before the blockquote.
+• Blank line between intro sentence and blockquote opening.
 
-SHORT STANDALONE (under 40 words, quoted as its own statement):
-> Verse text here.
+THREE-PART PATTERN (mandatory for every scripture):
+1. INTRODUCTION: Sentence ending with colon (e.g., "Jesus gave this command:")
+2. BLOCKQUOTE: Verse text in markdown blockquote with reference on separate line
+3. APPLICATION: Next paragraph must advance meaning, never restate the verse
+
+EXAMPLE (ANY LENGTH):
+Jesus issued a sharp command:
+
+> "Hold thy peace, and come out of him."
+> — Mark 1:25 (KJV)
+
+The demon obeyed immediately, showing Christ's authority over spiritual forces.
+
+BLOCKQUOTE FORMAT (all scriptures):
+> Verse text here (use exact speaker quotation or verbatim translation).
 > — Book Chapter:Verse (Translation)
 
-LONG BLOCK (40+ words — mandatory blockquote, no quotation marks):
+For verses 40+ words (multi-line):
 > Verse text here, continuing across
 > multiple lines as needed.
 > — Book Chapter:Verse (Translation)
 
 REFERENCE FORMATTING (apply exactly, no variation):
+• Format: "— Book Chapter:Verse (Translation)" — always preceded by em-dash on separate line.
 • No comma between verse and translation: "(John 3:16 NIV)" — never "(John 3:16, NIV)".
 • Chapter and verse separated by a colon, never a period: "John 3:16", not "John 3.16".
-• Verse ranges use an en dash, never a hyphen: "John 3:16–17", not "John 3:16-17".
+• Verse ranges use an en dash: "John 3:16–17", not "John 3:16-17".
 • Cross-chapter ranges: "Romans 8:35–9:1".
-• Numbered books use the Arabic numeral with no period: "1 Corinthians 13:4", "2 Timothy 3:16" — never "First Corinthians 13:4" or "II Timothy 3:16" in a citation (the numeral may still be spelled out in surrounding prose).
-• One citation covers one contiguous passage. Do not stack non-contiguous verses into a single comma-separated reference; if two separate verses are both needed, cite each with its own complete reference.
-• The em dash before a scripture reference line ("— Book Chapter:Verse") is the ONLY sanctioned use of an em dash anywhere in this manuscript. It never appears in prose sentences.
+• Numbered books use Arabic numeral: "1 Corinthians 13:4", "2 Timothy 3:16".
+• One citation per contiguous passage. Never stack non-contiguous verses; cite each with its own complete reference.
+• Em-dash is ONLY used before scripture references ("— Book Chapter:Verse"). Never appears in prose.
+• Normalize all references to 'Book Chapter:Verse' format — no abbreviations in citations (John, not Jn; Romans, not Rom).
 
 TRANSLATION ABBREVIATION — REQUIRED AND RESOLVED, NEVER A PLACEHOLDER:
 • Every quoted verse carries a real, standard translation abbreviation in parentheses: NIV, ESV, KJV, NKJV, NASB, NLT, CSB, NRSV, RSV, AMP, MSG, CEV, GNT, NET, or HCSB. Never invent an abbreviation.
@@ -156,13 +172,20 @@ TRANSLATION ABBREVIATION — REQUIRED AND RESOLVED, NEVER A PLACEHOLDER:
 • If the speaker did not state a translation, use the book's designated primary translation for that quote. NEVER print a placeholder such as "(translation unspecified)" into finished prose — that string must never reach a reader.
 • When a book uses more than one translation, state the abbreviation on every quotation, every time. Do not rely on an implied "default" once a second translation has appeared anywhere in the book.
 
+SCRIPTURE DETECTION & CLEANUP:
+• Detect ALL scriptures in source: direct quotes, paraphrases, and clear allusions ("the Shepherd leads us" = Psalm 23).
+• Remove ALL audience-directed language before extracting scripture: "turn to your neighbor", "open your Bibles", "say amen", "in this room today", etc.
+• Strip speaker markers from quoted verse: (speaker: "verse text") → "verse text"
+• Normalize translation names: MSG → Message, msg → Message, "new international" → NIV
+
 VERBATIM ACCURACY — ABSOLUTE:
 • Reproduce scripture EXACTLY as quoted in the source: exact wording, exact punctuation, exact capitalization. Never paraphrase, modernize, silently correct, or smooth a verse's wording.
 • If the source omits words mid-verse, mark the omission with a spaced ellipsis: " . . . " (three spaced periods; four when the omission follows a sentence-ending period). Never use an unspaced "...".
 • Use curly quotation marks only ("..." not straight "..."), with single curly quotes for a quotation nested inside the verse text ('...').
 
 PLACEMENT AND SEQUENCING:
-• When a central passage anchors the section, place it as a standalone block near the opening, before explanatory prose.
+• INTRODUCTION SENTENCE + BLOCKQUOTE + APPLICATION: Every scripture must follow this 3-part pattern.
+• When a central passage anchors the section, place it as the first blockquote, after the section opening.
 • No post-quote restatement. The sentence after scripture must advance, apply, or land an implication, not echo what the verse just said.
 • Include original Greek or Hebrew terms exactly as stated in the source: the Greek word *transliteration*, meaning "definition."
 • Quote each scripture in full ONCE per section. Every subsequent reference to that same passage uses shorthand only: "As Jesus said in John 15:5..." — never reprint the verse text again.

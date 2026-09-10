@@ -150,7 +150,7 @@ RULES:
 • Section headings: 4-8 words, complete phrases, must make sense standalone
 • Never start headings with: Introduction, Intro, Overview, Opening, Summary, Conclusion
 • Never end headings with: to, in, for, on, the, our, and, but, or, let (complete the thought!)
-• 5+ sections minimum (never fewer than 5)
+• Minimum 4 sections, maximum 5 sections per chapter (never fewer than 4, never more than 5)
 • Each section: one focused teaching point
 • Every segment ID appears in exactly one section
 • targetWordCount = sum of assigned segments' word counts
@@ -225,6 +225,7 @@ ${transcriptBlock}`,
         title: (chapter.title || "Chapter " + (cidx + 1)).trim(),
         keyTheme: (chapter.keyTheme || chapter.title || "").trim(),
         sections: (chapter.sections ?? [])
+          .slice(0, 5) // ── CAP: Maximum 5 sections per chapter ──
           .map((section, sidx) => {
             const uniqueIds = (section.sourceSegmentIds ?? [])
               .filter((id) => validSegmentIds.has(id) && !globalUsedSegIds.has(id));
@@ -239,7 +240,7 @@ ${transcriptBlock}`,
           .filter((sec) => sec.sourceSegmentIds.length > 0)
           .map((sec, si) => ({ ...sec, sectionNumber: si + 1 })),
       }))
-      .filter((ch) => ch.sections.length > 0);
+      .filter((ch) => ch.sections.length >= 4 && ch.sections.length <= 5); // ── ENFORCE: 4-5 sections only ──
 
     // ── Warn-only on heading quality (no mutations) ─────────────────────────────
     const warnings: string[] = [];
