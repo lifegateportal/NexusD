@@ -3102,26 +3102,79 @@ export function EbookPipeline({
           addLog(`✓ ${slot.label} complete — ${builtChapter.totalWordCount.toLocaleString()} words`);
         }
 
-        const frontMatter: FrontBackMatter = {
-          preface: "",
-          introduction: "",
-          conclusion: "",
-          aboutAuthor: null,
-          resourcesList: [],
-          scriptureIndex: [],
+        if (builtChapters.length === 0) {
+          throw new Error("Simple Direct Book Mode failed: no chapters were generated");
+        }
+
+        const totalSimpleWords = builtChapters.reduce((sum, chapter) => sum + chapter.totalWordCount, 0);
+        const simpleArchitecture: BookArchitecture = {
+          bookTitle: bookTitleFromRuns || (builtChapters[0]?.title || "Untitled"),
+          subtitle: subtitleFromRuns || "A transcript-grounded teaching journey",
+          authorName: authorNameFromRuns || "the Author",
+          estimatedTotalWords: totalSimpleWords,
+          chapters: builtChapters.map((chapter, chapterIdx) => ({
+            number: chapter.number,
+            title: chapter.title,
+            sourceSegmentIds: [`audio-${chapterIdx + 1}`],
+            sections: chapter.sections.map((section) => ({
+              sectionNumber: section.sectionNumber,
+              heading: section.heading,
+              sourceSegmentIds: [`audio-${chapterIdx + 1}`],
+              keyPoints: [],
+              quotesInSection: [],
+              targetWordCount: Math.max(500, section.wordCount || 0),
+              arcRole: "untagged" as const,
+            })),
+            keyTheme: chapter.intro?.trim() || chapter.title,
+            quotesInChapter: [],
+            chapterPremise: chapter.intro?.trim() || "",
+            arcFlags: [],
+          })),
+          frontMatterNotes: "",
+          backMatterNotes: "",
+          seriesArc: [],
+          droppedSegments: [],
         };
+
+        setStage("frontmatter");
+        addLog("Simple Direct Book Mode: all chapters written — generating front/back matter in separate calls…");
+
+        const frontMatterTranscript = typeof teachingTranscript === "string" && teachingTranscript
+          ? teachingTranscript
+          : (acc.transcripts ?? slotWriteList)
+              .map((t) => `[${t.label}]\n${t.text}`)
+              .join("\n\n═══════════════════════════════════════\n\n");
+        const simpleFrontMatter = await postJson<FrontBackMatter>("/api/ebook/frontmatter", {
+          masterTranscript: frontMatterTranscript.slice(0, 14000),
+          architecture: simpleArchitecture,
+          voiceDNA: simpleVoiceDNA,
+          ...((authorInstructions || targetAudience) ? { authorConfig: { instructions: authorInstructions, targetAudience } } : {}),
+          alreadyQuotedRefs: [],
+          forbiddenVerseTexts: [],
+        });
+        addLog("✓ Simple Direct front matter complete");
 
         const simpleManifest: EbookManifest = {
           jobId,
           bookTitle: bookTitleFromRuns || (builtChapters[0]?.title || "Untitled"),
           subtitle: subtitleFromRuns || "A transcript-grounded teaching journey",
           authorName: authorNameFromRuns || "the Author",
-          frontMatter,
+          frontMatter: simpleFrontMatter,
           chapters: builtChapters,
-          totalWordCount: builtChapters.reduce((sum, chapter) => sum + chapter.totalWordCount, 0),
+          totalWordCount: totalSimpleWords,
           allQuotes: [],
           generatedAt: new Date().toISOString(),
+          voiceDNA: simpleVoiceDNA,
         };
+
+        addLog("Simple Direct Book Mode: generating back matter in separate call…");
+        try {
+          const simpleBackMatter = await postJson<BackMatter>("/api/ebook/backmatter", { manifest: simpleManifest });
+          simpleManifest.backMatter = simpleBackMatter;
+          addLog(`✓ Simple Direct back matter complete — ${simpleBackMatter.glossary.length} glossary terms, ${simpleBackMatter.readingGroupGuide.length} chapter guides, ${simpleBackMatter.scriptureIndex.length} scripture references`);
+        } catch (bmErr) {
+          addLog(`⚠ Simple Direct back matter generation failed — continuing without it: ${bmErr instanceof Error ? bmErr.message : String(bmErr)}`);
+        }
 
         const simpleContentMap: ContentMap = {
           totalEstimatedWords: countWords(teachingTranscript),
@@ -3136,7 +3189,7 @@ export function EbookPipeline({
         };
 
         setSectionAssignments([]);
-        setReviewContext({ contentMap: simpleContentMap, frontMatter });
+        setReviewContext({ contentMap: simpleContentMap, frontMatter: simpleFrontMatter });
         syncCompletedManifest(simpleManifest);
         setProgress({ total: builtChapters.reduce((sum, chapter) => sum + chapter.sections.length, 0), completed: builtChapters.reduce((sum, chapter) => sum + chapter.sections.length, 0) });
         addLog(`✓ Simple Direct Book complete — ${simpleManifest.totalWordCount.toLocaleString()} words across ${builtChapters.length} chapters`);
@@ -3147,12 +3200,12 @@ export function EbookPipeline({
         (acc as EbookJobState & { filteredTranscript: string; filterRemovedCount: number }).filteredTranscript = teachingTranscript;
         acc.voiceDNA = simpleVoiceDNA;
         acc.contentMap = simpleContentMap;
-        acc.architecture = null;
+        acc.architecture = simpleArchitecture;
         acc.sectionAssignments = [];
         acc.sections = builtChapters.flatMap((chapter) => chapter.sections);
         acc.chapters = builtChapters;
-        acc.frontMatter = frontMatter;
-        acc.backMatter = null;
+        acc.frontMatter = simpleFrontMatter;
+        acc.backMatter = simpleManifest.backMatter ?? null;
         acc.exportUrls = null;
         await checkpoint("complete");
         setStage("complete");
