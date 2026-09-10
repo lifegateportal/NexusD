@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { generateObject } from "ai";
+import { generateObject, generateText } from "ai";
 import { z } from "zod";
 import { deepSeekReasonerModel } from "@/lib/ai-providers";
 import { SOURCE_LOCK_RULES } from "@/lib/editorial-style-bible";
@@ -47,6 +47,69 @@ function nonEmptySubtitle(targetAudience: string, coreThesis: string): string {
   return "A transcript-grounded teaching journey";
 }
 
+function clampTranscript(text: string, maxChars = 140000): string {
+  if (text.length <= maxChars) return text;
+  const head = text.slice(0, Math.floor(maxChars * 0.6));
+  const tail = text.slice(-Math.floor(maxChars * 0.4));
+  return `${head}\n\n[... transcript middle omitted for length ...]\n\n${tail}`;
+}
+
+function extractFirstJsonObject(text: string): string | null {
+  const start = text.indexOf("{");
+  if (start < 0) return null;
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+
+  for (let i = start; i < text.length; i++) {
+    const ch = text[i];
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+      } else if (ch === "\\") {
+        escaped = true;
+      } else if (ch === '"') {
+        inString = false;
+      }
+      continue;
+    }
+
+    if (ch === '"') {
+      inString = true;
+      continue;
+    }
+    if (ch === "{") depth++;
+    if (ch === "}") {
+      depth--;
+      if (depth === 0) return text.slice(start, i + 1);
+    }
+  }
+
+  return null;
+}
+
+function normalizeSimpleBook(object: z.infer<typeof SimpleBookSchema>, input: z.infer<typeof RequestSchema>) {
+  return {
+    ...object,
+    subtitle: (object.subtitle || "").trim() || nonEmptySubtitle(input.targetAudience, input.coreThesis),
+    strategy: "single-pass-sermon-style",
+    chapters: (object.chapters ?? [])
+      .map((chapter, chapterIndex) => ({
+        ...chapter,
+        number: chapterIndex + 1,
+        title: (chapter.title || `Chapter ${chapterIndex + 1}`).trim(),
+        sections: (chapter.sections ?? [])
+          .filter((section) => (section.body || "").trim().length > 0)
+          .map((section, sectionIndex) => ({
+            ...section,
+            sectionNumber: sectionIndex + 1,
+            heading: (section.heading || `Section ${sectionIndex + 1}`).trim(),
+          })),
+      }))
+      .filter((chapter) => chapter.sections.length > 0),
+  };
+}
+
 export async function POST(req: NextRequest) {
   const body = await req.json() as unknown;
   let input: z.infer<typeof RequestSchema>;
@@ -60,7 +123,8 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  const maxTokens = Math.min(24000, Math.max(8000, Math.floor(input.rawTranscript.length / 4)));
+  const transcriptForPrompt = clampTranscript(input.rawTranscript, 140000);
+  const maxTokens = 10000;
 
   const system = `You are Nexus Book Architect+Writer in single-pass mode.
 
@@ -80,6 +144,7 @@ NON-NEGOTIABLE RULES:
 7) Every section body must be transcript-grounded and specific.
 8) Avoid generic headings like Introduction, Overview, Summary, Conclusion.
 9) Output valid JSON only.
+10) Keep each section body concise: 90-150 words, 1-2 short paragraphs.
 
 ${SOURCE_LOCK_RULES}`;
 
@@ -92,36 +157,82 @@ VOICE TONE: ${input.voiceTone || "(not provided)"}
 AUTHOR INSTRUCTIONS: ${input.authorInstructions || "(not provided)"}
 
 RAW TRANSCRIPT:
-${input.rawTranscript}`;
+${transcriptForPrompt}`;
+
+  const jsonTemplate = `{
+  "bookTitle": "...",
+  "subtitle": "...",
+  "authorName": "the Author",
+  "strategy": "single-pass-sermon-style",
+  "chapters": [
+    {
+      "number": 1,
+      "title": "...",
+      "premise": "...",
+      "sections": [
+        {
+          "sectionNumber": 1,
+          "heading": "...",
+          "body": "...",
+          "keyClaims": ["..."]
+        }
+      ]
+    }
+  ]
+}`;
 
   try {
-    const { object } = await generateObject({
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        const { object } = await generateObject({
+          model: deepSeekReasonerModel,
+          schema: SimpleBookSchema,
+          mode: "json",
+          temperature: attempt === 0 ? 0.3 : 0.2,
+          maxTokens,
+          system,
+          prompt,
+        });
+        const normalized = normalizeSimpleBook(object, input);
+        if (normalized.chapters.length > 0) {
+          return NextResponse.json(normalized);
+        }
+      } catch {
+        // Fall through to next attempt or fallback text mode.
+      }
+    }
+
+    const { text } = await generateText({
       model: deepSeekReasonerModel,
-      schema: SimpleBookSchema,
-      mode: "json",
-      temperature: 0.35,
+      temperature: 0.2,
       maxTokens,
       system,
-      prompt,
+      prompt: `${prompt}\n\nReturn ONLY JSON in this exact shape:\n${jsonTemplate}`,
     });
 
-    const normalized = {
-      ...object,
-      subtitle: (object.subtitle || "").trim() || nonEmptySubtitle(input.targetAudience, input.coreThesis),
-      strategy: "single-pass-sermon-style",
-      chapters: (object.chapters ?? [])
-        .map((chapter, chapterIndex) => ({
-          ...chapter,
-          number: chapterIndex + 1,
-          sections: (chapter.sections ?? [])
-            .filter((section) => (section.body || "").trim().length > 0)
-            .map((section, sectionIndex) => ({
-              ...section,
-              sectionNumber: sectionIndex + 1,
-            })),
-        }))
-        .filter((chapter) => chapter.sections.length > 0),
-    };
+    const json = extractFirstJsonObject(text);
+    if (!json) {
+      return NextResponse.json(
+        { error: "Simple book generation failed: model did not return parseable JSON" },
+        { status: 502 }
+      );
+    }
+
+    const parsed = SimpleBookSchema.safeParse(JSON.parse(json));
+    if (!parsed.success) {
+      return NextResponse.json(
+        { error: "Simple book generation failed: JSON shape invalid", details: parsed.error.issues.slice(0, 5) },
+        { status: 502 }
+      );
+    }
+
+    const normalized = normalizeSimpleBook(parsed.data, input);
+    if (normalized.chapters.length === 0) {
+      return NextResponse.json(
+        { error: "Simple book generation failed: no chapter content returned" },
+        { status: 502 }
+      );
+    }
 
     return NextResponse.json(normalized);
   } catch (err) {
