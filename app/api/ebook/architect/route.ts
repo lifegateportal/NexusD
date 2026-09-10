@@ -151,16 +151,22 @@ RULES:
 • Never start headings with: Introduction, Intro, Overview, Opening, Summary, Conclusion
 • Never end headings with: to, in, for, on, the, our, and, but, or, let (complete the thought!)
 • Minimum 4 sections, maximum 5 sections per chapter (never fewer than 4, never more than 5)
-• Each section: one focused teaching point
-• Every segment ID appears in exactly one section
+• CRITICAL: Sections MUST follow transcript order — first section uses early excerpts, final section uses late excerpts
+• CRITICAL: Excerpt distribution must be roughly balanced — if 20 excerpts exist and you create 5 sections, each gets ~4 excerpts (±1 okay, but never 4-4-4-4-4 with 0 remaining)
+• CRITICAL: No section should contain fewer than 2 excerpts — thin sections indicate poor structuring
+• Each section: one focused teaching point from that part of the transcript
+• Every segment ID appears in exactly one section, in order
 • targetWordCount = sum of assigned segments' word counts
 
 ${SOURCE_LOCK_RULES}${authorConfigBlock}`,
 
-              prompt: `SEGMENT IDs: ${segs.map((s) => s.id).join(", ")}
+              prompt: `SEGMENT IDs (IN ORDER): ${segs.map((s) => s.id).join(", ")}
+TOTAL EXCERPTS: ${segs.length}
 THEME: ${chapterHint}
 CORE THESIS: ${input.contentMap.coreThesis}
 VOICE TONE: ${input.voiceDNA.toneProfile}
+
+STRUCTURE CONSTRAINT: Divide these ${segs.length} segments into 4-5 sections, each covering a contiguous block of the transcript in chronological order.
 
 ${transcriptBlock}`,
             });
@@ -252,9 +258,30 @@ ${transcriptBlock}`,
         if (words.length > 8) warnings.push(`Ch${ch.number} §${sec.sectionNumber}: Long heading (${words.length} words)`);
         if (DANGLING_END.test(sec.heading)) warnings.push(`Ch${ch.number} §${sec.sectionNumber}: Dangling ending: "${sec.heading}"`);
       }
+
+      // ── Validate section ordering and balance ──────────────────────────────
+      const allSegIds = input.contentMap.segments.map((s) => s.id);
+      let lastSeenIdx = -1;
+      
+      for (const sec of ch.sections) {
+        const segIndices = sec.sourceSegmentIds.map((id) => allSegIds.indexOf(id));
+        const minIdx = Math.min(...segIndices);
+        
+        // Check order: sections must follow transcript progression
+        if (minIdx < lastSeenIdx) {
+          warnings.push(`Ch${ch.number} §${sec.sectionNumber}: Out of order — uses excerpts before previous section`);
+        }
+        
+        // Check minimum coverage: each section should have at least 2 excerpts
+        if (sec.sourceSegmentIds.length < 2) {
+          warnings.push(`Ch${ch.number} §${sec.sectionNumber}: Thin section (${sec.sourceSegmentIds.length} excerpt) — may lack substantive content`);
+        }
+        
+        lastSeenIdx = Math.max(lastSeenIdx, ...segIndices);
+      }
     }
 
-    if (warnings.length > 0) console.warn("[architect] Heading warnings:", warnings);
+    if (warnings.length > 0) console.warn("[architect] Heading/structure warnings:", warnings);
 
     // ── Rehydrate with segment details ───────────────────────────────────────
     const result = {
