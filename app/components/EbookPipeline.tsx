@@ -80,6 +80,23 @@ export type EbookPipelineSnapshot = {
   frontMatterSections: number;
 };
 
+type SimpleBookResponse = {
+  bookTitle: string;
+  subtitle: string;
+  authorName: string;
+  chapters: Array<{
+    number: number;
+    title: string;
+    premise?: string;
+    sections: Array<{
+      sectionNumber: number;
+      heading: string;
+      body: string;
+      keyClaims?: string[];
+    }>;
+  }>;
+};
+
 function routeLabel(url: string): string {
   return url.split("/").filter(Boolean).slice(-2).join("/");
 }
@@ -1775,6 +1792,7 @@ export function EbookPipeline({
   const [oneChapterPerUpload, setOneChapterPerUpload] = useState(false);
   // Proposal 2: single-call chapter writer — set true to try, false to revert to per-section
   const [useChapterWriter, setUseChapterWriter] = useState(false);
+  const [useSimpleDirectBookMode, setUseSimpleDirectBookMode] = useState(false);
   const [log, setLog] = useState<string[]>([]);
   const [progress, setProgress] = useState({ total: 0, completed: 0 });
   const [chapters, setChapters] = useState<ChapterDraft[]>([]);
@@ -3001,6 +3019,109 @@ export function EbookPipeline({
       // Use filtered transcript for all downstream steps
       const teachingTranscript = filteredTranscript || masterTranscript;
 
+      // ── Optional fast path: sermon-assistant-style direct book build ───────
+      if (useSimpleDirectBookMode) {
+        setStage("analyzing");
+        addLog("Simple Direct Book Mode: extracting Voice DNA tone…");
+        const simpleVoiceDNA = await postJson<VoiceDNA>("/api/ebook/voice-dna", { masterTranscript: teachingTranscript });
+        acc.voiceDNA = simpleVoiceDNA;
+
+        setStage("architecting");
+        addLog("Simple Direct Book Mode: generating book in one pass…");
+        const desiredChapters = Math.max(3, Math.min(12, activeSlotCount > 0 ? activeSlotCount : 6));
+        const simple = await postJson<SimpleBookResponse>("/api/ebook/simple-book", {
+          rawTranscript: teachingTranscript,
+          targetAudience,
+          coreThesis: "",
+          voiceTone: simpleVoiceDNA.toneProfile,
+          authorInstructions,
+          desiredChapters,
+        });
+
+        setStage("writing");
+        const builtChapters: ChapterDraft[] = (simple.chapters ?? []).map((chapter, chapterIndex) => {
+          const builtSections = (chapter.sections ?? []).map((section, sectionIndex) => {
+            const body = (section.body ?? "").trim();
+            return {
+              chapterNumber: chapterIndex + 1,
+              sectionNumber: sectionIndex + 1,
+              heading: (section.heading || `Section ${sectionIndex + 1}`).trim(),
+              body,
+              wordCount: countWords(body),
+              status: "complete" as const,
+            };
+          });
+          return {
+            number: chapterIndex + 1,
+            title: (chapter.title || `Chapter ${chapterIndex + 1}`).trim(),
+            intro: chapter.premise?.trim() || "",
+            epigraph: "",
+            sections: builtSections,
+            forwardQuestion: "",
+            keyTakeaways: [],
+            reflectionQuestions: [],
+            totalWordCount: builtSections.reduce((sum, section) => sum + section.wordCount, 0),
+            status: "complete" as const,
+          };
+        }).filter((chapter) => chapter.sections.length > 0);
+
+        const frontMatter: FrontBackMatter = {
+          preface: "",
+          introduction: "",
+          conclusion: "",
+          aboutAuthor: null,
+          resourcesList: [],
+          scriptureIndex: [],
+        };
+
+        const simpleManifest: EbookManifest = {
+          jobId,
+          bookTitle: (simple.bookTitle || "Untitled").trim(),
+          subtitle: (simple.subtitle || "A transcript-grounded teaching journey").trim(),
+          authorName: (simple.authorName || "the Author").trim(),
+          frontMatter,
+          chapters: builtChapters,
+          totalWordCount: builtChapters.reduce((sum, chapter) => sum + chapter.totalWordCount, 0),
+          allQuotes: [],
+          generatedAt: new Date().toISOString(),
+        };
+
+        const simpleContentMap: ContentMap = {
+          totalEstimatedWords: countWords(teachingTranscript),
+          overarchingThemes: builtChapters.map((chapter) => chapter.title),
+          teachingArc: "",
+          coreThesis: "",
+          targetAudience: targetAudience.trim(),
+          uniqueVocabulary: [],
+          toneMap: simpleVoiceDNA.toneProfile,
+          segments: [],
+          allQuotes: [],
+        };
+
+        setSectionAssignments([]);
+        setReviewContext({ contentMap: simpleContentMap, frontMatter });
+        syncCompletedManifest(simpleManifest);
+        setProgress({ total: builtChapters.reduce((sum, chapter) => sum + chapter.sections.length, 0), completed: builtChapters.reduce((sum, chapter) => sum + chapter.sections.length, 0) });
+        addLog(`✓ Simple Direct Book complete — ${simpleManifest.totalWordCount.toLocaleString()} words across ${builtChapters.length} chapters`);
+
+        acc.status = "complete";
+        acc.currentStage = "complete";
+        acc.masterTranscript = masterTranscript;
+        (acc as EbookJobState & { filteredTranscript: string; filterRemovedCount: number }).filteredTranscript = teachingTranscript;
+        acc.voiceDNA = simpleVoiceDNA;
+        acc.contentMap = simpleContentMap;
+        acc.architecture = null;
+        acc.sectionAssignments = [];
+        acc.sections = builtChapters.flatMap((chapter) => chapter.sections);
+        acc.chapters = builtChapters;
+        acc.frontMatter = frontMatter;
+        acc.backMatter = null;
+        acc.exportUrls = null;
+        await checkpoint("complete");
+        setStage("complete");
+        return;
+      }
+
       // ── Stage 3: Voice DNA ───────────────────────────────────────────
       let voiceDNA = acc.voiceDNA;
       if (!voiceDNA) {
@@ -4053,6 +4174,36 @@ export function EbookPipeline({
               </p>
             </div>
           </div>
+
+            <div
+              role="switch"
+              aria-checked={useSimpleDirectBookMode}
+              onClick={() => !isRunning && setUseSimpleDirectBookMode((v) => !v)}
+              className={[
+                "flex items-center gap-3 min-h-[52px] rounded-xl border border-slate-700/40 bg-slate-950/50 px-3 py-3",
+                !isRunning ? "cursor-pointer" : "cursor-not-allowed opacity-60",
+              ].join(" ")}
+            >
+              <div
+                className={[
+                  "flex-shrink-0 w-9 h-5 rounded-full transition-colors pointer-events-none",
+                  useSimpleDirectBookMode ? "bg-amber-500" : "bg-slate-700",
+                ].join(" ")}
+              >
+                <span
+                  className={[
+                    "block w-4 h-4 rounded-full bg-white shadow transition-transform mx-0.5 mt-0.5",
+                    useSimpleDirectBookMode ? "translate-x-4" : "translate-x-0",
+                  ].join(" ")}
+                />
+              </div>
+              <div className="select-none">
+                <p className="text-sm font-medium text-slate-200 leading-tight">Simple Direct Book Mode</p>
+                <p className="text-[10px] text-slate-500 mt-0.5">
+                  Sermon-assistant-style path. One pass builds a complete draft with direct LLM trust, then opens review immediately for quick A/B testing.
+                </p>
+              </div>
+            </div>
         </div>
       </div>
 
