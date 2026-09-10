@@ -88,6 +88,8 @@ type SimpleBookResponse = {
     number: number;
     title: string;
     premise?: string;
+    keyTakeaways?: string[];
+    reflectionQuestions?: string[];
     sections: Array<{
       sectionNumber: number;
       heading: string;
@@ -3094,8 +3096,8 @@ export function EbookPipeline({
             epigraph: "",
             sections: builtSections,
             forwardQuestion: "",
-            keyTakeaways: [],
-            reflectionQuestions: [],
+            keyTakeaways: (chapter.keyTakeaways ?? []).map((s) => s.trim()).filter(Boolean),
+            reflectionQuestions: (chapter.reflectionQuestions ?? []).map((s) => s.trim()).filter(Boolean),
             totalWordCount: builtSections.reduce((sum, section) => sum + section.wordCount, 0),
             status: "complete" as const,
           };
@@ -3117,14 +3119,63 @@ export function EbookPipeline({
           addLog(`✓ ${slot.label} complete — ${builtChapter.totalWordCount.toLocaleString()} words`);
         }
 
-        const frontMatter: FrontBackMatter = {
-          preface: "",
-          introduction: "",
-          conclusion: "",
-          aboutAuthor: null,
-          resourcesList: [],
-          scriptureIndex: [],
+        addLog("Simple Direct Book Mode: generating introduction and conclusion…");
+
+        const simpleArchitecture: BookArchitecture = {
+          bookTitle: bookTitleFromRuns || (builtChapters[0]?.title || "Untitled"),
+          subtitle: subtitleFromRuns || "A transcript-grounded teaching journey",
+          authorName: authorNameFromRuns || "the Author",
+          estimatedTotalWords: builtChapters.reduce((sum, chapter) => sum + chapter.totalWordCount, 0),
+          chapters: builtChapters.map((chapter) => ({
+            number: chapter.number,
+            title: chapter.title,
+            keyTheme: chapter.title,
+            sourceSegmentIds: [],
+            quotesInChapter: [],
+            chapterPremise: chapter.intro || "",
+            arcFlags: [],
+            sections: chapter.sections.map((section) => ({
+              sectionNumber: section.sectionNumber,
+              heading: section.heading,
+              sourceSegmentIds: [],
+              keyPoints: [],
+              quotesInSection: [],
+              targetWordCount: section.wordCount,
+              arcRole: "untagged" as const,
+            })),
+          })),
+          frontMatterNotes: "",
+          backMatterNotes: "",
+          seriesArc: [],
+          droppedSegments: [],
         };
+
+        const noPaddingInstructions = [authorInstructions.trim(), "No padding anywhere in this book. Every paragraph and sentence must carry new value."].filter(Boolean).join("\n");
+
+        let frontMatter: FrontBackMatter;
+        try {
+          frontMatter = await postJson<FrontBackMatter>("/api/ebook/frontmatter", {
+            masterTranscript: teachingTranscript,
+            architecture: simpleArchitecture,
+            voiceDNA: simpleVoiceDNA,
+            authorConfig: {
+              instructions: noPaddingInstructions,
+              targetAudience,
+            },
+            alreadyQuotedRefs: [],
+            forbiddenVerseTexts: [],
+          });
+        } catch (frontErr) {
+          addLog(`⚠ Front matter generation failed in simple mode: ${frontErr instanceof Error ? frontErr.message : "unknown error"}`);
+          frontMatter = {
+            preface: "",
+            introduction: "",
+            conclusion: "",
+            aboutAuthor: null,
+            resourcesList: [],
+            scriptureIndex: [],
+          };
+        }
 
         const simpleManifest: EbookManifest = {
           jobId,
@@ -3137,6 +3188,15 @@ export function EbookPipeline({
           allQuotes: [],
           generatedAt: new Date().toISOString(),
         };
+
+        addLog("Simple Direct Book Mode: generating back matter…");
+        let backMatter: BackMatter | null = null;
+        try {
+          backMatter = await postJson<BackMatter>("/api/ebook/backmatter", { manifest: simpleManifest });
+          simpleManifest.backMatter = backMatter;
+        } catch (backErr) {
+          addLog(`⚠ Back matter generation failed in simple mode: ${backErr instanceof Error ? backErr.message : "unknown error"}`);
+        }
 
         const simpleContentMap: ContentMap = {
           totalEstimatedWords: countWords(teachingTranscript),
@@ -3167,7 +3227,7 @@ export function EbookPipeline({
         acc.sections = builtChapters.flatMap((chapter) => chapter.sections);
         acc.chapters = builtChapters;
         acc.frontMatter = frontMatter;
-        acc.backMatter = null;
+        acc.backMatter = backMatter;
         acc.exportUrls = null;
         await checkpoint("complete");
         setStage("complete");
