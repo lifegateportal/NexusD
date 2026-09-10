@@ -246,8 +246,8 @@ ${transcriptBlock}`,
 
         return {
           number: idx + 1,
-          title: (plan.title || themeHint).trim(),
-          keyTheme: (plan.keyTheme || plan.title || themeHint).trim(),
+          title: (plan?.title || themeHint).trim(),
+          keyTheme: (plan?.keyTheme || plan?.title || themeHint).trim(),
           sections: deterministicSections,
         };
       });
