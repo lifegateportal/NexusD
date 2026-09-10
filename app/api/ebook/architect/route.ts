@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { generateObject } from "ai";
 import { z } from "zod";
-import { deepSeekModel } from "@/lib/ai-providers";
+import { deepSeekReasonerModel } from "@/lib/ai-providers";
 import { ArchitectRequestSchema } from "@/lib/schemas/ebook";
 import { SOURCE_LOCK_RULES } from "@/lib/editorial-style-bible";
 
@@ -32,6 +32,64 @@ const MinimalArchitectureSchema = z.object({
   backMatterNotes: z.string().default(""),
   chapters: z.array(MinimalChapterSchema).default([]),
 });
+
+function clampSectionCount(segmentCount: number, requestedCount: number): number {
+  if (segmentCount <= 0) return 0;
+  const bounded = Math.max(4, Math.min(5, requestedCount || 4));
+  return Math.min(segmentCount, bounded);
+}
+
+function buildContiguousBucketSizes(segmentCount: number, sectionCount: number): number[] {
+  if (sectionCount <= 0 || segmentCount <= 0) return [];
+  const safeSectionCount = Math.min(sectionCount, segmentCount);
+
+  // Prefer at least 2 segments per section when mathematically possible.
+  if (segmentCount >= safeSectionCount * 2) {
+    const sizes = Array(safeSectionCount).fill(2);
+    let remaining = segmentCount - safeSectionCount * 2;
+    let idx = 0;
+    while (remaining > 0) {
+      sizes[idx] += 1;
+      idx = (idx + 1) % safeSectionCount;
+      remaining -= 1;
+    }
+    return sizes;
+  }
+
+  // Otherwise distribute as evenly as possible with minimum 1.
+  const base = Math.floor(segmentCount / safeSectionCount);
+  let remainder = segmentCount % safeSectionCount;
+  return Array.from({ length: safeSectionCount }, () => {
+    const extra = remainder > 0 ? 1 : 0;
+    if (remainder > 0) remainder -= 1;
+    return base + extra;
+  });
+}
+
+function buildDeterministicSections(
+  segs: Array<{ id: string; topic: string; estimatedWordCount?: number }>,
+  plannedSections: Array<{ heading?: string }> | undefined,
+) {
+  const requestedCount = plannedSections?.length ?? 4;
+  const sectionCount = clampSectionCount(segs.length, requestedCount);
+  const sizes = buildContiguousBucketSizes(segs.length, sectionCount);
+
+  let cursor = 0;
+  return sizes.map((size, idx) => {
+    const bucket = segs.slice(cursor, cursor + size);
+    cursor += size;
+
+    const fallbackHeading = bucket[0]?.topic || `Section ${idx + 1}`;
+    const heading = (plannedSections?.[idx]?.heading || "").trim() || fallbackHeading;
+
+    return {
+      sectionNumber: idx + 1,
+      heading,
+      sourceSegmentIds: bucket.map((s) => s.id),
+      targetWordCount: bucket.reduce((sum, s) => sum + (s.estimatedWordCount || 0), 0),
+    };
+  });
+}
 
 // ── Simple fallback: group by audio, use topic as chapter title ──────────────
 function simpleFallback(input: z.infer<typeof ArchitectRequestSchema>) {
@@ -137,10 +195,10 @@ Every chapter heading and section must come from the actual transcript. When aut
 
           try {
             const { object } = await generateObject({
-              model: deepSeekModel,
+                model: deepSeekReasonerModel,
               schema: MinimalChapterSchema,
               mode: "json",
-              temperature: 0.2,
+                temperature: 1,
               maxTokens: 8000,
               system: `You are a structural editor. Transform a sermon into a book chapter.
 
@@ -180,32 +238,17 @@ ${transcriptBlock}`,
       const chapters = chapterPlans.map((plan, idx) => {
         const segs = segsByAudio.get(audioKeys[idx])!;
         const themeHint = (input.contentMap.overarchingThemes[idx] || segs[0]?.topic || `Chapter ${idx + 1}`).trim();
-        
-        if (!plan || plan.sections.length === 0) {
-          // Fallback: one segment = one section
-          return {
-            number: idx + 1,
-            title: themeHint,
-            keyTheme: themeHint,
-            sections: segs.map((seg, si) => ({
-              sectionNumber: si + 1,
-              heading: seg.topic,
-              sourceSegmentIds: [seg.id],
-              targetWordCount: seg.estimatedWordCount || 500,
-            })),
-          };
-        }
+
+        const deterministicSections = buildDeterministicSections(
+          segs,
+          plan?.sections?.map((s) => ({ heading: s.heading }))
+        );
 
         return {
           number: idx + 1,
           title: (plan.title || themeHint).trim(),
           keyTheme: (plan.keyTheme || plan.title || themeHint).trim(),
-          sections: plan.sections.map((sec, si) => ({
-            sectionNumber: si + 1,
-            heading: sec.heading,
-            sourceSegmentIds: (sec.sourceSegmentIds ?? []).filter((id) => validSegmentIds.has(id)),
-            targetWordCount: sec.targetWordCount || 0,
-          })),
+          sections: deterministicSections,
         };
       });
 
@@ -231,7 +274,6 @@ ${transcriptBlock}`,
         title: (chapter.title || "Chapter " + (cidx + 1)).trim(),
         keyTheme: (chapter.keyTheme || chapter.title || "").trim(),
         sections: (chapter.sections ?? [])
-          .slice(0, 5) // ── CAP: Maximum 5 sections per chapter ──
           .map((section, sidx) => {
             const uniqueIds = (section.sourceSegmentIds ?? [])
               .filter((id) => validSegmentIds.has(id) && !globalUsedSegIds.has(id));
@@ -246,7 +288,7 @@ ${transcriptBlock}`,
           .filter((sec) => sec.sourceSegmentIds.length > 0)
           .map((sec, si) => ({ ...sec, sectionNumber: si + 1 })),
       }))
-      .filter((ch) => ch.sections.length >= 4 && ch.sections.length <= 5); // ── ENFORCE: 4-5 sections only ──
+        .filter((ch) => ch.sections.length > 0);
 
     // ── Warn-only on heading quality (no mutations) ─────────────────────────────
     const warnings: string[] = [];
@@ -279,6 +321,10 @@ ${transcriptBlock}`,
         
         lastSeenIdx = Math.max(lastSeenIdx, ...segIndices);
       }
+
+        if (ch.sections.length < 4 || ch.sections.length > 5) {
+          warnings.push(`Ch${ch.number}: Section count is ${ch.sections.length} (target 4-5 when enough source material is available)`);
+        }
     }
 
     if (warnings.length > 0) console.warn("[architect] Heading/structure warnings:", warnings);
