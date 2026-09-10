@@ -148,23 +148,16 @@ Before planning paragraphs, mentally assign each concept in the transcript to th
 This is the anti-duplication contract: the writer for Section 3 will receive only Section 3's plan and will not see what Sections 1 and 2 planned. If the plans overlap, the book will duplicate content. There is no retry mechanism — plan correctly the first time.
 
 ════════════════════════════════════════════
-EXCERPT OWNERSHIP RULE — MONOTONIC ORDER REQUIRED
+EXCERPT OWNERSHIP RULE (FIX 4 — REPLACES MONOTONIC)
 ════════════════════════════════════════════
 Each transcript excerpt may be assigned to EXACTLY ONE section in this chapter. Once you assign an excerpt to a section, it is LOCKED — no other section may use it.
 
-CRITICAL: Sections MUST follow transcript order. Each section should contain a contiguous or nearly-contiguous block of excerpts, with later sections using later excerpts.
+You MAY assign excerpts non-monotonically:
+  ✓ Section 1 can use excerpts 1, 3, 5
+  ✓ Section 2 can use excerpts 2, 4, 6
+  ✓ Section 3 can use excerpts 7, 8, 9
 
-CORRECT DISTRIBUTION:
-  ✓ Section 1 uses excerpts 1–4
-  ✓ Section 2 uses excerpts 5–8
-  ✓ Section 3 uses excerpts 9–12
-
-INCORRECT DISTRIBUTION (do not do this):
-  ✗ Section 1 uses excerpts 1, 3, 5, 7, 9 (backfilling)
-  ✗ Section 2 uses excerpts 2, 4, 6, 8 (alternating)
-  ✗ Section 3 uses only excerpt 10 (thin)
-
-This ensures that early sections don't monopolize early content and that later sections get adequate material to develop their teaching points.
+This allows proper handling of teaching structures where the speaker introduces multiple points, then circles back to develop each one.
 
 Each paragraph plan entry MUST list supportedExcerptNumbers that belong to THIS section only. No excerpt number may appear in two different sections' plans.${priorChapterBlock}${coreThesisBlock}${voiceDnaLine}${chapterBoundaryBlock}
 
@@ -201,7 +194,7 @@ ${excerptPayload}`;
     model: deepSeekReasonerModel,
     schema: ChapterPlanLLMSchema,
     mode: "json",
-    temperature: 0.28, // R1 for concept ownership reasoning
+    temperature: 1, // reasoner requires temperature=1
     system,
     prompt,
   });
