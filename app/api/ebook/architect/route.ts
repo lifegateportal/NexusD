@@ -107,14 +107,9 @@ function simpleFallback(input: z.infer<typeof ArchitectRequestSchema>) {
     const segs = segmentsByAudio.get(audioKey)!;
     const chapterTitle = (input.contentMap.overarchingThemes[idx] || "").trim()
       || segs[0]?.topic || `Chapter ${idx + 1}`;
-    
-    // Simple 1-segment = 1-section mapping for fallback
-    const sections = segs.map((seg, si) => ({
-      sectionNumber: si + 1,
-      heading: seg.topic,
-      sourceSegmentIds: [seg.id],
-      targetWordCount: seg.estimatedWordCount || 500,
-    }));
+
+    // Use the same deterministic contiguous 4-5 section allocation as the main path.
+    const sections = buildDeterministicSections(segs, undefined);
 
     return { number: idx + 1, title: chapterTitle, keyTheme: chapterTitle, sections };
   });
