@@ -3271,11 +3271,50 @@ export function EbookPipeline({
           currentChapterProse = "";
           currentChapterNum = assignment.chapterNumber;
 
-          // ── Chapter-plan SKIPPED ──
-          // Removed to trust LLM directly in write-section stage. Write-section now uses
-          // coverageLedger + bannedRecaps to prevent concept duplication across sections.
-          // Cost savings: ~30 sec + ~$0.10-0.20 per chapter
-          // Quality: LLM handles concept ownership naturally without intermediate planning stage
+          // ── Chapter-plan: Coordinate paragraph structure across all sections ──
+          // Call once per chapter to prevent concept/excerpt overlap at planning level.
+          if (chapterPlanBuiltForChapter !== assignment.chapterNumber) {
+            chapterPlanBuiltForChapter = assignment.chapterNumber;
+            chapterPlanMap.clear();
+            const chapterAssignments = assignments.filter((a) => a.chapterNumber === assignment.chapterNumber);
+            if (chapterAssignments.length > 0) {
+              addLog(`  📋 Planning Chapter ${assignment.chapterNumber} structure (${chapterAssignments.length} sections)…`);
+              try {
+                const planResult = await postJson<{ sectionPlans?: Array<{ sectionNumber: number; paragraphPlan: Array<{ purpose: string; supportedExcerptNumbers: number[] }> }> }>(
+                  "/api/ebook/chapter-plan",
+                  {
+                    chapterNumber: assignment.chapterNumber,
+                    chapterTitle: assignment.chapterTitle,
+                    nextChapterTitle: (() => {
+                      const lastChapterAssignment = chapterAssignments[chapterAssignments.length - 1];
+                      const lastIdx = assignments.indexOf(lastChapterAssignment);
+                      return assignments[lastIdx + 1]?.chapterTitle;
+                    })(),
+                    coreThesis: contentMap.coreThesis || undefined,
+                    voiceDNA,
+                    priorSectionsSample: buildProseSampleForDedup(assignment.chapterNumber),
+                    alreadyCoveredPoints: [],
+                    sections: chapterAssignments.map((a) => ({
+                      sectionNumber: a.sectionNumber,
+                      heading: a.heading,
+                      keyPoints: a.keyPoints ?? [],
+                      transcriptExcerpts: (a.transcriptExcerpts ?? []).filter((_, idx) => {
+                        const segId = (a.sourceSegmentIds ?? [])[idx];
+                        return !segId || !consumedSegmentIds.has(segId);
+                      }),
+                    })),
+                  }
+                );
+                if (planResult?.sectionPlans) {
+                  for (const sectionPlan of planResult.sectionPlans) {
+                    chapterPlanMap.set(sectionPlan.sectionNumber, sectionPlan.paragraphPlan ?? []);
+                  }
+                }
+              } catch (planErr) {
+                console.warn("[chapter-plan] failed:", planErr);
+              }
+            }
+          }
 
           // ── Proposal 2: single-call chapter writer ──────────────────────
           // When useChapterWriter is on, write ALL sections of this chapter
