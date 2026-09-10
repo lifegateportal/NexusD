@@ -3,17 +3,23 @@ import { generateObject, generateText } from "ai";
 import { z } from "zod";
 import { deepSeekReasonerModel } from "@/lib/ai-providers";
 import { SOURCE_LOCK_RULES } from "@/lib/editorial-style-bible";
+import { SCRIPTURE_FORMATTING_RULES } from "@/lib/scripture-formatter";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
 
 const RequestSchema = z.object({
   rawTranscript: z.string().min(500).max(500000),
+  slotTranscripts: z.array(z.object({
+    label: z.string().min(1).max(40),
+    text: z.string().min(100).max(200000),
+  })).optional().default([]),
   targetAudience: z.string().max(500).optional().default(""),
   coreThesis: z.string().max(2000).optional().default(""),
   voiceTone: z.string().max(500).optional().default(""),
   authorInstructions: z.string().max(4000).optional().default(""),
   desiredChapters: z.number().int().min(3).max(12).optional().default(6),
+  oneChapterPerSlot: z.boolean().optional().default(true),
 });
 
 const SectionSchema = z.object({
@@ -52,6 +58,13 @@ function clampTranscript(text: string, maxChars = 140000): string {
   const head = text.slice(0, Math.floor(maxChars * 0.6));
   const tail = text.slice(-Math.floor(maxChars * 0.4));
   return `${head}\n\n[... transcript middle omitted for length ...]\n\n${tail}`;
+}
+
+function clampSlotTranscript(text: string, maxChars = 22000): string {
+  if (text.length <= maxChars) return text;
+  const head = text.slice(0, Math.floor(maxChars * 0.65));
+  const tail = text.slice(-Math.floor(maxChars * 0.35));
+  return `${head}\n\n[... slot transcript middle omitted for length ...]\n\n${tail}`;
 }
 
 function extractFirstJsonObject(text: string): string | null {
@@ -123,10 +136,24 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  const transcriptForPrompt = clampTranscript(input.rawTranscript, 140000);
-  const maxTokens = 10000;
+  const slotBlocks = (input.slotTranscripts ?? [])
+    .filter((slot) => slot.text.trim().length > 0)
+    .map((slot, idx) => {
+      const sourceId = `audio-${idx + 1}`;
+      return {
+        sourceId,
+        label: slot.label,
+        text: clampSlotTranscript(slot.text, 22000),
+      };
+    });
 
-  const system = `You are Nexus Book Architect+Writer in single-pass mode.
+  const usingSlots = input.oneChapterPerSlot && slotBlocks.length > 0;
+  const transcriptForPrompt = usingSlots
+    ? ""
+    : clampTranscript(input.rawTranscript, 160000);
+  const maxTokens = 16000;
+
+  const system = `You are a bestselling nonfiction ghostwriter commissioned to transform sermon transcripts into a premium, publication-ready book manuscript.
 
 You must produce a clean, publication-ready book draft from sermon transcript material using one deterministic philosophy:
 - Simple and direct structure like Sermon Assistant
@@ -144,9 +171,26 @@ NON-NEGOTIABLE RULES:
 7) Every section body must be transcript-grounded and specific.
 8) Avoid generic headings like Introduction, Overview, Summary, Conclusion.
 9) Output valid JSON only.
-10) Keep each section body concise: 90-150 words, 1-2 short paragraphs.
+10) Write full-length chapter prose: target 200-350 words per section when content supports it.
+11) Preserve scripture fidelity and render scripture with premium readability.
 
 ${SOURCE_LOCK_RULES}`;
+
+  const chapterRoutingBlock = usingSlots
+    ? `CHAPTER-SLOT ASSIGNMENT (HARD RULE):
+- Create EXACTLY ${slotBlocks.length} chapters.
+- Create exactly ONE chapter per slot.
+- Chapter 1 must use only audio-1, Chapter 2 only audio-2, and so on.
+- Never mix content from different source slots in the same chapter.
+- If a slot is thin, still keep one chapter and deepen commentary from that slot only.`
+    : `CHAPTER ASSIGNMENT:
+- Create approximately ${input.desiredChapters} chapters from the full transcript.`;
+
+  const sourceBlock = usingSlots
+    ? slotBlocks.map((slot, idx) =>
+      `[SOURCE SLOT ${idx + 1}]\nSOURCE ID: ${slot.sourceId}\nLABEL: ${slot.label}\nTRANSCRIPT:\n${slot.text}`
+    ).join("\n\n" + "=".repeat(64) + "\n\n")
+    : `RAW TRANSCRIPT:\n${transcriptForPrompt}`;
 
   const prompt = `Create a simple, sermon-assistant-style book in one pass.
 
@@ -155,9 +199,13 @@ TARGET AUDIENCE: ${input.targetAudience || "(not provided)"}
 CORE THESIS: ${input.coreThesis || "(not provided)"}
 VOICE TONE: ${input.voiceTone || "(not provided)"}
 AUTHOR INSTRUCTIONS: ${input.authorInstructions || "(not provided)"}
+${chapterRoutingBlock}
 
-RAW TRANSCRIPT:
-${transcriptForPrompt}`;
+SCRIPTURE FORMATTING:
+${SCRIPTURE_FORMATTING_RULES}
+
+SOURCE MATERIAL:
+${sourceBlock}`;
 
   const jsonTemplate = `{
   "bookTitle": "...",

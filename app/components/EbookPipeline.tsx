@@ -3028,14 +3028,20 @@ export function EbookPipeline({
 
         setStage("architecting");
         addLog("Simple Direct Book Mode: generating book in one pass…");
-        const desiredChapters = Math.max(3, Math.min(12, activeSlotCount > 0 ? activeSlotCount : 6));
+        const slotTranscripts = (acc.transcripts ?? sourceTranscripts)
+          .filter((slot) => (slot.text ?? "").trim().length > 0)
+          .slice(0, 10)
+          .map((slot) => ({ label: slot.label, text: slot.text }));
+        const desiredChapters = Math.max(3, Math.min(12, slotTranscripts.length > 0 ? slotTranscripts.length : (activeSlotCount > 0 ? activeSlotCount : 6)));
         const simple = await postJson<SimpleBookResponse>("/api/ebook/simple-book", {
           rawTranscript: teachingTranscript,
+          slotTranscripts,
           targetAudience,
           coreThesis: "",
           voiceTone: simpleVoiceDNA.toneProfile,
           authorInstructions,
           desiredChapters,
+          oneChapterPerSlot: true,
         });
 
         setStage("writing");
