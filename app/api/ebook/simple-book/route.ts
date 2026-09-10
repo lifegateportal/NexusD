@@ -177,7 +177,7 @@ function buildFallbackSlotChapter(
   targetAudience: string,
 ): z.infer<typeof ChapterSchema> {
   const sentences = sentenceChunks(slot.text);
-  const sectionCount = sentences.length >= 30 ? 5 : 4;
+  const sectionCount = Math.max(3, Math.min(12, Math.ceil(sentences.length / 8)));
   const bucketSize = Math.max(4, Math.ceil(sentences.length / sectionCount));
   const sections = Array.from({ length: sectionCount }, (_v, i) => {
     const start = i * bucketSize;
@@ -250,7 +250,7 @@ You must produce a clean, publication-ready book draft from sermon transcript ma
 - Strict transcript grounding
 
 NON-NEGOTIABLE RULES:
-1) Every chapter gets exactly 5 sections when source depth allows. If not possible, use 4 sections.
+1) Section count is content-driven. Choose as many sections as needed for clear flow and full coverage.
 2) Chapter titles must be 4-7 words, punchy, complete phrases.
 3) Section headings must be 4-8 words, complete phrases, never dangling.
 4) Subtitle must be useful and reader-facing, never empty.
