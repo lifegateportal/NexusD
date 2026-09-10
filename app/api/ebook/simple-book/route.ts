@@ -20,9 +20,6 @@ const RequestSchema = z.object({
   authorInstructions: z.string().max(4000).optional().default(""),
   desiredChapters: z.number().int().min(3).max(12).optional().default(6),
   oneChapterPerSlot: z.boolean().optional().default(true),
-  previousChapterSummary: z.string().max(4000).optional().default(""),
-  chapterNumber: z.number().int().min(1).max(30).optional(),
-  totalChapters: z.number().int().min(1).max(30).optional(),
 });
 
 const SectionSchema = z.object({
@@ -37,16 +34,12 @@ const ChapterSchema = z.object({
   number: z.number().int().positive(),
   title: z.string().default(""),
   premise: z.string().default(""),
-  keyTakeaways: z.array(z.string()).default([]),
-  reflectionQuestions: z.array(z.string()).default([]),
   sections: z.array(SectionSchema).default([]),
 });
 
 const SlotChapterSchema = z.object({
   title: z.string().default(""),
   premise: z.string().default(""),
-  keyTakeaways: z.array(z.string()).default([]),
-  reflectionQuestions: z.array(z.string()).default([]),
   sections: z.array(SectionSchema).default([]),
 });
 
@@ -71,7 +64,6 @@ function cleanGeneratedBody(text: string): string {
   return stripAudienceLanguage(text)
     .replace(/\b(say amen|turn to your neighbor|lift your hands|clap your hands|can i get an amen|shout hallelujah)\b/gi, "")
     .replace(/\b(good morning church|good evening church|thank you for coming|welcome everyone)\b/gi, "")
-    .replace(/\b(in this chapter we will explore|let us now turn our attention to|it is important to note that|as we can clearly see)\b/gi, "")
     .replace(/[ \t]{2,}/g, " ")
     .replace(/\n{3,}/g, "\n\n")
     .trim();
@@ -144,6 +136,20 @@ function buildTeachingBlocks(text: string, maxBlocks = 18): TeachingBlock[] {
   return sampled;
 }
 
+function chapterWordCount(chapter: z.infer<typeof ChapterSchema>): number {
+  return (chapter.sections ?? []).reduce((sum, section) => sum + countWords(section.body || ""), 0);
+}
+
+function missingTeachingBlocks(chapter: z.infer<typeof SlotChapterSchema>, blocks: TeachingBlock[]): string[] {
+  const covered = new Set(
+    (chapter.sections ?? [])
+      .flatMap((section) => section.coveredBlockIds ?? [])
+      .map((id) => id.trim())
+      .filter(Boolean)
+  );
+  return blocks.map((b) => b.id).filter((id) => !covered.has(id));
+}
+
 function extractFirstJsonObject(text: string): string | null {
   const start = text.indexOf("{");
   if (start < 0) return null;
@@ -188,8 +194,6 @@ function normalizeSimpleBook(object: z.infer<typeof SimpleBookSchema>, input: z.
         ...chapter,
         number: chapterIndex + 1,
         title: (chapter.title || `Chapter ${chapterIndex + 1}`).trim(),
-        keyTakeaways: (chapter.keyTakeaways ?? []).map((s) => cleanGeneratedBody(s)).filter(Boolean),
-        reflectionQuestions: (chapter.reflectionQuestions ?? []).map((s) => cleanGeneratedBody(s)).filter(Boolean),
         sections: (chapter.sections ?? [])
           .filter((section) => (section.body || "").trim().length > 0)
           .map((section, sectionIndex) => ({
@@ -208,8 +212,6 @@ function normalizeSlotChapter(object: z.infer<typeof SlotChapterSchema>, chapter
     number: chapterNumber,
     title: (object.title || `Chapter ${chapterNumber}`).trim(),
     premise: (object.premise || "").trim(),
-    keyTakeaways: (object.keyTakeaways ?? []).map((s) => cleanGeneratedBody(s)).filter(Boolean),
-    reflectionQuestions: (object.reflectionQuestions ?? []).map((s) => cleanGeneratedBody(s)).filter(Boolean),
     sections: (object.sections ?? [])
       .filter((section) => (section.body || "").trim().length > 0)
       .map((section, sectionIndex) => ({
@@ -269,71 +271,11 @@ function buildFallbackSlotChapter(
     ? `This chapter applies the sermon's teaching to ${targetAudience.trim()}.`
     : "This chapter develops the sermon's core teaching with grounded examples and application.";
 
-  const keyTakeaways = sections
-    .map((section) => (section.keyClaims ?? [])[0])
-    .filter((s): s is string => Boolean(s && s.trim()))
-    .slice(0, 6);
-
-  const reflectionQuestions = keyTakeaways
-    .slice(0, 4)
-    .map((claim) => `How does this claim challenge your current practice: ${claim}?`);
-
   return {
     number: chapterNumber,
     title: chapterTitle,
     premise,
-    keyTakeaways,
-    reflectionQuestions,
     sections,
-  };
-}
-
-function chapterHandoffSummary(chapter: z.infer<typeof ChapterSchema>): string {
-  const title = (chapter.title || "").trim();
-  const claims = (chapter.sections ?? [])
-    .flatMap((section) => section.keyClaims ?? [])
-    .map((claim) => claim.trim())
-    .filter(Boolean)
-    .slice(0, 2);
-
-  if (claims.length >= 2) {
-    return `${claims[0]} ${claims[1]}`.replace(/\s+/g, " ").trim();
-  }
-
-  const bodies = (chapter.sections ?? [])
-    .map((section) => section.body || "")
-    .join(" ")
-    .split(/(?<=[.!?])\s+/)
-    .map((s) => s.trim())
-    .filter((s) => s.length > 25)
-    .slice(0, 2);
-
-  if (bodies.length > 0) return bodies.join(" ");
-  return title ? `The previous chapter established ${title.toLowerCase()}.` : "The previous chapter established the core teaching.";
-}
-
-function ensureChapterBridge(
-  chapter: z.infer<typeof ChapterSchema>,
-  previousSummary: string | null,
-): z.infer<typeof ChapterSchema> {
-  if (!previousSummary || !previousSummary.trim()) return chapter;
-  if (!chapter.sections || chapter.sections.length === 0) return chapter;
-
-  const bridge = `Previously: ${previousSummary.trim()} Now we turn to this chapter's focus.`;
-  const first = chapter.sections[0];
-  const body = (first.body || "").trim();
-
-  // Keep the bridge concise and avoid duplication if already present.
-  if (body.toLowerCase().includes("previously:")) return chapter;
-
-  const nextFirst = {
-    ...first,
-    body: `${bridge}\n\n${body}`.trim(),
-  };
-
-  return {
-    ...chapter,
-    sections: [nextFirst, ...chapter.sections.slice(1)],
   };
 }
 
@@ -353,8 +295,7 @@ export async function POST(req: NextRequest) {
   const slotBlocks = (input.slotTranscripts ?? [])
     .filter((slot) => slot.text.trim().length > 0)
     .map((slot, idx) => {
-      const slotBase = (input.chapterNumber && (input.slotTranscripts?.length ?? 0) === 1) ? input.chapterNumber : 1;
-      const sourceId = `audio-${slotBase + idx}`;
+      const sourceId = `audio-${idx + 1}`;
       return {
         sourceId,
         label: slot.label,
@@ -394,8 +335,6 @@ NON-NEGOTIABLE RULES:
 14) Never duplicate a full story in multiple sections. If recalled later, reference briefly and move forward.
 15) Remove all pulpit and live-audience language from narration. Forbidden examples: "say amen", "turn to your neighbor", "lift your hands", "good morning church".
 16) Thoroughness is mandatory: cover the full transcript and all significant teaching blocks, not just highlights.
-17) Padding is prohibited. No filler paragraphs, no generic transitions, and no repeated motivational lines without new teaching content.
-18) In the SAME chapter-generation call, also return chapter-level keyTakeaways (4-7) and reflectionQuestions (4-7) grounded in the chapter content.
 
 ${SOURCE_LOCK_RULES}`;
 
@@ -455,8 +394,6 @@ ${sourceBlock}`;
   const slotChapterTemplate = `{
   "title": "...",
   "premise": "...",
-  "keyTakeaways": ["..."],
-  "reflectionQuestions": ["..."],
   "sections": [
     {
       "sectionNumber": 1,
@@ -478,22 +415,16 @@ ${sourceBlock}`;
     if (usingSlots && slotBlocks.length > 0) {
       const chapters: z.infer<typeof ChapterSchema>[] = [];
       let allSectionClaims: string[] = [];
-      let previousChapterSummary: string | null = (input.previousChapterSummary || "").trim() || null;
 
       for (let i = 0; i < slotBlocks.length; i++) {
         const slot = slotBlocks[i];
-        const chapterNumber = (input.chapterNumber && slotBlocks.length === 1)
-          ? input.chapterNumber
-          : i + 1;
+        const chapterNumber = i + 1;
         const teachingBlocks = buildTeachingBlocks(slot.fullText, 20);
         const teachingBlockManifest = teachingBlocks.length > 0
           ? teachingBlocks.map((b) => `- ${b.id} (${b.wordCount} words): ${b.excerpt}`).join("\n")
           : "- B1: (no extracted block; use full transcript coverage)";
         const priorClaimsBlock = allSectionClaims.length > 0
           ? `\n\nPRIOR CHAPTER CLAIMS (DO NOT REPEAT IN FULL):\n${allSectionClaims.slice(-30).map((c) => `- ${c}`).join("\n")}`
-          : "";
-        const chapterBridgeBlock = previousChapterSummary
-          ? `\n\nCHAPTER BRIDGE REQUIREMENT:\n- Open this chapter with 1-2 short sentences summarizing the previous chapter before launching into the present chapter.\n- Use this previous-chapter summary as the bridge source:\n${previousChapterSummary}`
           : "";
 
         const slotPrompt = `Transform SOURCE SLOT ${chapterNumber} into one complete chapter.
@@ -521,16 +452,6 @@ ${teachingBlockManifest}
 
 ${storyIntegrationBlock}
 
-NO-PADDING RULE:
-- Every paragraph must add new teaching value.
-- Do not use filler setup language.
-- Keep transitions short and meaningful.
-
-CHAPTER WRAP OUTPUT (SAME CALL):
-- Return keyTakeaways: 4-7 concise bullets.
-- Return reflectionQuestions: 4-7 specific, non-generic questions.
-- These must come from this slot chapter only.
-
 SCRIPTURE FORMATTING:
 ${SCRIPTURE_FORMATTING_RULES}
 
@@ -538,7 +459,7 @@ SOURCE SLOT:
 SOURCE ID: ${slot.sourceId}
 LABEL: ${slot.label}
 TRANSCRIPT:
-${slot.text}${priorClaimsBlock}${chapterBridgeBlock}`;
+${slot.text}${priorClaimsBlock}`;
 
         let chapterObject: z.infer<typeof SlotChapterSchema> | null = null;
 
@@ -585,10 +506,7 @@ ${slot.text}${priorClaimsBlock}${chapterBridgeBlock}`;
           chapterObject = buildFallbackSlotChapter(slot, chapterNumber, input.targetAudience);
         }
 
-        const normalizedChapter = ensureChapterBridge(
-          normalizeSlotChapter(chapterObject, chapterNumber),
-          previousChapterSummary
-        );
+        const normalizedChapter = normalizeSlotChapter(chapterObject, chapterNumber);
         if (normalizedChapter.sections.length === 0) {
           const fallbackChapter = buildFallbackSlotChapter(slot, chapterNumber, input.targetAudience);
           if (fallbackChapter.sections.length === 0) {
@@ -606,7 +524,6 @@ ${slot.text}${priorClaimsBlock}${chapterBridgeBlock}`;
           ...allSectionClaims,
           ...normalizedChapter.sections.flatMap((section) => (section.keyClaims ?? []).map((claim) => claim.trim()).filter(Boolean)),
         ];
-        previousChapterSummary = chapterHandoffSummary(normalizedChapter);
       }
 
       const bookFromSlots: z.infer<typeof SimpleBookSchema> = {
