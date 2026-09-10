@@ -36,6 +36,12 @@ const ChapterSchema = z.object({
   sections: z.array(SectionSchema).default([]),
 });
 
+const SlotChapterSchema = z.object({
+  title: z.string().default(""),
+  premise: z.string().default(""),
+  sections: z.array(SectionSchema).default([]),
+});
+
 const SimpleBookSchema = z.object({
   bookTitle: z.string().default("Untitled"),
   subtitle: z.string().default(""),
@@ -105,7 +111,7 @@ function normalizeSimpleBook(object: z.infer<typeof SimpleBookSchema>, input: z.
   return {
     ...object,
     subtitle: (object.subtitle || "").trim() || nonEmptySubtitle(input.targetAudience, input.coreThesis),
-    strategy: "single-pass-sermon-style",
+    strategy: (object.strategy || "single-pass-sermon-style").trim(),
     chapters: (object.chapters ?? [])
       .map((chapter, chapterIndex) => ({
         ...chapter,
@@ -120,6 +126,22 @@ function normalizeSimpleBook(object: z.infer<typeof SimpleBookSchema>, input: z.
           })),
       }))
       .filter((chapter) => chapter.sections.length > 0),
+  };
+}
+
+function normalizeSlotChapter(object: z.infer<typeof SlotChapterSchema>, chapterNumber: number): z.infer<typeof ChapterSchema> {
+  return {
+    number: chapterNumber,
+    title: (object.title || `Chapter ${chapterNumber}`).trim(),
+    premise: (object.premise || "").trim(),
+    sections: (object.sections ?? [])
+      .filter((section) => (section.body || "").trim().length > 0)
+      .map((section, sectionIndex) => ({
+        ...section,
+        sectionNumber: sectionIndex + 1,
+        heading: (section.heading || `Section ${sectionIndex + 1}`).trim(),
+        body: (section.body || "").trim(),
+      })),
   };
 }
 
@@ -173,6 +195,9 @@ NON-NEGOTIABLE RULES:
 9) Output valid JSON only.
 10) Write full-length chapter prose: target 200-350 words per section when content supports it.
 11) Preserve scripture fidelity and render scripture with premium readability.
+12) Preserve and integrate live examples/stories from the transcript. Do not strip them out. Use them as evidence that advances the teaching point.
+13) Story discipline: setup, tension, and payoff must stay in order and attach to the section argument.
+14) Never duplicate a full story in multiple sections. If recalled later, reference briefly and move forward.
 
 ${SOURCE_LOCK_RULES}`;
 
@@ -229,7 +254,137 @@ ${sourceBlock}`;
   ]
 }`;
 
+  const slotChapterTemplate = `{
+  "title": "...",
+  "premise": "...",
+  "sections": [
+    {
+      "sectionNumber": 1,
+      "heading": "...",
+      "body": "...",
+      "keyClaims": ["..."]
+    }
+  ]
+}`;
+
+  const storyIntegrationBlock = `LIVE EXAMPLES AND STORIES (NON-NEGOTIABLE):
+- Keep the speaker's live examples, testimonies, and personal stories in the chapter.
+- Integrate each story into the argument, not as a detached anecdote.
+- After each story movement, state the teaching implication in plain terms.
+- Do not flatten vivid details that carry emotional force unless they are repetitive noise.`;
+
   try {
+    if (usingSlots && slotBlocks.length > 0) {
+      const chapters: z.infer<typeof ChapterSchema>[] = [];
+      let allSectionClaims: string[] = [];
+
+      for (let i = 0; i < slotBlocks.length; i++) {
+        const slot = slotBlocks[i];
+        const chapterNumber = i + 1;
+        const priorClaimsBlock = allSectionClaims.length > 0
+          ? `\n\nPRIOR CHAPTER CLAIMS (DO NOT REPEAT IN FULL):\n${allSectionClaims.slice(-30).map((c) => `- ${c}`).join("\n")}`
+          : "";
+
+        const slotPrompt = `Transform SOURCE SLOT ${chapterNumber} into one complete chapter.
+
+HARD ASSIGNMENT:
+- Produce exactly ONE chapter from this slot.
+- Use only this slot's transcript material.
+- Output ONLY a chapter object (not a full book object).
+
+CHAPTER CONTEXT:
+CHAPTER NUMBER: ${chapterNumber}
+TARGET AUDIENCE: ${input.targetAudience || "(not provided)"}
+CORE THESIS: ${input.coreThesis || "(not provided)"}
+VOICE TONE: ${input.voiceTone || "(not provided)"}
+AUTHOR INSTRUCTIONS: ${input.authorInstructions || "(not provided)"}
+
+${storyIntegrationBlock}
+
+SCRIPTURE FORMATTING:
+${SCRIPTURE_FORMATTING_RULES}
+
+SOURCE SLOT:
+SOURCE ID: ${slot.sourceId}
+LABEL: ${slot.label}
+TRANSCRIPT:
+${slot.text}${priorClaimsBlock}`;
+
+        let chapterObject: z.infer<typeof SlotChapterSchema> | null = null;
+
+        for (let attempt = 0; attempt < 2; attempt++) {
+          try {
+            const { object } = await generateObject({
+              model: deepSeekReasonerModel,
+              schema: SlotChapterSchema,
+              mode: "json",
+              temperature: attempt === 0 ? 0.3 : 0.2,
+              maxTokens,
+              system,
+              prompt: slotPrompt,
+            });
+            chapterObject = object;
+            break;
+          } catch {
+            // Try fallback pass below.
+          }
+        }
+
+        if (!chapterObject) {
+          const { text } = await generateText({
+            model: deepSeekReasonerModel,
+            temperature: 0.2,
+            maxTokens,
+            system,
+            prompt: `${slotPrompt}\n\nReturn ONLY JSON in this exact shape:\n${slotChapterTemplate}`,
+          });
+          const json = extractFirstJsonObject(text);
+          if (!json) {
+            return NextResponse.json(
+              { error: `Simple book generation failed: slot ${chapterNumber} returned non-parseable JSON` },
+              { status: 502 }
+            );
+          }
+          const parsed = SlotChapterSchema.safeParse(JSON.parse(json));
+          if (!parsed.success) {
+            return NextResponse.json(
+              {
+                error: `Simple book generation failed: slot ${chapterNumber} JSON shape invalid`,
+                details: parsed.error.issues.slice(0, 5),
+              },
+              { status: 502 }
+            );
+          }
+          chapterObject = parsed.data;
+        }
+
+        const normalizedChapter = normalizeSlotChapter(chapterObject, chapterNumber);
+        if (normalizedChapter.sections.length === 0) {
+          return NextResponse.json(
+            { error: `Simple book generation failed: slot ${chapterNumber} produced no section content` },
+            { status: 502 }
+          );
+        }
+
+        chapters.push(normalizedChapter);
+        allSectionClaims = [
+          ...allSectionClaims,
+          ...normalizedChapter.sections.flatMap((section) => (section.keyClaims ?? []).map((claim) => claim.trim()).filter(Boolean)),
+        ];
+      }
+
+      const bookFromSlots: z.infer<typeof SimpleBookSchema> = {
+        bookTitle: (chapters[0]?.title || "Untitled").trim(),
+        subtitle: nonEmptySubtitle(input.targetAudience, input.coreThesis),
+        authorName: "the Author",
+        strategy: "slot-by-slot-sermon-style",
+        chapters,
+      };
+
+      const normalizedSlotsBook = normalizeSimpleBook(bookFromSlots, input);
+      return NextResponse.json(normalizedSlotsBook);
+    }
+
     for (let attempt = 0; attempt < 2; attempt++) {
       try {
         const { object } = await generateObject({
@@ -239,7 +394,7 @@ ${sourceBlock}`;
           temperature: attempt === 0 ? 0.3 : 0.2,
           maxTokens,
           system,
-          prompt,
+          prompt: `${prompt}\n\n${storyIntegrationBlock}`,
         });
         const normalized = normalizeSimpleBook(object, input);
         if (normalized.chapters.length > 0) {
@@ -255,7 +410,7 @@ ${sourceBlock}`;
       temperature: 0.2,
       maxTokens,
       system,
-      prompt: `${prompt}\n\nReturn ONLY JSON in this exact shape:\n${jsonTemplate}`,
+      prompt: `${prompt}\n\n${storyIntegrationBlock}\n\nReturn ONLY JSON in this exact shape:\n${jsonTemplate}`,
     });
 
     const json = extractFirstJsonObject(text);
