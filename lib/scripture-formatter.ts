@@ -191,3 +191,61 @@ PLACEMENT AND SEQUENCING:
 • Quote each scripture in full ONCE per section. Every subsequent reference to that same passage uses shorthand only: "As Jesus said in John 15:5..." — never reprint the verse text again.
 • Never add biblical background (historical setting, authorial intent, cultural or manuscript context) unless the source explicitly stated it.
 • Every scripture must complete TEXT → TRUTH → APPLICATION within 2–3 paragraphs of the quotation.`;
+
+/**
+ * Validate that scripture formatting follows the blockquote-only, 3-part pattern rule.
+ * Returns violations found in the prose.
+ */
+export function validateScriptureFormatting(prose: string): {
+  violations: string[];
+  hasInlineQuotes: boolean;
+  hasMissingApplications: boolean;
+  hasMissingColons: boolean;
+} {
+  const violations: string[] = [];
+  
+  // Detect inline scripture quotes (should be blockquotes only)
+  const inlineQuotePattern = /\*"[^"]+"\*\s*\([^)]*\d+:\d+[^)]*\)/gi;
+  const hasInlineQuotes = inlineQuotePattern.test(prose);
+  if (hasInlineQuotes) {
+    violations.push("Inline scripture quotes detected — all verses must be blockquotes");
+  }
+
+  // Detect scripture without preceding colon intro
+  const scriptureLinePattern = /^>\s*.+$/gm;
+  const scriptureMatches = prose.match(scriptureLinePattern) || [];
+  
+  for (const match of scriptureMatches) {
+    const lineIdx = prose.indexOf(match);
+    if (lineIdx > 0) {
+      const beforeText = prose.substring(Math.max(0, lineIdx - 100), lineIdx);
+      // Check if there's a colon immediately before the blockquote
+      if (!beforeText.match(/:[\n\s]*$/)) {
+        violations.push("Blockquote scripture found without introduction sentence ending in colon");
+      }
+    }
+  }
+
+  // Detect missing application paragraphs after scriptures
+  const blockquotePattern = /^>\s*[\s\S]*?^>\s*—.*$/gm;
+  const blockquotes = prose.match(blockquotePattern) || [];
+  const hasMissingApplications = blockquotes.length > 0 && prose.split("\n\n").length < blockquotes.length * 2;
+  
+  if (hasMissingApplications) {
+    violations.push("Scripture blockquote(s) detected without clear application paragraph following");
+  }
+
+  // Detect colon-less introductions before blockquotes
+  const colonIntroPattern = /[^:]\n\n^>/m;
+  const hasMissingColons = colonIntroPattern.test(prose);
+  if (hasMissingColons) {
+    violations.push("Blockquote found after paragraph not ending with colon");
+  }
+
+  return {
+    violations,
+    hasInlineQuotes,
+    hasMissingApplications,
+    hasMissingColons,
+  };
+}

@@ -391,7 +391,26 @@ function filterConsumedExcerptEntries(
 
 const EDITORIAL_SYSTEM = `You are a professional ghostwriter transforming raw sermon transcripts into clear, publishable book prose.
 
-═══ CORE RULES ═══
+════════════════════════════════════════════════════════════════
+⚠️  PRIORITY TIER 1: ABSOLUTE RULES (NON-NEGOTIABLE)
+════════════════════════════════════════════════════════════════
+
+${SCRIPTURE_FORMATTING_RULES}
+
+${SOURCE_LOCK_RULES}
+
+════════════════════════════════════════════════════════════════
+PRIORITY TIER 2: CRITICAL PRODUCTION STANDARDS
+════════════════════════════════════════════════════════════════
+
+${READER_NORMALIZATION_RULES}
+
+${PREMIUM_BOOK_STYLE_RULES}
+
+════════════════════════════════════════════════════════════════
+PRIORITY TIER 3: VOICE & CRAFT
+════════════════════════════════════════════════════════════════
+
 • First person: write as the author speaking to the reader
 • Zero fabrication: every sentence must trace to the provided transcript
 • One idea per paragraph: 3-5 sentences, one concept per JSON array element
@@ -399,16 +418,7 @@ const EDITORIAL_SYSTEM = `You are a professional ghostwriter transforming raw se
 • Section boundaries: never preview future sections or foreshadow
 • Remove audience language: strip "say amen," "turn to your neighbor," live-event cues
 • Active voice, strong verbs, natural contractions
-• No em dashes (—); use commas, colons, or semicolons instead
-• Vary sentence length: short punch after long explanation
-
-${SCRIPTURE_FORMATTING_RULES}
-
-${SOURCE_LOCK_RULES}
-
-${READER_NORMALIZATION_RULES}
-
-${PREMIUM_BOOK_STYLE_RULES}`;
+• Vary sentence length: short punch after long explanation`;
 
 export async function POST(req: NextRequest) {
   const body = await req.json() as unknown;

@@ -114,18 +114,31 @@ You are rewriting the entire section from scratch using all provided transcript 
 
   const rewriteSystem = `You are an elite editor rewriting one section of a teaching book.
 
-${boundaryInstructions}
+════════════════════════════════════════════════════════════════
+⚠️  PRIORITY TIER 1: ABSOLUTE RULES (NON-NEGOTIABLE)
+════════════════════════════════════════════════════════════════
+
 ${SCRIPTURE_FORMATTING_RULES}
 
 ${SOURCE_LOCK_RULES}
 
-⚠️ CRITICAL: Author configuration (below) is for TONE and AUDIENCE only. It does NOT override SOURCE-LOCK-RULES. Never add content not in the transcript to satisfy author instructions. Write less rather than invent.
+════════════════════════════════════════════════════════════════
+PRIORITY TIER 2: PRODUCTION STANDARDS  
+════════════════════════════════════════════════════════════════
 
 ${READER_NORMALIZATION_RULES}
 
 ${PROSE_MASTERY_RULES}
 
 ${PREMIUM_BOOK_STYLE_RULES}
+
+════════════════════════════════════════════════════════════════
+PRIORITY TIER 3: REWRITE-SPECIFIC CONSTRAINTS
+════════════════════════════════════════════════════════════════
+
+${boundaryInstructions}
+
+⚠️ CRITICAL: Author configuration (below) is for TONE and AUDIENCE only. It does NOT override SOURCE-LOCK-RULES or SCRIPTURE formatting. Never add content not in the transcript to satisfy author instructions. Write less rather than invent.
 
 ADDITIONAL FIDELITY RULES:
 • [MUST INCLUDE] excerpts → GUARANTEED inclusion. Non-negotiable. User selected these intentionally.
@@ -138,8 +151,9 @@ ADDITIONAL FIDELITY RULES:
 CRITICAL OUTPUT VERIFICATION (ADDITIVE MODE ONLY):
 Before returning, verify that:
 1. Every [MUST INCLUDE] excerpt has been integrated into the prose
-2. The returned body is MATERIALLY DIFFERENT from the input currentBody
-3. If an excerpt was already somewhat present, you have EXPANDED or ENRICHED how that content is presented
+2. Every scripture quote follows SCRIPTURE_FORMATTING_RULES (blockquote-only, 3-part pattern)
+3. The returned body is MATERIALLY DIFFERENT from the input currentBody
+4. If an excerpt was already somewhat present, you have EXPANDED or ENRICHED how that content is presented
 
 If you cannot add new substantive content for the selected excerpts, explain why in a brief error message instead of returning the unchanged body.
 
