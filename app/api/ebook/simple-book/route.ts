@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { generateObject, generateText } from "ai";
 import { z } from "zod";
 import { deepSeekReasonerModel } from "@/lib/ai-providers";
-import { SOURCE_LOCK_RULES } from "@/lib/editorial-style-bible";
+import { SOURCE_LOCK_RULES, stripAudienceLanguage } from "@/lib/editorial-style-bible";
 import { SCRIPTURE_FORMATTING_RULES } from "@/lib/scripture-formatter";
 
 export const runtime = "nodejs";
@@ -57,6 +57,15 @@ function nonEmptySubtitle(targetAudience: string, coreThesis: string): string {
   if (audience) return `A field guide for ${audience}`;
   if (thesis) return "A transcript-grounded teaching journey";
   return "A transcript-grounded teaching journey";
+}
+
+function cleanGeneratedBody(text: string): string {
+  return stripAudienceLanguage(text)
+    .replace(/\b(say amen|turn to your neighbor|lift your hands|clap your hands|can i get an amen|shout hallelujah)\b/gi, "")
+    .replace(/\b(good morning church|good evening church|thank you for coming|welcome everyone)\b/gi, "")
+    .replace(/[ \t]{2,}/g, " ")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
 }
 
 function clampTranscript(text: string, maxChars = 140000): string {
@@ -123,6 +132,7 @@ function normalizeSimpleBook(object: z.infer<typeof SimpleBookSchema>, input: z.
             ...section,
             sectionNumber: sectionIndex + 1,
             heading: (section.heading || `Section ${sectionIndex + 1}`).trim(),
+            body: cleanGeneratedBody(section.body || ""),
           })),
       }))
       .filter((chapter) => chapter.sections.length > 0),
@@ -140,7 +150,7 @@ function normalizeSlotChapter(object: z.infer<typeof SlotChapterSchema>, chapter
         ...section,
         sectionNumber: sectionIndex + 1,
         heading: (section.heading || `Section ${sectionIndex + 1}`).trim(),
-        body: (section.body || "").trim(),
+        body: cleanGeneratedBody(section.body || ""),
       })),
   };
 }
@@ -175,7 +185,7 @@ function buildFallbackSlotChapter(
     const slice = sentences.slice(start, end);
     const headingSeed = slice[0] || `Core movement ${i + 1}`;
     const heading = headingSeed.split(/[,:;.!?]/)[0].trim().split(/\s+/).slice(0, 7).join(" ") || `Core movement ${i + 1}`;
-    const body = slice.join(" ").trim();
+    const body = cleanGeneratedBody(slice.join(" ").trim());
     return {
       sectionNumber: i + 1,
       heading,
@@ -229,7 +239,7 @@ export async function POST(req: NextRequest) {
   const transcriptForPrompt = usingSlots
     ? ""
     : clampTranscript(input.rawTranscript, 160000);
-  const maxTokens = 16000;
+  const maxTokens = usingSlots ? 22000 : 24000;
 
   const system = `You are a bestselling nonfiction ghostwriter commissioned to transform sermon transcripts into a premium, publication-ready book manuscript.
 
@@ -249,11 +259,12 @@ NON-NEGOTIABLE RULES:
 7) Every section body must be transcript-grounded and specific.
 8) Avoid generic headings like Introduction, Overview, Summary, Conclusion.
 9) Output valid JSON only.
-10) Write full-length chapter prose: target 200-350 words per section when content supports it.
+10) Write full-length chapter prose: target 700-1000 words per section when content supports it so each chapter lands around 3500-4500 words.
 11) Preserve scripture fidelity and render scripture with premium readability.
 12) Preserve and integrate live examples/stories from the transcript. Do not strip them out. Use them as evidence that advances the teaching point.
 13) Story discipline: setup, tension, and payoff must stay in order and attach to the section argument.
 14) Never duplicate a full story in multiple sections. If recalled later, reference briefly and move forward.
+15) Remove all pulpit and live-audience language from narration. Forbidden examples: "say amen", "turn to your neighbor", "lift your hands", "good morning church".
 
 ${SOURCE_LOCK_RULES}`;
 
