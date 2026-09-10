@@ -3044,6 +3044,7 @@ export function EbookPipeline({
         let bookTitleFromRuns = "";
         let subtitleFromRuns = "";
         let authorNameFromRuns = "the Author";
+        let previousChapterSummary = "";
 
         for (let slotIndex = 0; slotIndex < slotWriteList.length; slotIndex++) {
           const slot = slotWriteList[slotIndex];
@@ -3058,6 +3059,9 @@ export function EbookPipeline({
             authorInstructions,
             desiredChapters,
             oneChapterPerSlot: true,
+            previousChapterSummary,
+            chapterNumber: slotIndex + 1,
+            totalChapters: slotWriteList.length,
           });
 
           if (!bookTitleFromRuns) bookTitleFromRuns = (simple.bookTitle || "").trim();
@@ -3097,6 +3101,17 @@ export function EbookPipeline({
           };
 
           builtChapters.push(builtChapter);
+
+          const summaryClaims = builtChapter.sections
+            .flatMap((section) => (section.body || "").split(/(?<=[.!?])\s+/).map((s) => s.trim()))
+            .filter((s) => s.length > 30)
+            .slice(0, 2);
+          if (summaryClaims.length > 0) {
+            previousChapterSummary = summaryClaims.join(" ");
+          } else {
+            previousChapterSummary = `${builtChapter.title} established the chapter's core teaching.`;
+          }
+
           setChapters([...builtChapters]);
           setProgress({ total: slotWriteList.length, completed: slotIndex + 1 });
           addLog(`✓ ${slot.label} complete — ${builtChapter.totalWordCount.toLocaleString()} words`);
