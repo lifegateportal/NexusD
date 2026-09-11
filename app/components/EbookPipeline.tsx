@@ -2413,6 +2413,14 @@ export function EbookPipeline({
     const restore = (job: EbookJobState) => {
       savedJobRef.current = job;
       onJobStateChange?.(job);
+      const hasCompleteStudioData = Boolean(
+        job.architecture &&
+        job.frontMatter &&
+        (job.chapters?.length ?? 0) > 0
+      );
+      const restoredStage: PipelineStage = job.status === "failed"
+        ? "failed"
+        : (hasCompleteStudioData ? "complete" : job.status as PipelineStage);
       const filterInfo = parseSignalFilterLog(job.errorLog ?? []);
       setSignalFilterState(filterInfo.state);
       setSignalFilterDetail(filterInfo.detail);
@@ -2432,7 +2440,7 @@ export function EbookPipeline({
       );
       if (!hasRecoverableState) return;
       jobIdRef.current = job.jobId;
-      setStage(job.status as PipelineStage);
+      setStage(restoredStage);
       logRef.current = job.errorLog ?? [];
       setLog(job.errorLog ?? []);
       setProgress(job.progress ?? { total: 0, completed: 0 });
@@ -2454,7 +2462,7 @@ export function EbookPipeline({
           docxUrl: job.exportUrls.docxUrl || undefined,
         });
       }
-      if (job.status === "complete" && job.architecture && job.frontMatter) {
+      if (hasCompleteStudioData && job.architecture && job.frontMatter) {
         // Build a contentMap stub when the saved job state is missing one (older saves)
         const contentMap: ContentMap = job.contentMap ?? {
           totalEstimatedWords: (job.chapters ?? []).reduce((a, c) => a + (c.totalWordCount ?? 0), 0),
@@ -2491,6 +2499,8 @@ export function EbookPipeline({
       if ((job.sectionAssignments?.length ?? 0) === 0 && restoredAssignments.length > 0) {
         const hydrated = {
           ...job,
+          status: restoredStage,
+          currentStage: restoredStage,
           sectionAssignments: restoredAssignments,
           updatedAt: new Date().toISOString(),
         };

@@ -249,7 +249,7 @@ function EbookPageClient() {
       localStorage.setItem(JOB_STORAGE_KEY, project.jobState.jobId);
       setCurrentProjectId(project.id);
       const job = project.jobState;
-      if (job.architecture && job.frontMatter && job.contentMap) {
+      if (job.architecture && job.frontMatter && (job.chapters?.length ?? 0) > 0) {
         setEbookManifest({
           jobId: job.jobId,
           bookTitle: job.architecture.bookTitle,
@@ -258,7 +258,7 @@ function EbookPageClient() {
           frontMatter: job.frontMatter,
           chapters: job.chapters ?? [],
           totalWordCount: (job.chapters ?? []).reduce((sum, chapter) => sum + (chapter.totalWordCount ?? 0), 0),
-          allQuotes: job.contentMap.allQuotes ?? [],
+          allQuotes: job.contentMap?.allQuotes ?? [],
           generatedAt: new Date().toISOString(),
           selectedTemplate: "devotional",
           printSpec: { trimSize: "6x9", runningHeaders: true, bleed: false, cropMarks: false, folioStyle: "center", frontMatterNumbering: "arabic", sectionOrnament: "rule" },
@@ -483,7 +483,7 @@ function EbookPageClient() {
       liveJobStateRef.current = p.jobState;
       setCurrentProjectId(p.id);
       const job = p.jobState;
-      if (job.architecture && job.frontMatter && job.contentMap) {
+      if (job.architecture && job.frontMatter && (job.chapters?.length ?? 0) > 0) {
         setEbookManifest({
           jobId: job.jobId,
           bookTitle: job.architecture.bookTitle,
@@ -492,7 +492,7 @@ function EbookPageClient() {
           frontMatter: job.frontMatter,
           chapters: job.chapters ?? [],
           totalWordCount: (job.chapters ?? []).reduce((sum, chapter) => sum + (chapter.totalWordCount ?? 0), 0),
-          allQuotes: job.contentMap.allQuotes ?? [],
+          allQuotes: job.contentMap?.allQuotes ?? [],
           generatedAt: new Date().toISOString(),
           selectedTemplate: "devotional",
           printSpec: { trimSize: "6x9", runningHeaders: true, bleed: false, cropMarks: false, folioStyle: "center", frontMatterNumbering: "arabic", sectionOrnament: "rule" },
@@ -683,7 +683,7 @@ function EbookPageClient() {
   // ── Manifest handlers ─────────────────────────────────────────────────────
 
   const buildManifestFromJob = useCallback((job: EbookJobState): EbookManifest | null => {
-    if (!job.architecture || !job.frontMatter || !job.contentMap) return null;
+    if (!job.architecture || !job.frontMatter || (job.chapters?.length ?? 0) === 0) return null;
     return {
       jobId: job.jobId,
       bookTitle: job.architecture.bookTitle,
@@ -692,7 +692,7 @@ function EbookPageClient() {
       frontMatter: job.frontMatter,
       chapters: job.chapters ?? [],
       totalWordCount: (job.chapters ?? []).reduce((sum, chapter) => sum + (chapter.totalWordCount ?? 0), 0),
-      allQuotes: job.contentMap.allQuotes ?? [],
+      allQuotes: job.contentMap?.allQuotes ?? [],
       generatedAt: new Date().toISOString(),
       selectedTemplate: "devotional",
       printSpec: { trimSize: "6x9", runningHeaders: true, bleed: false, cropMarks: false, folioStyle: "center", frontMatterNumbering: "arabic", sectionOrnament: "rule" },
