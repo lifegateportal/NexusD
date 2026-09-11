@@ -562,7 +562,7 @@ ${slot.text}${priorClaimsBlock}`;
               model: deepSeekReasonerModel,
               schema: SlotChapterSchema,
               mode: "json",
-              temperature: attempt === 0 ? 0.3 : 0.2,
+              temperature: 0.25,
               maxTokens,
               system,
               prompt: attemptPrompt,
@@ -585,7 +585,7 @@ ${slot.text}${priorClaimsBlock}`;
           try {
             const { text } = await generateText({
               model: deepSeekReasonerModel,
-              temperature: 0.2,
+              temperature: 0.25,
               maxTokens,
               system,
               prompt: `${slotPrompt}\n\nReturn ONLY JSON in this exact shape:\n${slotChapterTemplate}`,
@@ -661,7 +661,7 @@ ${slot.text}${priorClaimsBlock}`;
           model: deepSeekReasonerModel,
           schema: SimpleBookSchema,
           mode: "json",
-          temperature: attempt === 0 ? 0.3 : 0.2,
+          temperature: 0.25,
           maxTokens,
           system,
           prompt: `${prompt}\n\n${storyIntegrationBlock}`,
@@ -677,7 +677,7 @@ ${slot.text}${priorClaimsBlock}`;
 
     const { text } = await generateText({
       model: deepSeekReasonerModel,
-      temperature: 0.2,
+      temperature: 0.25,
       maxTokens,
       system,
       prompt: `${prompt}\n\n${storyIntegrationBlock}\n\nReturn ONLY JSON in this exact shape:\n${jsonTemplate}`,
