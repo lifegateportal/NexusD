@@ -80,23 +80,6 @@ export type EbookPipelineSnapshot = {
   frontMatterSections: number;
 };
 
-type SimpleBookResponse = {
-  bookTitle: string;
-  subtitle: string;
-  authorName: string;
-  chapters: Array<{
-    number: number;
-    title: string;
-    premise?: string;
-    sections: Array<{
-      sectionNumber: number;
-      heading: string;
-      body: string;
-      keyClaims?: string[];
-    }>;
-  }>;
-};
-
 function routeLabel(url: string): string {
   return url.split("/").filter(Boolean).slice(-2).join("/");
 }
@@ -179,6 +162,100 @@ async function streamSection(
 
 function countWords(text: string): number {
   return text.trim().split(/\s+/).filter(Boolean).length;
+}
+
+function emptyVoiceDNA(): VoiceDNA {
+  return {
+    signaturePhrases: [],
+    preferredTerminology: [],
+    toneProfile: "",
+    sentencePattern: "mixed",
+    rhetoricalPatterns: [],
+    teachingStyle: "",
+    avoidWords: [],
+    vocabularyLevel: "conversational",
+    pacingFingerprint: "",
+    narrativeDevice: "",
+    emotionalArc: "",
+    vernacularMarkers: [],
+    avoidStructures: [],
+    openingPattern: "",
+    closingPattern: "",
+  };
+}
+
+function deriveSectionAssignmentsFromSavedJob(job: EbookJobState): SectionAssignment[] {
+  const chapters = job.chapters ?? [];
+  if (chapters.length === 0) return [];
+
+  const segments = job.contentMap?.segments ?? [];
+  const bySource = new Map<string, typeof segments>();
+  for (const segment of segments) {
+    const key = segment.sourceAudio;
+    const current = bySource.get(key) ?? [];
+    current.push(segment);
+    bySource.set(key, current);
+  }
+
+  const voiceDNA = job.voiceDNA ?? emptyVoiceDNA();
+  const assignments: SectionAssignment[] = [];
+
+  for (const chapter of chapters) {
+    const chapterSource = `audio-${chapter.number}` as const;
+    const chapterSegments = bySource.get(chapterSource) ?? [];
+    const sectionCount = Math.max(1, chapter.sections.length);
+    const segmentCount = Math.max(1, chapterSegments.length);
+
+    for (let idx = 0; idx < chapter.sections.length; idx++) {
+      const section = chapter.sections[idx];
+      const start = Math.floor((idx * segmentCount) / sectionCount);
+      const endExclusive = Math.max(start + 1, Math.floor(((idx + 1) * segmentCount) / sectionCount));
+      const picked = chapterSegments.slice(start, endExclusive);
+
+      const sourceSegmentIds = picked.map((segment) => segment.id);
+      const transcriptExcerpts = picked.map((segment) => segment.rawText).filter((text) => text.trim().length > 0);
+      const nextSection = chapter.sections[idx + 1];
+
+      assignments.push({
+        chapterNumber: chapter.number,
+        chapterTitle: chapter.title,
+        sectionNumber: section.sectionNumber,
+        heading: section.heading,
+        transcriptExcerpts,
+        quotes: [],
+        keyPoints: [],
+        voiceDNA,
+        previousSectionEnding: "",
+        nextSectionHeading: nextSection?.heading,
+        targetWordCount: Math.max(500, section.wordCount || countWords(section.body || "")),
+        alreadyCoveredPoints: [],
+        alreadyQuotedRefs: [],
+        isLastSectionInChapter: !nextSection,
+        nextChapterTitle: undefined,
+        sourceSegmentIds,
+        consumedSegmentIds: [],
+        conceptOwnershipMap: {},
+        forbiddenVerseTexts: [],
+        allowedInlineOnly: [],
+        chapterPremise: chapter.intro || undefined,
+        coreThesis: job.contentMap?.coreThesis || undefined,
+        usedIllustrations: [],
+        primaryTranslation: undefined,
+        coverageLedger: [],
+        bannedRecaps: [],
+        overusedPhrases: [],
+        sectionIndexInChapter: idx,
+        sequenceTurns: [],
+        storyPayoffPairs: [],
+        scripturePositions: [],
+        priorExcerptTail: undefined,
+        priorSectionsSample: [],
+        assignedPlan: undefined,
+      });
+    }
+  }
+
+  return assignments;
 }
 
 function toIsoOrNow(value: unknown, nowIso: string): string {
@@ -1792,7 +1869,6 @@ export function EbookPipeline({
   const [oneChapterPerUpload, setOneChapterPerUpload] = useState(false);
   // Proposal 2: single-call chapter writer — set true to try, false to revert to per-section
   const [useChapterWriter, setUseChapterWriter] = useState(false);
-  const [useSimpleDirectBookMode, setUseSimpleDirectBookMode] = useState(false);
   const [log, setLog] = useState<string[]>([]);
   const [progress, setProgress] = useState({ total: 0, completed: 0 });
   const [chapters, setChapters] = useState<ChapterDraft[]>([]);
@@ -2327,7 +2403,10 @@ export function EbookPipeline({
       setLog(job.errorLog ?? []);
       setProgress(job.progress ?? { total: 0, completed: 0 });
       setChapters(job.chapters ?? []);
-      setSectionAssignments(job.sectionAssignments ?? []);
+      const restoredAssignments = (job.sectionAssignments?.length ?? 0) > 0
+        ? (job.sectionAssignments ?? [])
+        : deriveSectionAssignmentsFromSavedJob(job);
+      setSectionAssignments(restoredAssignments);
       setSourceTranscripts(job.transcripts ?? []);
       // Restore error so the Resume button is visible after refresh
       if (job.status === "failed") {
@@ -2374,6 +2453,26 @@ export function EbookPipeline({
           syncCompletedManifest(manifest);
         }
       }
+
+      if ((job.sectionAssignments?.length ?? 0) === 0 && restoredAssignments.length > 0) {
+        const hydrated = {
+          ...job,
+          sectionAssignments: restoredAssignments,
+          updatedAt: new Date().toISOString(),
+        };
+        const persistableHydrated = sanitizeJobStateForPersistence(hydrated);
+        savedJobRef.current = persistableHydrated;
+        onJobStateChange?.(persistableHydrated);
+        try {
+          localStorage.setItem(JOB_STATE_KEY, JSON.stringify(persistableHydrated));
+        } catch {
+          // Ignore localStorage failures during restore hydration.
+        }
+        void saveEbookJob(persistableHydrated).catch(() => {
+          // Ignore IndexedDB failures during restore hydration.
+        });
+      }
+
       const words = (job.chapters ?? []).reduce((a, c) => a + (c.totalWordCount ?? 0), 0);
       if (words > 0) setTotalWords(words);
     };
@@ -3019,199 +3118,6 @@ export function EbookPipeline({
       // Use filtered transcript for all downstream steps
       const teachingTranscript = filteredTranscript || masterTranscript;
 
-      // ── Optional fast path: sermon-assistant-style direct book build ───────
-      if (useSimpleDirectBookMode) {
-        setStage("analyzing");
-        addLog("Simple Direct Book Mode: extracting Voice DNA tone…");
-        const simpleVoiceDNA = await postJson<VoiceDNA>("/api/ebook/voice-dna", { masterTranscript: teachingTranscript });
-        acc.voiceDNA = simpleVoiceDNA;
-
-        setStage("architecting");
-        addLog("Simple Direct Book Mode: preparing slot-by-slot generation…");
-        const slotTranscripts = (acc.transcripts ?? sourceTranscripts)
-          .filter((slot) => (slot.text ?? "").trim().length > 0)
-          .slice(0, 10)
-          .map((slot) => ({ label: slot.label, text: slot.text }));
-        const desiredChapters = Math.max(3, Math.min(12, slotTranscripts.length > 0 ? slotTranscripts.length : (activeSlotCount > 0 ? activeSlotCount : 6)));
-        setStage("writing");
-        const builtChapters: ChapterDraft[] = [];
-        const slotWriteList = slotTranscripts.length > 0
-          ? slotTranscripts
-          : [{ label: "Slot-1", text: teachingTranscript }];
-
-        setProgress({ total: slotWriteList.length, completed: 0 });
-
-        let bookTitleFromRuns = "";
-        let subtitleFromRuns = "";
-        let authorNameFromRuns = "the Author";
-
-        for (let slotIndex = 0; slotIndex < slotWriteList.length; slotIndex++) {
-          const slot = slotWriteList[slotIndex];
-          addLog(`Simple Direct Book Mode: writing chapter ${slotIndex + 1}/${slotWriteList.length} from ${slot.label}…`);
-
-          const simple = await postJson<SimpleBookResponse>("/api/ebook/simple-book", {
-            rawTranscript: slot.text,
-            slotTranscripts: [slot],
-            targetAudience,
-            coreThesis: "",
-            voiceTone: simpleVoiceDNA.toneProfile,
-            authorInstructions,
-            desiredChapters,
-            oneChapterPerSlot: true,
-          });
-
-          if (!bookTitleFromRuns) bookTitleFromRuns = (simple.bookTitle || "").trim();
-          if (!subtitleFromRuns) subtitleFromRuns = (simple.subtitle || "").trim();
-          authorNameFromRuns = (simple.authorName || authorNameFromRuns).trim();
-
-          const chapter = simple.chapters?.[0];
-          if (!chapter) {
-            addLog(`⚠ ${slot.label} returned no chapter; skipping`);
-            setProgress({ total: slotWriteList.length, completed: slotIndex + 1 });
-            continue;
-          }
-
-          const builtSections = (chapter.sections ?? []).map((section, sectionIndex) => {
-            const body = (section.body ?? "").trim();
-            return {
-              chapterNumber: slotIndex + 1,
-              sectionNumber: sectionIndex + 1,
-              heading: (section.heading || `Section ${sectionIndex + 1}`).trim(),
-              body,
-              wordCount: countWords(body),
-              status: "complete" as const,
-            };
-          });
-
-          const builtChapter: ChapterDraft = {
-            number: slotIndex + 1,
-            title: (chapter.title || `Chapter ${slotIndex + 1}`).trim(),
-            intro: chapter.premise?.trim() || "",
-            epigraph: "",
-            sections: builtSections,
-            forwardQuestion: "",
-            keyTakeaways: [],
-            reflectionQuestions: [],
-            totalWordCount: builtSections.reduce((sum, section) => sum + section.wordCount, 0),
-            status: "complete" as const,
-          };
-
-          builtChapters.push(builtChapter);
-          setChapters([...builtChapters]);
-          setProgress({ total: slotWriteList.length, completed: slotIndex + 1 });
-          addLog(`✓ ${slot.label} complete — ${builtChapter.totalWordCount.toLocaleString()} words`);
-        }
-
-        if (builtChapters.length === 0) {
-          throw new Error("Simple Direct Book Mode failed: no chapters were generated");
-        }
-
-        const totalSimpleWords = builtChapters.reduce((sum, chapter) => sum + chapter.totalWordCount, 0);
-        const simpleArchitecture: BookArchitecture = {
-          bookTitle: bookTitleFromRuns || (builtChapters[0]?.title || "Untitled"),
-          subtitle: subtitleFromRuns || "A transcript-grounded teaching journey",
-          authorName: authorNameFromRuns || "the Author",
-          estimatedTotalWords: totalSimpleWords,
-          chapters: builtChapters.map((chapter, chapterIdx) => ({
-            number: chapter.number,
-            title: chapter.title,
-            sourceSegmentIds: [`audio-${chapterIdx + 1}`],
-            sections: chapter.sections.map((section) => ({
-              sectionNumber: section.sectionNumber,
-              heading: section.heading,
-              sourceSegmentIds: [`audio-${chapterIdx + 1}`],
-              keyPoints: [],
-              quotesInSection: [],
-              targetWordCount: Math.max(500, section.wordCount || 0),
-              arcRole: "untagged" as const,
-            })),
-            keyTheme: chapter.intro?.trim() || chapter.title,
-            quotesInChapter: [],
-            chapterPremise: chapter.intro?.trim() || "",
-            arcFlags: [],
-          })),
-          frontMatterNotes: "",
-          backMatterNotes: "",
-          seriesArc: [],
-          droppedSegments: [],
-        };
-
-        setStage("frontmatter");
-        addLog("Simple Direct Book Mode: all chapters written — generating front/back matter in separate calls…");
-
-        const frontMatterTranscript = typeof teachingTranscript === "string" && teachingTranscript
-          ? teachingTranscript
-          : (acc.transcripts ?? slotWriteList)
-              .map((t) => `[${t.label}]\n${t.text}`)
-              .join("\n\n═══════════════════════════════════════\n\n");
-        const simpleFrontMatter = await postJson<FrontBackMatter>("/api/ebook/frontmatter", {
-          masterTranscript: frontMatterTranscript.slice(0, 14000),
-          architecture: simpleArchitecture,
-          voiceDNA: simpleVoiceDNA,
-          ...((authorInstructions || targetAudience) ? { authorConfig: { instructions: authorInstructions, targetAudience } } : {}),
-          alreadyQuotedRefs: [],
-          forbiddenVerseTexts: [],
-        });
-        addLog("✓ Simple Direct front matter complete");
-
-        const simpleManifest: EbookManifest = {
-          jobId,
-          bookTitle: bookTitleFromRuns || (builtChapters[0]?.title || "Untitled"),
-          subtitle: subtitleFromRuns || "A transcript-grounded teaching journey",
-          authorName: authorNameFromRuns || "the Author",
-          frontMatter: simpleFrontMatter,
-          chapters: builtChapters,
-          totalWordCount: totalSimpleWords,
-          allQuotes: [],
-          generatedAt: new Date().toISOString(),
-          voiceDNA: simpleVoiceDNA,
-        };
-
-        addLog("Simple Direct Book Mode: generating back matter in separate call…");
-        try {
-          const simpleBackMatter = await postJson<BackMatter>("/api/ebook/backmatter", { manifest: simpleManifest });
-          simpleManifest.backMatter = simpleBackMatter;
-          addLog(`✓ Simple Direct back matter complete — ${simpleBackMatter.glossary.length} glossary terms, ${simpleBackMatter.readingGroupGuide.length} chapter guides, ${simpleBackMatter.scriptureIndex.length} scripture references`);
-        } catch (bmErr) {
-          addLog(`⚠ Simple Direct back matter generation failed — continuing without it: ${bmErr instanceof Error ? bmErr.message : String(bmErr)}`);
-        }
-
-        const simpleContentMap: ContentMap = {
-          totalEstimatedWords: countWords(teachingTranscript),
-          overarchingThemes: builtChapters.map((chapter) => chapter.title),
-          teachingArc: "",
-          coreThesis: "",
-          targetAudience: targetAudience.trim(),
-          uniqueVocabulary: [],
-          toneMap: simpleVoiceDNA.toneProfile,
-          segments: [],
-          allQuotes: [],
-        };
-
-        setSectionAssignments([]);
-        setReviewContext({ contentMap: simpleContentMap, frontMatter: simpleFrontMatter });
-        syncCompletedManifest(simpleManifest);
-        setProgress({ total: builtChapters.reduce((sum, chapter) => sum + chapter.sections.length, 0), completed: builtChapters.reduce((sum, chapter) => sum + chapter.sections.length, 0) });
-        addLog(`✓ Simple Direct Book complete — ${simpleManifest.totalWordCount.toLocaleString()} words across ${builtChapters.length} chapters`);
-
-        acc.status = "complete";
-        acc.currentStage = "complete";
-        acc.masterTranscript = masterTranscript;
-        (acc as EbookJobState & { filteredTranscript: string; filterRemovedCount: number }).filteredTranscript = teachingTranscript;
-        acc.voiceDNA = simpleVoiceDNA;
-        acc.contentMap = simpleContentMap;
-        acc.architecture = simpleArchitecture;
-        acc.sectionAssignments = [];
-        acc.sections = builtChapters.flatMap((chapter) => chapter.sections);
-        acc.chapters = builtChapters;
-        acc.frontMatter = simpleFrontMatter;
-        acc.backMatter = simpleManifest.backMatter ?? null;
-        acc.exportUrls = null;
-        await checkpoint("complete");
-        setStage("complete");
-        return;
-      }
-
       // ── Stage 3: Voice DNA ───────────────────────────────────────────
       let voiceDNA = acc.voiceDNA;
       if (!voiceDNA) {
@@ -3484,50 +3390,11 @@ export function EbookPipeline({
           currentChapterProse = "";
           currentChapterNum = assignment.chapterNumber;
 
-          // ── Chapter-plan: Coordinate paragraph structure across all sections ──
-          // Call once per chapter to prevent concept/excerpt overlap at planning level.
-          if (chapterPlanBuiltForChapter !== assignment.chapterNumber) {
-            chapterPlanBuiltForChapter = assignment.chapterNumber;
-            chapterPlanMap.clear();
-            const chapterAssignments = assignments.filter((a) => a.chapterNumber === assignment.chapterNumber);
-            if (chapterAssignments.length > 0) {
-              addLog(`  📋 Planning Chapter ${assignment.chapterNumber} structure (${chapterAssignments.length} sections)…`);
-              try {
-                const planResult = await postJson<{ sectionPlans?: Array<{ sectionNumber: number; paragraphPlan: Array<{ purpose: string; supportedExcerptNumbers: number[] }> }> }>(
-                  "/api/ebook/chapter-plan",
-                  {
-                    chapterNumber: assignment.chapterNumber,
-                    chapterTitle: assignment.chapterTitle,
-                    nextChapterTitle: (() => {
-                      const lastChapterAssignment = chapterAssignments[chapterAssignments.length - 1];
-                      const lastIdx = assignments.indexOf(lastChapterAssignment);
-                      return assignments[lastIdx + 1]?.chapterTitle;
-                    })(),
-                    coreThesis: contentMap.coreThesis || undefined,
-                    voiceDNA,
-                    priorSectionsSample: buildProseSampleForDedup(assignment.chapterNumber),
-                    alreadyCoveredPoints: [],
-                    sections: chapterAssignments.map((a) => ({
-                      sectionNumber: a.sectionNumber,
-                      heading: a.heading,
-                      keyPoints: a.keyPoints ?? [],
-                      transcriptExcerpts: (a.transcriptExcerpts ?? []).filter((_, idx) => {
-                        const segId = (a.sourceSegmentIds ?? [])[idx];
-                        return !segId || !consumedSegmentIds.has(segId);
-                      }),
-                    })),
-                  }
-                );
-                if (planResult?.sectionPlans) {
-                  for (const sectionPlan of planResult.sectionPlans) {
-                    chapterPlanMap.set(sectionPlan.sectionNumber, sectionPlan.paragraphPlan ?? []);
-                  }
-                }
-              } catch (planErr) {
-                console.warn("[chapter-plan] failed:", planErr);
-              }
-            }
-          }
+          // ── Chapter-plan SKIPPED ──
+          // Removed to trust LLM directly in write-section stage. Write-section now uses
+          // coverageLedger + bannedRecaps to prevent concept duplication across sections.
+          // Cost savings: ~30 sec + ~$0.10-0.20 per chapter
+          // Quality: LLM handles concept ownership naturally without intermediate planning stage
 
           // ── Proposal 2: single-call chapter writer ──────────────────────
           // When useChapterWriter is on, write ALL sections of this chapter
@@ -4264,36 +4131,6 @@ export function EbookPipeline({
               </p>
             </div>
           </div>
-
-            <div
-              role="switch"
-              aria-checked={useSimpleDirectBookMode}
-              onClick={() => !isRunning && setUseSimpleDirectBookMode((v) => !v)}
-              className={[
-                "flex items-center gap-3 min-h-[52px] rounded-xl border border-slate-700/40 bg-slate-950/50 px-3 py-3",
-                !isRunning ? "cursor-pointer" : "cursor-not-allowed opacity-60",
-              ].join(" ")}
-            >
-              <div
-                className={[
-                  "flex-shrink-0 w-9 h-5 rounded-full transition-colors pointer-events-none",
-                  useSimpleDirectBookMode ? "bg-amber-500" : "bg-slate-700",
-                ].join(" ")}
-              >
-                <span
-                  className={[
-                    "block w-4 h-4 rounded-full bg-white shadow transition-transform mx-0.5 mt-0.5",
-                    useSimpleDirectBookMode ? "translate-x-4" : "translate-x-0",
-                  ].join(" ")}
-                />
-              </div>
-              <div className="select-none">
-                <p className="text-sm font-medium text-slate-200 leading-tight">Simple Direct Book Mode</p>
-                <p className="text-[10px] text-slate-500 mt-0.5">
-                  Sermon-assistant-style path. One pass builds a complete draft with direct LLM trust, then opens review immediately for quick A/B testing.
-                </p>
-              </div>
-            </div>
         </div>
       </div>
 

@@ -217,6 +217,7 @@ function EbookPageClient() {
       }
 
       localStorage.setItem(JOB_STATE_KEY, JSON.stringify(jobParsed.data));
+      localStorage.setItem(JOB_STORAGE_KEY, jobParsed.data.jobId);
       if (typeof parsed.projectId === "string") setCurrentProjectId(parsed.projectId);
 
       const manifestParsed = EbookManifestSchema.safeParse(parsed.ebookManifest);
@@ -245,6 +246,7 @@ function EbookPageClient() {
 
     try {
       localStorage.setItem(JOB_STATE_KEY, JSON.stringify(project.jobState));
+      localStorage.setItem(JOB_STORAGE_KEY, project.jobState.jobId);
       setCurrentProjectId(project.id);
       const job = project.jobState;
       if (job.architecture && job.frontMatter && job.contentMap) {
@@ -356,6 +358,7 @@ function EbookPageClient() {
       const parsed = normalizeJobStateForSave(fromStore);
       if (!hasResumableProgress(parsed)) return null;
       localStorage.setItem(JOB_STATE_KEY, JSON.stringify(parsed));
+      localStorage.setItem(JOB_STORAGE_KEY, parsed.jobId);
       return parsed;
     } catch {
       return null;
@@ -437,6 +440,7 @@ function EbookPageClient() {
       };
       await saveEbookProject(project);
       localStorage.setItem(JOB_STATE_KEY, JSON.stringify(project.jobState));
+      localStorage.setItem(JOB_STORAGE_KEY, project.jobState.jobId);
       liveJobStateRef.current = project.jobState;
       setCurrentProjectId(id);
       setProjects(await listEbookProjects());
@@ -475,6 +479,7 @@ function EbookPageClient() {
     if (!p) return;
     try {
       localStorage.setItem(JOB_STATE_KEY, JSON.stringify(p.jobState));
+      localStorage.setItem(JOB_STORAGE_KEY, p.jobState.jobId);
       liveJobStateRef.current = p.jobState;
       setCurrentProjectId(p.id);
       const job = p.jobState;
@@ -562,6 +567,7 @@ function EbookPageClient() {
     setProjects(await listEbookProjects());
     setCurrentProjectId(project.id);
     localStorage.setItem(JOB_STATE_KEY, JSON.stringify(project.jobState));
+    localStorage.setItem(JOB_STORAGE_KEY, project.jobState.jobId);
     liveJobStateRef.current = project.jobState;
     setPipelineKey((k) => k + 1);
     // Mirror imported project to cloud snapshot store (best-effort)
@@ -783,6 +789,7 @@ function EbookPageClient() {
     }
 
     localStorage.setItem(JOB_STATE_KEY, JSON.stringify(job));
+    localStorage.setItem(JOB_STORAGE_KEY, job.jobId);
     liveJobStateRef.current = job;
     setCurrentProjectId((prev) => prev || job.jobId);
 

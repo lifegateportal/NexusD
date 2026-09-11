@@ -51,6 +51,24 @@ const SimpleBookSchema = z.object({
   chapters: z.array(ChapterSchema).default([]),
 });
 
+type SimpleSourceSegment = {
+  id: string;
+  sourceAudio: `audio-${number}`;
+  topic: string;
+  rawText: string;
+  estimatedWordCount: number;
+};
+
+type SimpleSectionSourceLink = {
+  chapterNumber: number;
+  chapterTitle: string;
+  sectionNumber: number;
+  heading: string;
+  sourceSegmentIds: string[];
+  transcriptExcerpts: string[];
+  keyPoints: string[];
+};
+
 function nonEmptySubtitle(targetAudience: string, coreThesis: string): string {
   const audience = targetAudience.trim();
   const thesis = coreThesis.trim();
@@ -260,6 +278,78 @@ function normalizeSimpleBook(object: z.infer<typeof SimpleBookSchema>, input: z.
   };
 }
 
+function buildSlotSourceSegments(slotText: string, sourceAudio: `audio-${number}`, maxSegments = 24): SimpleSourceSegment[] {
+  const paragraphs = slotText
+    .split(/\n\s*\n/g)
+    .map((p) => p.replace(/\s+/g, " ").trim())
+    .filter((p) => p.length > 30);
+
+  const chunks: string[] = [];
+  let current = "";
+  let currentWords = 0;
+  const targetWords = 150;
+
+  for (const para of paragraphs) {
+    const paraWords = countWords(para);
+    if (currentWords >= targetWords && chunks.length < maxSegments - 1) {
+      chunks.push(current.trim());
+      current = para;
+      currentWords = paraWords;
+      continue;
+    }
+    current = current ? `${current} ${para}` : para;
+    currentWords += paraWords;
+  }
+  if (current.trim()) {
+    chunks.push(current.trim());
+  }
+
+  if (chunks.length === 0) {
+    const normalized = slotText.replace(/\s+/g, " ").trim();
+    if (normalized) {
+      chunks.push(normalized);
+    }
+  }
+
+  return chunks.slice(0, maxSegments).map((rawText, idx) => {
+    const firstSentence = rawText.split(/(?<=[.!?])\s+/).find((s) => s.trim().length > 12) || rawText;
+    const topic = firstSentence.split(/[,:;.!?]/)[0].trim().split(/\s+/).slice(0, 8).join(" ") || `Segment ${idx + 1}`;
+    return {
+      id: `${sourceAudio}-seg-${idx + 1}`,
+      sourceAudio,
+      topic,
+      rawText,
+      estimatedWordCount: countWords(rawText),
+    };
+  });
+}
+
+function mapChapterSectionsToSourceLinks(
+  chapter: z.infer<typeof ChapterSchema>,
+  segments: SimpleSourceSegment[],
+): SimpleSectionSourceLink[] {
+  const sectionCount = Math.max(1, chapter.sections.length);
+  const segmentCount = Math.max(1, segments.length);
+
+  return chapter.sections.map((section, idx) => {
+    const start = Math.floor((idx * segmentCount) / sectionCount);
+    const endExclusive = Math.max(start + 1, Math.floor(((idx + 1) * segmentCount) / sectionCount));
+    const chosen = segments.slice(start, endExclusive);
+    const sourceSegmentIds = chosen.map((segment) => segment.id);
+    const transcriptExcerpts = chosen.map((segment) => segment.rawText);
+
+    return {
+      chapterNumber: chapter.number,
+      chapterTitle: chapter.title,
+      sectionNumber: section.sectionNumber,
+      heading: section.heading,
+      sourceSegmentIds,
+      transcriptExcerpts,
+      keyPoints: (section.keyClaims ?? []).map((claim) => claim.trim()).filter(Boolean),
+    };
+  });
+}
+
 function normalizeSlotChapter(object: z.infer<typeof SlotChapterSchema>, chapterNumber: number): z.infer<typeof ChapterSchema> {
   return {
     number: chapterNumber,
@@ -412,6 +502,8 @@ ${sourceBlock}`;
   try {
     if (usingSlots && slotBlocks.length > 0) {
       const chapters: z.infer<typeof ChapterSchema>[] = [];
+      const sourceSegments: SimpleSourceSegment[] = [];
+      const sectionSourceLinks: SimpleSectionSourceLink[] = [];
       let allSectionClaims: string[] = [];
 
       for (let i = 0; i < slotBlocks.length; i++) {
@@ -534,7 +626,13 @@ ${slot.text}${priorClaimsBlock}`;
           );
         }
 
+        const sourceAudio = slot.sourceId as `audio-${number}`;
+        const slotSegments = buildSlotSourceSegments(slot.fullText, sourceAudio);
+        const slotLinks = mapChapterSectionsToSourceLinks(normalizedChapter, slotSegments);
+
         chapters.push(normalizedChapter);
+        sourceSegments.push(...slotSegments);
+        sectionSourceLinks.push(...slotLinks);
         allSectionClaims = [
           ...allSectionClaims,
           ...normalizedChapter.sections.flatMap((section) => (section.keyClaims ?? []).map((claim) => claim.trim()).filter(Boolean)),
@@ -550,7 +648,11 @@ ${slot.text}${priorClaimsBlock}`;
       };
 
       const normalizedSlotsBook = normalizeSimpleBook(bookFromSlots, input);
-      return NextResponse.json(normalizedSlotsBook);
+      return NextResponse.json({
+        ...normalizedSlotsBook,
+        sourceSegments,
+        sectionSourceLinks,
+      });
     }
 
     for (let attempt = 0; attempt < 2; attempt++) {
