@@ -80,6 +80,39 @@ export type EbookPipelineSnapshot = {
   frontMatterSections: number;
 };
 
+type SimpleBookResponse = {
+  bookTitle: string;
+  subtitle: string;
+  authorName: string;
+  sourceSegments?: Array<{
+    id: string;
+    sourceAudio: `audio-${number}`;
+    topic: string;
+    rawText: string;
+    estimatedWordCount: number;
+  }>;
+  sectionSourceLinks?: Array<{
+    chapterNumber: number;
+    chapterTitle: string;
+    sectionNumber: number;
+    heading: string;
+    sourceSegmentIds: string[];
+    transcriptExcerpts: string[];
+    keyPoints: string[];
+  }>;
+  chapters: Array<{
+    number: number;
+    title: string;
+    premise?: string;
+    sections: Array<{
+      sectionNumber: number;
+      heading: string;
+      body: string;
+      keyClaims?: string[];
+    }>;
+  }>;
+};
+
 function routeLabel(url: string): string {
   return url.split("/").filter(Boolean).slice(-2).join("/");
 }
@@ -1866,6 +1899,7 @@ export function EbookPipeline({
   const [stage, setStage] = useState<PipelineStage>("idle");
   const [authorInstructions, setAuthorInstructions] = useState("");
   const [targetAudience, setTargetAudience] = useState("");
+  const [useSimpleDirectBookMode, setUseSimpleDirectBookMode] = useState(false);
   const [oneChapterPerUpload, setOneChapterPerUpload] = useState(false);
   // Proposal 2: single-call chapter writer — set true to try, false to revert to per-section
   const [useChapterWriter, setUseChapterWriter] = useState(false);
@@ -3118,6 +3152,296 @@ export function EbookPipeline({
       // Use filtered transcript for all downstream steps
       const teachingTranscript = filteredTranscript || masterTranscript;
 
+      // Optional fast path: simple direct pipeline (slot -> chapter)
+      if (useSimpleDirectBookMode) {
+        setStage("analyzing");
+        addLog("Simple Direct Book Mode: extracting Voice DNA tone…");
+        const simpleVoiceDNA = await postJson<VoiceDNA>("/api/ebook/voice-dna", { masterTranscript: teachingTranscript });
+        acc.voiceDNA = simpleVoiceDNA;
+
+        setStage("writing");
+        const slotTranscripts = (acc.transcripts ?? sourceTranscripts)
+          .filter((slot) => (slot.text ?? "").trim().length > 0)
+          .slice(0, 10)
+          .map((slot) => ({ label: slot.label, text: slot.text }));
+        const slotWriteList = slotTranscripts.length > 0
+          ? slotTranscripts
+          : [{ label: "Slot-1", text: teachingTranscript }];
+
+        const desiredChapters = Math.max(3, Math.min(12, slotWriteList.length));
+        const builtChapters: ChapterDraft[] = [];
+        const simpleSegments: ContentMap["segments"] = [];
+        const simpleAssignments: SectionAssignment[] = [];
+
+        setProgress({ total: slotWriteList.length, completed: 0 });
+        acc.progress = { total: slotWriteList.length, completed: 0 };
+        acc.chapters = [];
+        acc.sections = [];
+        acc.sectionAssignments = [];
+        await checkpoint("writing");
+
+        let bookTitleFromRuns = "";
+        let subtitleFromRuns = "";
+        let authorNameFromRuns = "the Author";
+
+        for (let slotIndex = 0; slotIndex < slotWriteList.length; slotIndex++) {
+          const slot = slotWriteList[slotIndex];
+          const chapterNumber = slotIndex + 1;
+          const sourceAudio = `audio-${chapterNumber}` as ContentMap["segments"][number]["sourceAudio"];
+
+          addLog(`Simple Direct Book Mode: writing chapter ${chapterNumber}/${slotWriteList.length} from ${slot.label}…`);
+
+          const simple = await postJson<SimpleBookResponse>("/api/ebook/simple-book", {
+            rawTranscript: slot.text,
+            slotTranscripts: [slot],
+            targetAudience,
+            coreThesis: "",
+            voiceTone: simpleVoiceDNA.toneProfile,
+            authorInstructions,
+            desiredChapters,
+            oneChapterPerSlot: true,
+          });
+
+          if (!bookTitleFromRuns) bookTitleFromRuns = (simple.bookTitle || "").trim();
+          if (!subtitleFromRuns) subtitleFromRuns = (simple.subtitle || "").trim();
+          authorNameFromRuns = (simple.authorName || authorNameFromRuns).trim();
+
+          const chapter = simple.chapters?.[0];
+          if (!chapter) {
+            throw new Error(`Simple Direct Book Mode failed: ${slot.label} returned no chapter`);
+          }
+
+          const builtSections = (chapter.sections ?? []).map((section, sectionIndex) => {
+            const body = (section.body ?? "").trim();
+            return {
+              chapterNumber,
+              sectionNumber: sectionIndex + 1,
+              heading: (section.heading || `Section ${sectionIndex + 1}`).trim(),
+              body,
+              wordCount: countWords(body),
+              status: "complete" as const,
+            };
+          });
+
+          const builtChapter: ChapterDraft = {
+            number: chapterNumber,
+            title: (chapter.title || `Chapter ${chapterNumber}`).trim(),
+            intro: chapter.premise?.trim() || "",
+            epigraph: "",
+            sections: builtSections,
+            forwardQuestion: "",
+            keyTakeaways: [],
+            reflectionQuestions: [],
+            totalWordCount: builtSections.reduce((sum, section) => sum + section.wordCount, 0),
+            status: "complete" as const,
+          };
+
+          builtChapters.push(builtChapter);
+          setChapters([...builtChapters]);
+
+          const responseSegments = (simple.sourceSegments ?? []).filter((seg) => (seg.rawText ?? "").trim().length > 0);
+          const mappedSegments = responseSegments.length > 0
+            ? responseSegments.map((seg, idx) => ({
+                id: `${sourceAudio}-seg-${idx + 1}`,
+                sourceAudio,
+                topic: (seg.topic || `Segment ${idx + 1}`).trim(),
+                rawText: seg.rawText,
+                keyPoints: [],
+                quotes: [],
+                estimatedWordCount: Math.max(1, seg.estimatedWordCount || countWords(seg.rawText)),
+              }))
+            : [{
+                id: `${sourceAudio}-seg-1`,
+                sourceAudio,
+                topic: slot.label,
+                rawText: slot.text,
+                keyPoints: [],
+                quotes: [],
+                estimatedWordCount: Math.max(1, countWords(slot.text)),
+              }];
+          simpleSegments.push(...mappedSegments);
+
+          const responseLinks = (simple.sectionSourceLinks ?? []).filter((l) => (l.chapterNumber || chapterNumber) > 0);
+          const chapterLinks = responseLinks.length > 0
+            ? responseLinks
+            : builtSections.map((section) => ({
+                chapterNumber,
+                chapterTitle: builtChapter.title,
+                sectionNumber: section.sectionNumber,
+                heading: section.heading,
+                sourceSegmentIds: mappedSegments.map((segment) => segment.id),
+                transcriptExcerpts: mappedSegments.map((segment) => segment.rawText),
+                keyPoints: [],
+              }));
+
+          for (let i = 0; i < builtSections.length; i++) {
+            const section = builtSections[i];
+            const link = chapterLinks.find((l) => l.sectionNumber === section.sectionNumber) ?? chapterLinks[i];
+            const nextSection = builtSections[i + 1];
+            const linkedIds = (link?.sourceSegmentIds ?? []).filter(Boolean);
+            const resolvedIds = linkedIds.length > 0 ? linkedIds : mappedSegments.map((segment) => segment.id);
+            const resolvedExcerpts = resolvedIds
+              .map((id) => mappedSegments.find((segment) => segment.id === id)?.rawText || "")
+              .filter((text) => text.trim().length > 0);
+
+            simpleAssignments.push({
+              chapterNumber,
+              chapterTitle: builtChapter.title,
+              sectionNumber: section.sectionNumber,
+              heading: section.heading,
+              transcriptExcerpts: resolvedExcerpts,
+              quotes: [],
+              keyPoints: (link?.keyPoints ?? []).map((point) => point.trim()).filter(Boolean),
+              voiceDNA: simpleVoiceDNA,
+              previousSectionEnding: "",
+              nextSectionHeading: nextSection?.heading,
+              targetWordCount: Math.max(500, section.wordCount),
+              alreadyCoveredPoints: [],
+              alreadyQuotedRefs: [],
+              isLastSectionInChapter: !nextSection,
+              nextChapterTitle: undefined,
+              sourceSegmentIds: resolvedIds,
+              consumedSegmentIds: [],
+              conceptOwnershipMap: {},
+              forbiddenVerseTexts: [],
+              allowedInlineOnly: [],
+              chapterPremise: builtChapter.intro || undefined,
+              coreThesis: undefined,
+              usedIllustrations: [],
+              primaryTranslation: undefined,
+              coverageLedger: [],
+              bannedRecaps: [],
+              overusedPhrases: [],
+              sectionIndexInChapter: i,
+              sequenceTurns: [],
+              storyPayoffPairs: [],
+              scripturePositions: [],
+              priorExcerptTail: undefined,
+              priorSectionsSample: [],
+              assignedPlan: undefined,
+            });
+          }
+
+          setProgress({ total: slotWriteList.length, completed: chapterNumber });
+          acc.chapters = [...builtChapters];
+          acc.sections = builtChapters.flatMap((ch) => ch.sections);
+          acc.sectionAssignments = [...simpleAssignments];
+          acc.progress = { total: slotWriteList.length, completed: chapterNumber };
+          await checkpoint("writing");
+          addLog(`✓ ${slot.label} complete — ${builtChapter.totalWordCount.toLocaleString()} words`);
+        }
+
+        if (builtChapters.length === 0) {
+          throw new Error("Simple Direct Book Mode failed: no chapters were generated");
+        }
+
+        const totalSimpleWords = builtChapters.reduce((sum, chapter) => sum + chapter.totalWordCount, 0);
+        const simpleArchitecture: BookArchitecture = {
+          bookTitle: bookTitleFromRuns || (builtChapters[0]?.title || "Untitled"),
+          subtitle: subtitleFromRuns || "A transcript-grounded teaching journey",
+          authorName: authorNameFromRuns || "the Author",
+          estimatedTotalWords: totalSimpleWords,
+          chapters: builtChapters.map((chapter, chapterIdx) => ({
+            number: chapter.number,
+            title: chapter.title,
+            sourceSegmentIds: [`audio-${chapterIdx + 1}`],
+            sections: chapter.sections.map((section) => ({
+              sectionNumber: section.sectionNumber,
+              heading: section.heading,
+              sourceSegmentIds: [`audio-${chapterIdx + 1}`],
+              keyPoints: [],
+              quotesInSection: [],
+              targetWordCount: Math.max(500, section.wordCount || 0),
+              arcRole: "untagged" as const,
+            })),
+            keyTheme: chapter.intro?.trim() || chapter.title,
+            quotesInChapter: [],
+            chapterPremise: chapter.intro?.trim() || "",
+            arcFlags: [],
+          })),
+          frontMatterNotes: "",
+          backMatterNotes: "",
+          seriesArc: [],
+          droppedSegments: [],
+        };
+
+        setStage("frontmatter");
+        addLog("Simple Direct Book Mode: all chapters written — generating front/back matter in separate calls…");
+
+        const simpleContentMap: ContentMap = {
+          totalEstimatedWords: simpleSegments.reduce((sum, segment) => sum + segment.estimatedWordCount, 0),
+          overarchingThemes: builtChapters.map((chapter) => chapter.title),
+          teachingArc: "",
+          coreThesis: "",
+          targetAudience: targetAudience.trim(),
+          uniqueVocabulary: [],
+          toneMap: simpleVoiceDNA.toneProfile,
+          segments: simpleSegments,
+          allQuotes: [],
+        };
+
+        const frontMatterTranscript = typeof teachingTranscript === "string" && teachingTranscript
+          ? teachingTranscript
+          : slotWriteList
+              .map((t) => `[${t.label}]\n${t.text}`)
+              .join("\n\n═══════════════════════════════════════\n\n");
+        const simpleFrontMatter = await postJson<FrontBackMatter>("/api/ebook/frontmatter", {
+          masterTranscript: frontMatterTranscript.slice(0, 14000),
+          architecture: simpleArchitecture,
+          voiceDNA: simpleVoiceDNA,
+          ...((authorInstructions || targetAudience) ? { authorConfig: { instructions: authorInstructions, targetAudience } } : {}),
+          alreadyQuotedRefs: [],
+          forbiddenVerseTexts: [],
+        });
+        addLog("✓ Simple Direct front matter complete");
+
+        const simpleManifest: EbookManifest = {
+          jobId,
+          bookTitle: bookTitleFromRuns || (builtChapters[0]?.title || "Untitled"),
+          subtitle: subtitleFromRuns || "A transcript-grounded teaching journey",
+          authorName: authorNameFromRuns || "the Author",
+          frontMatter: simpleFrontMatter,
+          chapters: builtChapters,
+          totalWordCount: totalSimpleWords,
+          allQuotes: [],
+          generatedAt: new Date().toISOString(),
+          voiceDNA: simpleVoiceDNA,
+          backMatter: null,
+        };
+
+        addLog("Simple Direct Book Mode: generating back matter in separate call…");
+        try {
+          const simpleBackMatter = await postJson<BackMatter>("/api/ebook/backmatter", { manifest: simpleManifest });
+          simpleManifest.backMatter = simpleBackMatter;
+          addLog(`✓ Simple Direct back matter complete — ${simpleBackMatter.glossary.length} glossary terms, ${simpleBackMatter.readingGroupGuide.length} chapter guides, ${simpleBackMatter.scriptureIndex.length} scripture references`);
+        } catch (bmErr) {
+          addLog(`⚠ Simple Direct back matter generation failed — continuing without it: ${bmErr instanceof Error ? bmErr.message : String(bmErr)}`);
+        }
+
+        setSectionAssignments(simpleAssignments);
+        setReviewContext({ contentMap: simpleContentMap, frontMatter: simpleFrontMatter });
+        syncCompletedManifest(simpleManifest);
+        setProgress({ total: builtChapters.reduce((sum, chapter) => sum + chapter.sections.length, 0), completed: builtChapters.reduce((sum, chapter) => sum + chapter.sections.length, 0) });
+        addLog(`✓ Simple Direct Book complete — ${simpleManifest.totalWordCount.toLocaleString()} words across ${builtChapters.length} chapters`);
+
+        acc.status = "complete";
+        acc.currentStage = "complete";
+        acc.masterTranscript = masterTranscript;
+        (acc as EbookJobState & { filteredTranscript: string; filterRemovedCount: number }).filteredTranscript = teachingTranscript;
+        acc.voiceDNA = simpleVoiceDNA;
+        acc.contentMap = simpleContentMap;
+        acc.architecture = simpleArchitecture;
+        acc.sectionAssignments = simpleAssignments;
+        acc.sections = builtChapters.flatMap((chapter) => chapter.sections);
+        acc.chapters = builtChapters;
+        acc.frontMatter = simpleFrontMatter;
+        acc.backMatter = simpleManifest.backMatter ?? null;
+        acc.exportUrls = null;
+        await checkpoint("complete");
+        setStage("complete");
+        return;
+      }
+
       // ── Stage 3: Voice DNA ───────────────────────────────────────────
       let voiceDNA = acc.voiceDNA;
       if (!voiceDNA) {
@@ -4067,6 +4391,37 @@ export function EbookPipeline({
               disabled={isRunning}
             />
             <p className="mt-1 text-[10px] text-slate-600">Tell the AI how you want your book to read. Be specific about tone, vocabulary level, and style.</p>
+          </div>
+
+          {/* Simple direct mode toggle */}
+          <div
+            role="switch"
+            aria-checked={useSimpleDirectBookMode}
+            onClick={() => !isRunning && setUseSimpleDirectBookMode((v) => !v)}
+            className={[
+              "flex items-center gap-3 min-h-[52px] rounded-xl border border-cyan-500/25 bg-cyan-500/5 px-3 py-3",
+              !isRunning ? "cursor-pointer" : "cursor-not-allowed opacity-60",
+            ].join(" ")}
+          >
+            <div
+              className={[
+                "flex-shrink-0 w-9 h-5 rounded-full transition-colors pointer-events-none",
+                useSimpleDirectBookMode ? "bg-cyan-500" : "bg-slate-700",
+              ].join(" ")}
+            >
+              <span
+                className={[
+                  "block w-4 h-4 rounded-full bg-white shadow transition-transform mx-0.5 mt-0.5",
+                  useSimpleDirectBookMode ? "translate-x-4" : "translate-x-0",
+                ].join(" ")}
+              />
+            </div>
+            <div className="select-none">
+              <p className="text-sm font-medium text-slate-200 leading-tight">Simple Direct Book Mode</p>
+              <p className="text-[10px] text-slate-500 mt-0.5">
+                Uses direct slot-to-chapter generation through simple-book for faster production while preserving source-map and save/reload behavior.
+              </p>
+            </div>
           </div>
 
           {/* Chapter mode toggle — entire row is the tap target */}
