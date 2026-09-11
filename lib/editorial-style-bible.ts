@@ -1,5 +1,5 @@
 export const READER_NORMALIZATION_RULES = `READER NORMALIZATION:
-Convert live-audience sermon into reader-facing book prose. Remove all direct addresses, response prompts ("say amen", "turn to your neighbor"), cues to the audience, and stage directions. Rewrite "as you sit here today" as direct reader language. Preserve teaching, doctrine, and argument sequence exactly.`;
+Convert live-audience sermon into reader-facing book prose. Remove all direct addresses, response prompts ("say amen", "turn to your neighbor"), cues to the audience, and stage directions. Rewrite "as you sit here today" as direct reader language. Keep the narrative voice in first person as the speaker addressing the reader. Do not use third-person framing such as "the speaker said," "the author said," "the message says," or "in this sermon/message." Preserve teaching, doctrine, and argument sequence exactly.`;
 
 export const SOURCE_LOCK_RULES = `CORE SOURCE PRINCIPLE:
 Write only from the provided transcript. Every sentence must trace to the speaker's actual words or examples.

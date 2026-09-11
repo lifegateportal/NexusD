@@ -399,6 +399,11 @@ export async function POST(req: NextRequest) {
 
   const system = `You are a bestselling nonfiction ghostwriter commissioned to transform sermon transcripts into a premium, publication-ready book manuscript.
 
+VOICE IDENTITY (HARD RULE):
+- Write in first person as the original speaker/author addressing the reader directly.
+- Never narrate from outside the voice. Forbidden framing: "the speaker said," "the author said," "the message says," "in this sermon," "in this message."
+- Never describe the speaker in third person.
+
 You must produce a clean, publication-ready book draft from sermon transcript material using one deterministic philosophy:
 - Simple and direct structure like Sermon Assistant
 - Strong chapter titles and section headings
@@ -423,6 +428,7 @@ NON-NEGOTIABLE RULES:
 15) Remove all pulpit and live-audience language from narration. Forbidden examples: "say amen", "turn to your neighbor", "lift your hands", "good morning church".
 16) Thoroughness is mandatory: cover the full transcript and all significant teaching blocks, not just highlights.
 17) Never paste transcript blocks verbatim. Rewrite into publication-ready prose with clear section flow and transitions.
+18) Keep all prose reader-facing book language. No live-service framing, no stage cues, and no third-person references to the speaker.
 
 ${SOURCE_LOCK_RULES}`;
 
@@ -443,6 +449,8 @@ ${SOURCE_LOCK_RULES}`;
     : `RAW TRANSCRIPT:\n${transcriptForPrompt}`;
 
   const prompt = `Create a simple, sermon-assistant-style book in one pass.
+
+Write as a ghostwriter in the speaker's first-person voice throughout the manuscript.
 
 DESIRED CHAPTER COUNT: ${input.desiredChapters}
 TARGET AUDIENCE: ${input.targetAudience || "(not provided)"}
@@ -524,6 +532,11 @@ HARD ASSIGNMENT:
 - Use only this slot's transcript material.
 - Output ONLY a chapter object (not a full book object).
 
+      VOICE IDENTITY (HARD RULE):
+      - Write fully in first person as the original speaker/author.
+      - Do not write third-person references such as "the speaker said," "the author said," or "the message says."
+      - Remove all live-audience and pulpit-stage language.
+
 CHAPTER CONTEXT:
 CHAPTER NUMBER: ${chapterNumber}
 TARGET AUDIENCE: ${input.targetAudience || "(not provided)"}
@@ -562,7 +575,7 @@ ${slot.text}${priorClaimsBlock}`;
               model: deepSeekReasonerModel,
               schema: SlotChapterSchema,
               mode: "json",
-              temperature: 0.25,
+              temperature: 0.28,
               maxTokens,
               system,
               prompt: attemptPrompt,
@@ -585,7 +598,7 @@ ${slot.text}${priorClaimsBlock}`;
           try {
             const { text } = await generateText({
               model: deepSeekReasonerModel,
-              temperature: 0.25,
+              temperature: 0.28,
               maxTokens,
               system,
               prompt: `${slotPrompt}\n\nReturn ONLY JSON in this exact shape:\n${slotChapterTemplate}`,
@@ -661,7 +674,7 @@ ${slot.text}${priorClaimsBlock}`;
           model: deepSeekReasonerModel,
           schema: SimpleBookSchema,
           mode: "json",
-          temperature: 0.25,
+          temperature: 0.28,
           maxTokens,
           system,
           prompt: `${prompt}\n\n${storyIntegrationBlock}`,
@@ -677,7 +690,7 @@ ${slot.text}${priorClaimsBlock}`;
 
     const { text } = await generateText({
       model: deepSeekReasonerModel,
-      temperature: 0.25,
+      temperature: 0.28,
       maxTokens,
       system,
       prompt: `${prompt}\n\n${storyIntegrationBlock}\n\nReturn ONLY JSON in this exact shape:\n${jsonTemplate}`,
