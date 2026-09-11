@@ -278,13 +278,13 @@ function normalizeSimpleBook(object: z.infer<typeof SimpleBookSchema>, input: z.
   };
 }
 
-function buildSlotSourceSegments(slotText: string, sourceAudio: `audio-${number}`, maxSegments = 24): SimpleSourceSegment[] {
+function buildSlotSourceSegments(slotText: string, sourceAudio: `audio-${number}`, maxSegments = 80): SimpleSourceSegment[] {
   const paragraphs = slotText
     .split(/\n\s*\n/g)
     .map((p) => p.replace(/\s+/g, " ").trim())
     .filter((p) => p.length > 30);
 
-  const chunks: string[] = [];
+  let chunks: string[] = [];
   let current = "";
   let currentWords = 0;
   const targetWords = 150;
@@ -311,7 +311,13 @@ function buildSlotSourceSegments(slotText: string, sourceAudio: `audio-${number}
     }
   }
 
-  return chunks.slice(0, maxSegments).map((rawText, idx) => {
+  if (chunks.length > maxSegments) {
+    const head = chunks.slice(0, maxSegments - 1);
+    const overflow = chunks.slice(maxSegments - 1).join(" ");
+    chunks = overflow.trim().length > 0 ? [...head, overflow] : head;
+  }
+
+  return chunks.map((rawText, idx) => {
     const firstSentence = rawText.split(/(?<=[.!?])\s+/).find((s) => s.trim().length > 12) || rawText;
     const topic = firstSentence.split(/[,:;.!?]/)[0].trim().split(/\s+/).slice(0, 8).join(" ") || `Segment ${idx + 1}`;
     return {

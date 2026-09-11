@@ -47,6 +47,56 @@ function hasResumableProgress(job: EbookJobState | null): boolean {
   );
 }
 
+function canBuildCompletedManifest(job: EbookJobState | null): job is EbookJobState {
+  if (!job) return false;
+  return Boolean(job.frontMatter && (job.chapters?.length ?? 0) > 0);
+}
+
+function deriveManifestIdentity(job: EbookJobState, fallbackTitle?: string): {
+  bookTitle: string;
+  subtitle: string;
+  authorName: string;
+} {
+  const chapterTitle = (job.chapters ?? [])
+    .map((chapter) => chapter.title?.trim() ?? "")
+    .find((title) => title.length > 0);
+
+  return {
+    bookTitle: (job.architecture?.bookTitle || fallbackTitle || chapterTitle || "Untitled").trim(),
+    subtitle: (job.architecture?.subtitle || "A transcript-grounded teaching journey").trim(),
+    authorName: (job.architecture?.authorName || "the Author").trim(),
+  };
+}
+
+function buildManifestFromCompletedJob(
+  job: EbookJobState,
+  options?: {
+    fallbackTitle?: string;
+    coverImageUrl?: string | null;
+    authorImageUrl?: string | null;
+    narrationUrls?: Record<string, string>;
+  }
+): EbookManifest {
+  const identity = deriveManifestIdentity(job, options?.fallbackTitle);
+  return {
+    jobId: job.jobId,
+    bookTitle: identity.bookTitle,
+    subtitle: identity.subtitle,
+    authorName: identity.authorName,
+    frontMatter: job.frontMatter!,
+    chapters: job.chapters ?? [],
+    totalWordCount: (job.chapters ?? []).reduce((sum, chapter) => sum + (chapter.totalWordCount ?? 0), 0),
+    allQuotes: job.contentMap?.allQuotes ?? [],
+    generatedAt: job.updatedAt ?? new Date().toISOString(),
+    selectedTemplate: "devotional",
+    printSpec: { trimSize: "6x9", runningHeaders: true, bleed: false, cropMarks: false, folioStyle: "center", frontMatterNumbering: "arabic", sectionOrnament: "rule" },
+    coverImageUrl: options?.coverImageUrl ?? null,
+    authorImageUrl: options?.authorImageUrl ?? null,
+    narrationUrls: options?.narrationUrls,
+    backMatter: job.backMatter ?? null,
+  };
+}
+
 type Tab = "pipeline" | "projects" | "manuscript";
 
 export default function EbookPage() {
@@ -249,23 +299,12 @@ function EbookPageClient() {
       localStorage.setItem(JOB_STORAGE_KEY, project.jobState.jobId);
       setCurrentProjectId(project.id);
       const job = project.jobState;
-      if (job.architecture && job.frontMatter && (job.chapters?.length ?? 0) > 0) {
-        setEbookManifest({
-          jobId: job.jobId,
-          bookTitle: job.architecture.bookTitle,
-          subtitle: job.architecture.subtitle,
-          authorName: job.architecture.authorName,
-          frontMatter: job.frontMatter,
-          chapters: job.chapters ?? [],
-          totalWordCount: (job.chapters ?? []).reduce((sum, chapter) => sum + (chapter.totalWordCount ?? 0), 0),
-          allQuotes: job.contentMap?.allQuotes ?? [],
-          generatedAt: new Date().toISOString(),
-          selectedTemplate: "devotional",
-          printSpec: { trimSize: "6x9", runningHeaders: true, bleed: false, cropMarks: false, folioStyle: "center", frontMatterNumbering: "arabic", sectionOrnament: "rule" },
+      if (canBuildCompletedManifest(job)) {
+        setEbookManifest(buildManifestFromCompletedJob(job, {
+          fallbackTitle: project.bookTitle || project.name,
           coverImageUrl: project.coverImageUrl ?? null,
           authorImageUrl: project.authorImageUrl ?? null,
-          backMatter: job.backMatter ?? null,
-        });
+        }));
       }
       setPipelineKey((k) => k + 1);
       setActiveTab("pipeline");
@@ -429,7 +468,7 @@ function EbookPageClient() {
         name,
         createdAt: existing?.createdAt ?? new Date().toISOString(),
         updatedAt: new Date().toISOString(),
-        bookTitle: jobState.architecture?.bookTitle ?? name,
+        bookTitle: jobState.architecture?.bookTitle ?? ebookManifest?.bookTitle ?? name,
         chapterCount: jobState.chapters?.length ?? 0,
         totalWordCount: (jobState.chapters ?? []).reduce((s, c) => s + (c.totalWordCount ?? 0), 0),
         status: jobState.status,
@@ -483,23 +522,12 @@ function EbookPageClient() {
       liveJobStateRef.current = p.jobState;
       setCurrentProjectId(p.id);
       const job = p.jobState;
-      if (job.architecture && job.frontMatter && (job.chapters?.length ?? 0) > 0) {
-        setEbookManifest({
-          jobId: job.jobId,
-          bookTitle: job.architecture.bookTitle,
-          subtitle: job.architecture.subtitle,
-          authorName: job.architecture.authorName,
-          frontMatter: job.frontMatter,
-          chapters: job.chapters ?? [],
-          totalWordCount: (job.chapters ?? []).reduce((sum, chapter) => sum + (chapter.totalWordCount ?? 0), 0),
-          allQuotes: job.contentMap?.allQuotes ?? [],
-          generatedAt: new Date().toISOString(),
-          selectedTemplate: "devotional",
-          printSpec: { trimSize: "6x9", runningHeaders: true, bleed: false, cropMarks: false, folioStyle: "center", frontMatterNumbering: "arabic", sectionOrnament: "rule" },
+      if (canBuildCompletedManifest(job)) {
+        setEbookManifest(buildManifestFromCompletedJob(job, {
+          fallbackTitle: p.bookTitle || p.name,
           coverImageUrl: p.coverImageUrl ?? null,
           authorImageUrl: p.authorImageUrl ?? null,
-          backMatter: job.backMatter ?? null,
-        });
+        }));
       } else {
         setEbookManifest(null);
       }
@@ -601,26 +629,16 @@ function EbookPageClient() {
 
   const handlePublish = useCallback(async (project: EbookProject): Promise<string | null> => {
     const job = project.jobState;
-    if (!job.architecture || !job.frontMatter || !job.chapters?.length) {
+    if (!canBuildCompletedManifest(job)) {
       setStatusMsg({ type: "error", text: "Book must be complete before publishing." });
       return null;
     }
-    const manifest: EbookManifest = {
-      jobId:         job.jobId,
-      bookTitle:     job.architecture.bookTitle,
-      subtitle:      job.architecture.subtitle,
-      authorName:    job.architecture.authorName,
-      frontMatter:   job.frontMatter,
-      chapters:      job.chapters,
-      totalWordCount: job.chapters.reduce((s, c) => s + (c.totalWordCount ?? 0), 0),
-      allQuotes:     job.contentMap?.allQuotes ?? [],
-      generatedAt:   job.updatedAt ?? new Date().toISOString(),
-      selectedTemplate: "devotional",
-      printSpec:     { trimSize: "6x9", runningHeaders: true, bleed: false, cropMarks: false, folioStyle: "center", frontMatterNumbering: "arabic", sectionOrnament: "rule" },
-      coverImageUrl:  project.coverImageUrl  ?? null,
+    const manifest: EbookManifest = buildManifestFromCompletedJob(job, {
+      fallbackTitle: project.bookTitle || project.name,
+      coverImageUrl: project.coverImageUrl ?? null,
       authorImageUrl: project.authorImageUrl ?? null,
-      narrationUrls:  readNarrationUrls(job.jobId),
-    };
+      narrationUrls: readNarrationUrls(job.jobId),
+    });
     try {
       const res = await fetch("/api/ebook/publish", {
         method:  "POST",
@@ -683,21 +701,8 @@ function EbookPageClient() {
   // ── Manifest handlers ─────────────────────────────────────────────────────
 
   const buildManifestFromJob = useCallback((job: EbookJobState): EbookManifest | null => {
-    if (!job.architecture || !job.frontMatter || (job.chapters?.length ?? 0) === 0) return null;
-    return {
-      jobId: job.jobId,
-      bookTitle: job.architecture.bookTitle,
-      subtitle: job.architecture.subtitle,
-      authorName: job.architecture.authorName,
-      frontMatter: job.frontMatter,
-      chapters: job.chapters ?? [],
-      totalWordCount: (job.chapters ?? []).reduce((sum, chapter) => sum + (chapter.totalWordCount ?? 0), 0),
-      allQuotes: job.contentMap?.allQuotes ?? [],
-      generatedAt: new Date().toISOString(),
-      selectedTemplate: "devotional",
-      printSpec: { trimSize: "6x9", runningHeaders: true, bleed: false, cropMarks: false, folioStyle: "center", frontMatterNumbering: "arabic", sectionOrnament: "rule" },
-      backMatter: job.backMatter ?? null,
-    };
+    if (!canBuildCompletedManifest(job)) return null;
+    return buildManifestFromCompletedJob(job);
   }, []);
 
   const handleManifestReady = useCallback((manifest: EbookManifest) => {

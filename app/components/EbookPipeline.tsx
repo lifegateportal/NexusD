@@ -3284,6 +3284,28 @@ export function EbookPipeline({
                 keyPoints: [],
               }));
 
+          // Guarantee source-map completeness: if any segment was not linked by the API,
+          // append it to the last section so every transcript block remains reviewable.
+          const linkedSegmentIds = new Set(
+            chapterLinks.flatMap((link) => (link.sourceSegmentIds ?? []).filter(Boolean))
+          );
+          const unlinkedSegments = mappedSegments.filter((segment) => !linkedSegmentIds.has(segment.id));
+          if (unlinkedSegments.length > 0 && chapterLinks.length > 0) {
+            const lastIndex = chapterLinks.length - 1;
+            const target = chapterLinks[lastIndex];
+            chapterLinks[lastIndex] = {
+              ...target,
+              sourceSegmentIds: [
+                ...(target.sourceSegmentIds ?? []),
+                ...unlinkedSegments.map((segment) => segment.id),
+              ],
+              transcriptExcerpts: [
+                ...(target.transcriptExcerpts ?? []),
+                ...unlinkedSegments.map((segment) => segment.rawText),
+              ],
+            };
+          }
+
           for (let i = 0; i < builtSections.length; i++) {
             const section = builtSections[i];
             const link = chapterLinks.find((l) => l.sectionNumber === section.sectionNumber) ?? chapterLinks[i];
