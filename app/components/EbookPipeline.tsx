@@ -1900,6 +1900,7 @@ export function EbookPipeline({
   const [authorInstructions, setAuthorInstructions] = useState("");
   const [targetAudience, setTargetAudience] = useState("");
   const [useSimpleDirectBookMode, setUseSimpleDirectBookMode] = useState(false);
+  const [selectedEbookModel, setSelectedEbookModel] = useState<"deepseek" | "gemini">("deepseek");
   const [oneChapterPerUpload, setOneChapterPerUpload] = useState(false);
   // Proposal 2: single-call chapter writer — set true to try, false to revert to per-section
   const [useChapterWriter, setUseChapterWriter] = useState(false);
@@ -3166,7 +3167,7 @@ export function EbookPipeline({
       if (useSimpleDirectBookMode) {
         setStage("analyzing");
         addLog("Simple Direct Book Mode: extracting Voice DNA tone…");
-        const simpleVoiceDNA = await postJson<VoiceDNA>("/api/ebook/voice-dna", { masterTranscript: teachingTranscript });
+        const simpleVoiceDNA = await postJson<VoiceDNA>("/api/ebook/voice-dna", { masterTranscript: teachingTranscript, eBookModel: selectedEbookModel });
         acc.voiceDNA = simpleVoiceDNA;
 
         setStage("writing");
@@ -3210,6 +3211,7 @@ export function EbookPipeline({
             authorInstructions,
             desiredChapters,
             oneChapterPerSlot: true,
+            eBookModel: selectedEbookModel,
           });
 
           if (!bookTitleFromRuns) bookTitleFromRuns = (simple.bookTitle || "").trim();
@@ -3424,6 +3426,7 @@ export function EbookPipeline({
           ...((authorInstructions || targetAudience) ? { authorConfig: { instructions: authorInstructions, targetAudience } } : {}),
           alreadyQuotedRefs: [],
           forbiddenVerseTexts: [],
+          eBookModel: selectedEbookModel,
         });
         addLog("✓ Simple Direct front matter complete");
 
@@ -3443,7 +3446,7 @@ export function EbookPipeline({
 
         addLog("Simple Direct Book Mode: generating back matter in separate call…");
         try {
-          const simpleBackMatter = await postJson<BackMatter>("/api/ebook/backmatter", { manifest: simpleManifest });
+          const simpleBackMatter = await postJson<BackMatter>("/api/ebook/backmatter", { manifest: simpleManifest, eBookModel: selectedEbookModel });
           simpleManifest.backMatter = simpleBackMatter;
           addLog(`✓ Simple Direct back matter complete — ${simpleBackMatter.glossary.length} glossary terms, ${simpleBackMatter.readingGroupGuide.length} chapter guides, ${simpleBackMatter.scriptureIndex.length} scripture references`);
         } catch (bmErr) {
@@ -4454,6 +4457,21 @@ export function EbookPipeline({
                 Uses direct slot-to-chapter generation through simple-book for faster production while preserving source-map and save/reload behavior.
               </p>
             </div>
+          </div>
+
+          {/* LLM Model Selector */}
+          <div className="flex flex-col gap-2">
+            <label className="text-sm font-semibold text-slate-300">LLM Model</label>
+            <select
+              value={selectedEbookModel}
+              onChange={(e) => !isRunning && setSelectedEbookModel(e.target.value as "deepseek" | "gemini")}
+              disabled={isRunning}
+              className="w-full rounded-xl border border-slate-700/60 bg-slate-950/70 px-3 py-2 text-base text-slate-100 outline-none focus:border-violet-500/40 disabled:opacity-60 disabled:cursor-not-allowed"
+            >
+              <option value="deepseek">DeepSeek R1 (default)</option>
+              <option value="gemini">Gemini 2.0 Flash (beta)</option>
+            </select>
+            <p className="text-[10px] text-slate-600">Select which LLM to use for chapter generation, voice analysis, and front/back matter.</p>
           </div>
 
           {/* Chapter mode toggle — entire row is the tap target */}

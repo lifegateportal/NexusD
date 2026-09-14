@@ -4,6 +4,7 @@ import { z } from "zod";
 import { deepSeekReasonerModel } from "@/lib/ai-providers";
 import { SOURCE_LOCK_RULES, stripAudienceLanguage } from "@/lib/editorial-style-bible";
 import { SCRIPTURE_FORMATTING_RULES } from "@/lib/scripture-formatter";
+import { getEbookModel, getEbookTemperature } from "@/lib/ebook-model-selector";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
@@ -20,6 +21,7 @@ const RequestSchema = z.object({
   authorInstructions: z.string().max(4000).optional().default(""),
   desiredChapters: z.number().int().min(3).max(12).optional().default(6),
   oneChapterPerSlot: z.boolean().optional().default(true),
+  eBookModel: z.enum(["deepseek", "gemini"]).default("deepseek"),
 });
 
 const SectionSchema = z.object({
@@ -384,6 +386,7 @@ export async function POST(req: NextRequest) {
       { status: 400 }
     );
   }
+  const { eBookModel } = input;
 
   const slotBlocks = (input.slotTranscripts ?? [])
     .filter((slot) => slot.text.trim().length > 0)
@@ -565,10 +568,10 @@ ${slot.text}${priorClaimsBlock}`;
             : `${slotPrompt}\n\nREVISION REQUIRED:\n- Prior attempt copied transcript phrasing too closely or failed structure.\n- Rewrite with stronger synthesis, cleaner transitions, and no long verbatim transcript spans.\n- Keep strict source grounding and keep all significant teaching blocks covered.`;
           try {
             const { object } = await generateObject({
-              model: deepSeekReasonerModel,
+              model: getEbookModel(eBookModel),
               schema: SlotChapterSchema,
               mode: "json",
-              temperature: 0.28,
+              temperature: getEbookTemperature(eBookModel, "reasoning"),
               maxTokens,
               system,
               prompt: attemptPrompt,
@@ -590,8 +593,8 @@ ${slot.text}${priorClaimsBlock}`;
         if (!chapterObject) {
           try {
             const { text } = await generateText({
-              model: deepSeekReasonerModel,
-              temperature: 0.28,
+              model: getEbookModel(eBookModel),
+              temperature: getEbookTemperature(eBookModel, "reasoning"),
               maxTokens,
               system,
               prompt: `${slotPrompt}\n\nReturn ONLY JSON in this exact shape:\n${slotChapterTemplate}`,

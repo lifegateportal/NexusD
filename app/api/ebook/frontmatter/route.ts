@@ -1,9 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { generateObject } from "ai";
+import { z } from "zod";
 import { deepSeekReasonerModel, deepSeekModel } from "@/lib/ai-providers";
 import { FrontMatterRequestSchema, FrontBackMatterSchema } from "@/lib/schemas/ebook";
 import { PREMIUM_BOOK_STYLE_RULES, PROSE_MASTERY_RULES, READER_NORMALIZATION_RULES, SOURCE_LOCK_RULES, stripAudienceLanguage } from "@/lib/editorial-style-bible";
 import { SCRIPTURE_FORMATTING_RULES } from "@/lib/scripture-formatter";
+import { getEbookModel, getEbookTemperature } from "@/lib/ebook-model-selector";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
@@ -11,15 +13,20 @@ export const maxDuration = 300;
 // LLM generates introduction + conclusion only — no preface
 const IntroConclSchema = FrontBackMatterSchema.omit({ preface: true, scriptureIndex: true });
 
+const FrontMatterExtendedRequestSchema = FrontMatterRequestSchema.extend({
+  eBookModel: z.enum(["deepseek", "gemini"]).default("deepseek"),
+});
+
 export async function POST(req: NextRequest) {
   const body = await req.json() as unknown;
   let input;
   try {
-    input = FrontMatterRequestSchema.parse(body);
+    input = FrontMatterExtendedRequestSchema.parse(body);
   } catch (err) {
     return NextResponse.json({ error: err instanceof Error ? err.message : "Invalid input" }, { status: 400 });
   }
 
+  const { eBookModel } = input;
   const transcript = typeof input.masterTranscript === "string" ? input.masterTranscript : "";
   const authorConfig = input.authorConfig;
   const authorConfigBlock = (authorConfig?.instructions || authorConfig?.targetAudience)
@@ -174,22 +181,23 @@ ${input.architecture.chapters.map((c, i) => `Chapter ${i + 1}: "${c.title}"\n  C
       })(),
     }, { status: 200 });
 
-  // Try V3 first for speed. If it fails, fall back to R1 for maximum quality.
+  // Try selected model first for speed. If it fails, fall back to alternative.
   try {
     const { object } = await generateObject({
-      model: deepSeekModel,
+      model: getEbookModel(eBookModel),
       schema: IntroConclSchema,
       mode: "json",
-      temperature: 0.35,  // V3: balanced prose generation
+      temperature: getEbookTemperature(eBookModel, "reasoning"),
       system: frontmatterSystem,
       prompt: frontmatterPrompt,
     });
     return buildResponse(object);
   } catch {
-    // V3 failed — fall back to R1 for maximum certainty
+    // Selected model failed — try alternative
     try {
+      const fallbackModel = eBookModel === "gemini" ? deepSeekReasonerModel : deepSeekModel;
       const { object } = await generateObject({
-        model: deepSeekReasonerModel,
+        model: fallbackModel,
         schema: IntroConclSchema,
         mode: "json",
         temperature: 0.35,

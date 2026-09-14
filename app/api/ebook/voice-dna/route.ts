@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { generateObject, generateText } from "ai";
 import { deepSeekModel } from "@/lib/ai-providers";
 import { VoiceDNASchema, VoiceDNARequestSchema } from "@/lib/schemas/ebook";
+import { getEbookModel, getEbookTemperature } from "@/lib/ebook-model-selector";
+import { z } from "zod";
 
 export const runtime = "nodejs";
 export const maxDuration = 120;
@@ -106,6 +108,7 @@ export async function POST(req: NextRequest) {
   } catch (err) {
     return NextResponse.json({ error: err instanceof Error ? err.message : "Invalid input" }, { status: 400 });
   }
+  const { eBookModel } = input;
   if (Buffer.byteLength(input.masterTranscript, "utf8") > 400_000) {
     return NextResponse.json(
       { error: "Transcript exceeds 400 KB — split into smaller sessions." },
@@ -199,10 +202,10 @@ closingPattern
   try {
     try {
       const { object } = await generateObject({
-        model: deepSeekModel,
+        model: getEbookModel(eBookModel),
         schema: VoiceDNASchema,
         mode: "json",
-        temperature: 0.2,
+        temperature: getEbookTemperature(eBookModel, "extraction"),
         maxTokens: 1400,
         system: systemPrompt,
         prompt: userPrompt,
@@ -211,10 +214,10 @@ closingPattern
       const normalized = ensureToneProfile(object);
       return NextResponse.json(normalized, { status: 200 });
     } catch {
-      // DeepSeek occasionally returns near-JSON text in json mode; strict re-ask + local validation recovers safely.
+      // Model occasionally returns near-JSON text in json mode; strict re-ask + local validation recovers safely.
       const { text } = await generateText({
-        model: deepSeekModel,
-        temperature: 0.2,
+        model: getEbookModel(eBookModel),
+        temperature: getEbookTemperature(eBookModel, "extraction"),
         maxTokens: 1800,
         system: `${systemPrompt}\n\nReturn ONLY a valid JSON object. No markdown fences. No commentary.`,
         prompt: userPrompt,

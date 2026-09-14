@@ -5,7 +5,7 @@ import { deepSeekReasonerModel, deepSeekModel } from "@/lib/ai-providers";
 import { EbookManifestSchema, BackMatterSchema } from "@/lib/schemas/ebook";
 import type { BackMatter } from "@/lib/schemas/ebook";
 import { SOURCE_LOCK_RULES, READER_NORMALIZATION_RULES, PREMIUM_BOOK_STYLE_RULES } from "@/lib/editorial-style-bible";
-import { SCRIPTURE_FORMATTING_RULES } from "@/lib/scripture-formatter";
+import { getEbookModel, getEbookTemperature } from "@/lib/ebook-model-selector";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
@@ -14,6 +14,7 @@ export const maxDuration = 300;
 
 const BackMatterRequestSchema = z.object({
   manifest: EbookManifestSchema,
+  eBookModel: z.enum(["deepseek", "gemini"]).default("deepseek"),
 });
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -72,7 +73,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: err instanceof Error ? err.message : "Invalid input" }, { status: 400 });
   }
 
-  const { manifest } = input;
+  const { manifest, eBookModel } = input;
   const voiceDNA = manifest.voiceDNA;
 
   // Build scripture index from the manifest (deterministic, no LLM needed)
@@ -170,24 +171,25 @@ ${resourcesMentioned.length > 0 ? resourcesMentioned.map((r) => `• ${r}`).join
 
 Generate the glossary, reading group guide, and recommended resources.`;
 
-  // Try V3 first for speed. If it fails, fall back to R1 for maximum quality.
+  // Try selected model first for speed. If it fails, try alternative.
   let object: Awaited<ReturnType<typeof generateObject<z.infer<typeof BackMatterSchema>>>>["object"] | null = null;
 
   try {
     const res = await generateObject({
-      model: deepSeekModel,
+      model: getEbookModel(eBookModel),
       schema: BackMatterSchema.omit({ scriptureIndex: true }),
       mode: "json",
-      temperature: 0.35,  // V3: balanced glossary/guide generation
+      temperature: getEbookTemperature(eBookModel, "reasoning"),
       system: backmatterSystem,
       prompt: backmatterPrompt,
     });
     object = res.object;
   } catch {
-    // V3 failed — fall back to R1 for maximum certainty
+    // Selected model failed — try alternative
     try {
+      const fallbackModel = eBookModel === "gemini" ? deepSeekReasonerModel : deepSeekModel;
       const res = await generateObject({
-        model: deepSeekReasonerModel,
+        model: fallbackModel,
         schema: BackMatterSchema.omit({ scriptureIndex: true }),
         mode: "json",
         temperature: 0.35,
