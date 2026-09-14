@@ -565,6 +565,7 @@ export function SermonAssistantPanel() {
   const [desktopTelemetryOpen, setDesktopTelemetryOpen] = useState(false);
   const [mobileOrganizedView, setMobileOrganizedView] = useState<"outline" | "manual">("outline");
   const [speechLanguage, setSpeechLanguage] = useState<SpeechLanguage>("auto");
+  const [selectedSermonAssistantModel, setSelectedSermonAssistantModel] = useState<"deepseek" | "gemini">("deepseek");
   const [autoPushDisplay, setAutoPushDisplay] = useState(false);
   const [liveMode, setLiveMode] = useState(false);
   const [monitorDisplayPrefs, setMonitorDisplayPrefs] = useState<MonitorDisplayPrefs>(DEFAULT_MONITOR_DISPLAY_PREFS);
@@ -1584,6 +1585,7 @@ export function SermonAssistantPanel() {
           body: JSON.stringify({
             context: contextText.slice(-1200),
             existingRefs: scriptureCardsRef.current.map((card) => card.ref),
+            sermonAssistantModel: selectedSermonAssistantModel,
           }),
         });
 
@@ -1610,7 +1612,7 @@ export function SermonAssistantPanel() {
         semanticInFlightRef.current = false;
       }
     }, 1200);
-  }, [mergeScriptureCards, pushToMonitor]);
+}, [mergeScriptureCards, pushToMonitor, selectedSermonAssistantModel]);
 
   const appendTranscript = useCallback((text: string) => {
     setRawTranscript((prev) => {
@@ -1883,7 +1885,7 @@ export function SermonAssistantPanel() {
       const res = await fetch("/api/sermon-assistant", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "outline", rawTranscript }),
+        body: JSON.stringify({ action: "outline", rawTranscript, sermonAssistantModel: selectedSermonAssistantModel }),
       });
       if (!res.ok) throw new Error("Outline generation failed");
       const data = await res.json() as SermonApiResponse;
@@ -1906,7 +1908,7 @@ export function SermonAssistantPanel() {
     } finally {
       setIsGenerating(false);
     }
-  }, [mergeScriptureCards, pushToast, rawTranscript]);
+  }, [mergeScriptureCards, pushToast, rawTranscript, selectedSermonAssistantModel]);
 
   const sendAssistantCommand = useCallback(async () => {
     const command = assistantInput.trim();
@@ -1932,6 +1934,7 @@ export function SermonAssistantPanel() {
           rawTranscript,
           organizedMarkdown,
           command,
+          sermonAssistantModel: selectedSermonAssistantModel,
         }),
       });
 
@@ -1959,7 +1962,7 @@ export function SermonAssistantPanel() {
     } finally {
       setIsAssistantThinking(false);
     }
-  }, [assistantInput, mergeScriptureCards, organizedMarkdown, pushToast, rawTranscript]);
+  }, [assistantInput, mergeScriptureCards, organizedMarkdown, pushToast, rawTranscript, selectedSermonAssistantModel]);
 
   const onUploadTranscript = useCallback(async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
@@ -2771,6 +2774,18 @@ export function SermonAssistantPanel() {
             {activeTab === "organized" && (
               <div className="flex min-h-0 flex-1 flex-col">
                 <div className="hidden flex-wrap items-center justify-end gap-2 border-b border-cyan-500/10 px-4 py-3 sm:flex">
+                  <div className="flex items-center gap-2">
+                    <label className="text-sm font-semibold text-slate-300">LLM Model:</label>
+                    <select
+                      value={selectedSermonAssistantModel}
+                      onChange={(e) => setSelectedSermonAssistantModel(e.target.value as "deepseek" | "gemini")}
+                      disabled={isGenerating}
+                      className="focus-ring rounded-xl border border-slate-700/60 bg-slate-950/70 px-3 py-2 text-sm text-slate-100 outline-none focus:border-cyan-500/40 disabled:opacity-60 disabled:cursor-not-allowed"
+                    >
+                      <option value="deepseek">DeepSeek (default)</option>
+                      <option value="gemini">Gemini 2.0 Flash (beta)</option>
+                    </select>
+                  </div>
                   <button
                     type="button"
                     onClick={() => setIsEditingOrganized((value) => !value)}

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { generateText } from "ai";
 import { z } from "zod";
 import { deepSeekModel, deepSeekReasonerModel } from "@/lib/ai-providers";
+import { getSermonOutlineModel, getSermonCommandModel, getSermonTemperature } from "@/lib/sermon-assistant-model-selector";
 
 export const runtime = "nodejs";
 export const maxDuration = 120;
@@ -10,12 +11,14 @@ const RequestSchema = z.discriminatedUnion("action", [
   z.object({
     action: z.literal("outline"),
     rawTranscript: z.string().min(1).max(120000),
+    sermonAssistantModel: z.enum(["deepseek", "gemini"]).default("deepseek"),
   }),
   z.object({
     action: z.literal("command"),
     rawTranscript: z.string().min(1).max(120000),
     organizedMarkdown: z.string().max(120000).optional().default(""),
     command: z.string().min(1).max(2000),
+    sermonAssistantModel: z.enum(["deepseek", "gemini"]).default("deepseek"),
   }),
 ]);
 
@@ -121,8 +124,8 @@ export async function POST(req: NextRequest) {
       const maxTokens = calculateMaxTokens(transcriptLength);
       
       const { text } = await generateText({
-        model: deepSeekModel,
-        temperature: 0.3,
+        model: getSermonOutlineModel(parsed.sermonAssistantModel),
+        temperature: getSermonTemperature(parsed.sermonAssistantModel, "outline"),
         maxTokens,
         system: outlineSystemPrompt(),
         prompt: `RAW TRANSCRIPT:\n${parsed.rawTranscript}`,
@@ -141,8 +144,8 @@ export async function POST(req: NextRequest) {
     const maxTokens = calculateMaxTokens(combinedLength);
     
     const { text } = await generateText({
-      model: deepSeekReasonerModel,
-      temperature: 0.25,
+      model: getSermonCommandModel(parsed.sermonAssistantModel),
+      temperature: getSermonTemperature(parsed.sermonAssistantModel, "command"),
       maxTokens,
       system: commandSystemPrompt(),
       prompt,

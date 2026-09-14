@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { generateText } from "ai";
 import { z } from "zod";
 import { deepSeekModel } from "@/lib/ai-providers";
+import { getSermonOutlineModel, getSermonTemperature } from "@/lib/sermon-assistant-model-selector";
 
 export const runtime = "nodejs";
 export const maxDuration = 30;
@@ -9,6 +10,7 @@ export const maxDuration = 30;
 const RequestSchema = z.object({
   context: z.string().min(10).max(4000),
   existingRefs: z.array(z.string().max(64)).max(50).optional().default([]),
+  sermonAssistantModel: z.enum(["deepseek", "gemini"]).default("deepseek"),
 });
 
 const SYSTEM_PROMPT = `You are a Bible reference assistant for a live sermon transcription tool.
@@ -44,11 +46,11 @@ export async function POST(req: NextRequest) {
     ].filter(Boolean).join("\n\n");
 
     const { text } = await generateText({
-      model: deepSeekModel,
+      model: getSermonOutlineModel(input.sermonAssistantModel),
       system: SYSTEM_PROMPT,
       prompt: userMessage,
       maxTokens: 1000,
-      temperature: 0.1,
+      temperature: getSermonTemperature(input.sermonAssistantModel, "scripture"),
     });
 
     const cleaned = text.trim()
