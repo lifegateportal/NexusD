@@ -520,9 +520,11 @@ export async function generatePdfBuffer(manifest: EbookManifest, templateId?: st
       writePreface(doc, manifest.frontMatter, manifest.allQuotes ?? [], fonts, scaledTpl, sectionOrnament, adjustedBodyFontSizeScaled);
     }
 
-    // ── Introduction (recto-forced) ───────────────────────────────────────────
-    forceNextRecto();
-    writeIntroduction(doc, manifest.frontMatter, manifest.allQuotes ?? [], fonts, scaledTpl, sectionOrnament, adjustedBodyFontSizeScaled);
+    // ── Introduction (recto-forced) — skip if empty ──────────────────────────
+    if (manifest.frontMatter.introduction && manifest.frontMatter.introduction.trim().length > 0) {
+      forceNextRecto();
+      writeIntroduction(doc, manifest.frontMatter, manifest.allQuotes ?? [], fonts, scaledTpl, sectionOrnament, adjustedBodyFontSizeScaled);
+    }
 
     // ── Chapter body pages (each recto-forced) ────────────────────────────────
     for (const chapter of manifest.chapters) {
@@ -533,9 +535,11 @@ export async function generatePdfBuffer(manifest: EbookManifest, templateId?: st
     }
 
     // ── Back matter (each section recto-forced) ───────────────────────────────
-    forceNextRecto();
-    currentChapterTitle = "Conclusion";
-    writeConclusion(doc, manifest.frontMatter, manifest.allQuotes ?? [], fonts, scaledTpl, sectionOrnament, adjustedBodyFontSizeScaled);
+    if (manifest.frontMatter.conclusion && manifest.frontMatter.conclusion.trim().length > 0) {
+      forceNextRecto();
+      currentChapterTitle = "Conclusion";
+      writeConclusion(doc, manifest.frontMatter, manifest.allQuotes ?? [], fonts, scaledTpl, sectionOrnament, adjustedBodyFontSizeScaled);
+    }
 
     if (manifest.frontMatter.aboutAuthor) {
       forceNextRecto();
@@ -557,7 +561,7 @@ export async function generatePdfBuffer(manifest: EbookManifest, templateId?: st
 
     if (manifest.backMatter && (manifest.backMatter.readingGroupGuide ?? []).length > 0) {
       forceNextRecto();
-      currentChapterTitle = "Reading Group Guide";
+      currentChapterTitle = "Study Guide";
       writeReadingGroupGuide(doc, manifest.backMatter, fonts, scaledTpl, sectionOrnament, adjustedBodyFontSizeScaled);
     }
 
@@ -1413,6 +1417,7 @@ function stampTOC(
   const entrySize  = 10;
   const lineH      = entrySize + 7;
   const mutedColor = "#888888";
+  const hasText = (value: string | null | undefined): boolean => typeof value === "string" && value.trim().length > 0;
 
   // ── Amendment 6: dotted-leader row helper (Chicago Manual §1.4) ──────────
   // Renders: [numLabel] [chapterTitle] [....] [pageNum]
@@ -1453,17 +1458,14 @@ function stampTOC(
     doc.font(titleFont).fillColor(bold ? "#1a1a1a" : mutedColor)
       .text(titleStr, titleX, rowY, { width: maxTitleW, lineBreak: false });
 
-    // Dotted leaders: strict boundary control to prevent overflow
+    // Dotted leaders: paint one dot at a time so they can never overrun page numbers.
     doc.font(fonts.serif).fontSize(entrySize - 1).fillColor("#bbbbbb");
     const dotW        = doc.widthOfString(".");
-    const dotSpacing  = dotW + 2; // Slightly wider spacing
+    const dotSpacing  = dotW + 2;
     const leaderStart = titleX + actualTitleW + 16; // 16pt gap after title
-    const leaderEnd   = mL + textW - pageNumActualW - 10; // 10pt gap before page number
-    const leaderSpan  = Math.max(0, leaderEnd - leaderStart);
-    const dotCount    = Math.max(0, Math.floor(leaderSpan / dotSpacing));
-    if (dotCount > 0) {
-      const dotsStr = Array(dotCount).fill(".").join("\u2009"); // thin-space separated
-      doc.text(dotsStr, leaderStart, rowY, { lineBreak: false, width: leaderSpan });
+    const leaderEnd   = mL + textW - pageNumActualW - 12; // reserve visible gap before number
+    for (let x = leaderStart; x + dotW <= leaderEnd; x += dotSpacing) {
+      doc.text(".", x, rowY, { lineBreak: false });
     }
 
     // Render page number flush-right with exact positioning
@@ -1472,8 +1474,12 @@ function stampTOC(
       .text(pageStr, pageNumX, rowY, { width: pageNumActualW, align: "right", lineBreak: false });
   }
 
-  // Front matter (no page numbers)
-  for (const label of ["Preface", "Introduction"]) {
+  // Front matter (no page numbers) — include only sections that actually exist.
+  const frontLabels = [
+    ...(hasText(manifest.frontMatter.preface) ? ["Preface"] : []),
+    ...(hasText(manifest.frontMatter.introduction) ? ["Introduction"] : []),
+  ];
+  for (const label of frontLabels) {
     if (y > bottomLimit) break;
     doc.fontSize(entrySize).font(fonts.serifItalic).fillColor(mutedColor)
       .text(label, mL, y, { width: textW, lineBreak: false });
@@ -1490,8 +1496,14 @@ function stampTOC(
   }
   y += 6;
 
-  // Back matter (no page numbers)
-  const backLabels = ["Conclusion", ...(manifest.frontMatter.aboutAuthor ? ["About the Author"] : [])];
+  // Back matter (no page numbers) — include only rendered sections.
+  const backLabels = [
+    ...(hasText(manifest.frontMatter.conclusion) ? ["Conclusion"] : []),
+    ...(hasText(manifest.frontMatter.aboutAuthor ?? "") ? ["About the Author"] : []),
+    ...(((manifest.frontMatter.resourcesList ?? []).length > 0) ? ["Resources"] : []),
+    ...(((manifest.backMatter?.glossary ?? []).length > 0) ? ["Glossary"] : []),
+    ...(((manifest.backMatter?.readingGroupGuide ?? []).length > 0) ? ["Study Guide"] : []),
+  ];
   for (const label of backLabels) {
     if (y > bottomLimit) break;
     doc.fontSize(entrySize).font(fonts.serifItalic).fillColor(mutedColor)
@@ -1714,7 +1726,7 @@ function writeReadingGroupGuide(doc: any, bm: BackMatter, fonts: PdfFontSet, tpl
   doc.addPage();
   doc.x = doc.page.margins.left;
   const textW = doc.page.width - doc.page.margins.left - doc.page.margins.right;
-  doc.fontSize(tpl.matterTitleSize).font(fonts.serifBold).fillColor(tpl.chapterTitleColor).text("Reading Group Guide", { width: textW, align: tpl.matterTitleAlign });
+  doc.fontSize(tpl.matterTitleSize).font(fonts.serifBold).fillColor(tpl.chapterTitleColor).text("Study Guide", { width: textW, align: tpl.matterTitleAlign });
   writeDivider(doc, tpl, ornamentStyle);
   const fs = bodyFontSize ?? tpl.bodyFontSize;
   for (const chapter of (bm.readingGroupGuide ?? [])) {
@@ -1840,16 +1852,19 @@ function quoteParagraphsToHtml(text: string, quotes: Quote[], options?: { italic
 }
 
 function frontMatterChapters(fm: FrontBackMatter, quotes: Quote[]): Array<{ title: string; content: string }> {
-  const chapters = [
-    {
+  const chapters: Array<{ title: string; content: string }> = [];
+  if (fm.preface?.trim()) {
+    chapters.push({
       title: "Preface",
       content: quoteParagraphsToHtml(fm.preface, quotes),
-    },
-    {
+    });
+  }
+  if (fm.introduction?.trim()) {
+    chapters.push({
       title: "Introduction",
       content: quoteParagraphsToHtml(fm.introduction, quotes),
-    },
-  ];
+    });
+  }
   return chapters;
 }
 
@@ -1896,12 +1911,14 @@ function chapterToHtml(chapter: ChapterDraft, quotes: Quote[]): string {
 }
 
 function backMatterChapters(fm: FrontBackMatter, quotes: Quote[], bm?: BackMatter | null): Array<{ title: string; content: string }> {
-  const chapters: Array<{ title: string; content: string }> = [
-    {
+  const chapters: Array<{ title: string; content: string }> = [];
+
+  if (fm.conclusion?.trim()) {
+    chapters.push({
       title: "Conclusion",
       content: quoteParagraphsToHtml(fm.conclusion, quotes),
-    },
-  ];
+    });
+  }
 
   if (fm.aboutAuthor) {
     chapters.push({
@@ -1930,7 +1947,7 @@ function backMatterChapters(fm: FrontBackMatter, quotes: Quote[], bm?: BackMatte
         const qs = chapter.questions.map((q) => `<li>${escapeHtml(q)}</li>`).join("");
         return `<h3>Chapter ${chapter.chapterNumber}: ${escapeHtml(chapter.chapterTitle)}</h3><ol>${qs}</ol>`;
       }).join("");
-      chapters.push({ title: "Reading Group Guide", content: guideHtml });
+      chapters.push({ title: "Study Guide", content: guideHtml });
     }
 
     if ((bm.scriptureIndex ?? []).length > 0) {
@@ -2478,6 +2495,53 @@ export async function generateDocxBuffer(manifest: EbookManifest, templateId?: s
           numbering: { reference: "nxBullet", level: 0 },
         })
       );
+    }
+  }
+
+  if ((manifest.backMatter?.glossary ?? []).length > 0) {
+    backChildren.push(
+      new Paragraph({ children: [new PageBreak()] }),
+      new Paragraph({ text: "Glossary", heading: HeadingLevel.HEADING_1, spacing: { before: 400, after: 240 } })
+    );
+    for (const entry of (manifest.backMatter?.glossary ?? [])) {
+      backChildren.push(
+        new Paragraph({
+          children: [new TextRun({ text: entry.term, bold: true, size: bodyHalfPt })],
+          spacing: { after: Math.round(paraSpacingAfter * 0.3) },
+        }),
+        new Paragraph({
+          style: "NxBodyText",
+          children: [new TextRun({ text: entry.definition, size: bodyHalfPt })],
+          alignment: bodyAlign,
+          spacing: { after: Math.round(paraSpacingAfter * 0.6) },
+        }),
+      );
+    }
+  }
+
+  if ((manifest.backMatter?.readingGroupGuide ?? []).length > 0) {
+    backChildren.push(
+      new Paragraph({ children: [new PageBreak()] }),
+      new Paragraph({ text: "Study Guide", heading: HeadingLevel.HEADING_1, spacing: { before: 400, after: 240 } })
+    );
+    for (const chapterGuide of (manifest.backMatter?.readingGroupGuide ?? [])) {
+      backChildren.push(
+        new Paragraph({
+          children: [new TextRun({ text: `Chapter ${chapterGuide.chapterNumber}: ${chapterGuide.chapterTitle}`, bold: true, size: bodyHalfPt })],
+          spacing: { after: Math.round(paraSpacingAfter * 0.3) },
+        }),
+      );
+      chapterGuide.questions.forEach((q) => {
+        backChildren.push(
+          new Paragraph({
+            style: "NxBodyText",
+            children: [new TextRun({ text: q, size: bodyHalfPt })],
+            alignment: bodyAlign,
+            spacing: { after: Math.round(paraSpacingAfter * 0.4) },
+            numbering: { reference: "nxNumbered", level: 0 },
+          })
+        );
+      });
     }
   }
 
