@@ -15,6 +15,7 @@ export const maxDuration = 300;
 const BackMatterRequestSchema = z.object({
   manifest: EbookManifestSchema,
   eBookModel: z.enum(["deepseek", "gemini"]).default("deepseek"),
+  llmTemperature: z.number().min(0).max(1).optional(),
 });
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -74,6 +75,7 @@ export async function POST(req: NextRequest) {
   }
 
   const { manifest, eBookModel } = input;
+  const reasoningTemperature = input.llmTemperature ?? getEbookTemperature(eBookModel, "reasoning");
   const voiceDNA = manifest.voiceDNA;
 
   // Build scripture index from the manifest (deterministic, no LLM needed)
@@ -179,7 +181,7 @@ Generate the glossary, reading group guide, and recommended resources.`;
       model: getEbookModel(eBookModel),
       schema: BackMatterSchema.omit({ scriptureIndex: true }),
       mode: "json",
-      temperature: getEbookTemperature(eBookModel, "reasoning"),
+      temperature: reasoningTemperature,
       system: backmatterSystem,
       prompt: backmatterPrompt,
     });
@@ -192,7 +194,7 @@ Generate the glossary, reading group guide, and recommended resources.`;
         model: fallbackModel,
         schema: BackMatterSchema.omit({ scriptureIndex: true }),
         mode: "json",
-        temperature: 0.35,
+        temperature: reasoningTemperature,
         system: backmatterSystem,
         prompt: backmatterPrompt,
       });

@@ -8,6 +8,11 @@ import { z } from "zod";
 export const runtime = "nodejs";
 export const maxDuration = 120;
 
+const VoiceDNAExtendedRequestSchema = VoiceDNARequestSchema.extend({
+  eBookModel: z.enum(["deepseek", "gemini"]).default("deepseek"),
+  llmTemperature: z.number().min(0).max(1).optional(),
+});
+
 function stripMarkdownFences(text: string): string {
   return text
     .trim()
@@ -104,11 +109,12 @@ export async function POST(req: NextRequest) {
   const body = await req.json() as unknown;
   let input;
   try {
-    input = VoiceDNARequestSchema.parse(body);
+    input = VoiceDNAExtendedRequestSchema.parse(body);
   } catch (err) {
     return NextResponse.json({ error: err instanceof Error ? err.message : "Invalid input" }, { status: 400 });
   }
   const { eBookModel } = input;
+  const extractionTemperature = input.llmTemperature ?? getEbookTemperature(eBookModel, "extraction");
   if (Buffer.byteLength(input.masterTranscript, "utf8") > 400_000) {
     return NextResponse.json(
       { error: "Transcript exceeds 400 KB — split into smaller sessions." },
@@ -205,7 +211,7 @@ closingPattern
         model: getEbookModel(eBookModel),
         schema: VoiceDNASchema,
         mode: "json",
-        temperature: getEbookTemperature(eBookModel, "extraction"),
+        temperature: extractionTemperature,
         maxTokens: 1400,
         system: systemPrompt,
         prompt: userPrompt,
@@ -217,7 +223,7 @@ closingPattern
       // Model occasionally returns near-JSON text in json mode; strict re-ask + local validation recovers safely.
       const { text } = await generateText({
         model: getEbookModel(eBookModel),
-        temperature: getEbookTemperature(eBookModel, "extraction"),
+        temperature: extractionTemperature,
         maxTokens: 1800,
         system: `${systemPrompt}\n\nReturn ONLY a valid JSON object. No markdown fences. No commentary.`,
         prompt: userPrompt,

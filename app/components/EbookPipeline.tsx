@@ -1901,6 +1901,7 @@ export function EbookPipeline({
   const [targetAudience, setTargetAudience] = useState("");
   const [useSimpleDirectBookMode, setUseSimpleDirectBookMode] = useState(false);
   const [selectedEbookModel, setSelectedEbookModel] = useState<"deepseek" | "gemini">("deepseek");
+  const [simpleDirectTemperature, setSimpleDirectTemperature] = useState(0.3);
   const [oneChapterPerUpload, setOneChapterPerUpload] = useState(false);
   // Proposal 2: single-call chapter writer — set true to try, false to revert to per-section
   const [useChapterWriter, setUseChapterWriter] = useState(false);
@@ -3167,7 +3168,11 @@ export function EbookPipeline({
       if (useSimpleDirectBookMode) {
         setStage("analyzing");
         addLog("Simple Direct Book Mode: extracting Voice DNA tone…");
-        const simpleVoiceDNA = await postJson<VoiceDNA>("/api/ebook/voice-dna", { masterTranscript: teachingTranscript, eBookModel: selectedEbookModel });
+        const simpleVoiceDNA = await postJson<VoiceDNA>("/api/ebook/voice-dna", {
+          masterTranscript: teachingTranscript,
+          eBookModel: selectedEbookModel,
+          llmTemperature: simpleDirectTemperature,
+        });
         acc.voiceDNA = simpleVoiceDNA;
 
         setStage("writing");
@@ -3212,6 +3217,7 @@ export function EbookPipeline({
             desiredChapters,
             oneChapterPerSlot: true,
             eBookModel: selectedEbookModel,
+            llmTemperature: simpleDirectTemperature,
           });
 
           if (!bookTitleFromRuns) bookTitleFromRuns = (simple.bookTitle || "").trim();
@@ -3427,6 +3433,7 @@ export function EbookPipeline({
           alreadyQuotedRefs: [],
           forbiddenVerseTexts: [],
           eBookModel: selectedEbookModel,
+          llmTemperature: simpleDirectTemperature,
         });
         addLog("✓ Simple Direct front matter complete");
 
@@ -3446,7 +3453,11 @@ export function EbookPipeline({
 
         addLog("Simple Direct Book Mode: generating back matter in separate call…");
         try {
-          const simpleBackMatter = await postJson<BackMatter>("/api/ebook/backmatter", { manifest: simpleManifest, eBookModel: selectedEbookModel });
+          const simpleBackMatter = await postJson<BackMatter>("/api/ebook/backmatter", {
+            manifest: simpleManifest,
+            eBookModel: selectedEbookModel,
+            llmTemperature: simpleDirectTemperature,
+          });
           simpleManifest.backMatter = simpleBackMatter;
           addLog(`✓ Simple Direct back matter complete — ${simpleBackMatter.glossary.length} glossary terms, ${simpleBackMatter.readingGroupGuide.length} chapter guides, ${simpleBackMatter.scriptureIndex.length} scripture references`);
         } catch (bmErr) {
@@ -4472,6 +4483,28 @@ export function EbookPipeline({
               <option value="gemini">Gemini 2.0 Flash (beta)</option>
             </select>
             <p className="text-[10px] text-slate-600">Select which LLM to use for chapter generation, voice analysis, and front/back matter.</p>
+          </div>
+
+          {/* Simple direct temperature control */}
+          <div className="flex flex-col gap-2">
+            <label className="text-sm font-semibold text-slate-300">Simple Direct Temperature</label>
+            <input
+              type="number"
+              min={0}
+              max={1}
+              step={0.01}
+              value={simpleDirectTemperature}
+              onChange={(e) => {
+                if (isRunning) return;
+                const next = Number.parseFloat(e.target.value);
+                if (Number.isNaN(next)) return;
+                const bounded = Math.min(1, Math.max(0, next));
+                setSimpleDirectTemperature(Number(bounded.toFixed(2)));
+              }}
+              disabled={isRunning}
+              className="w-full min-h-[48px] rounded-xl border border-slate-700/60 bg-slate-950/70 px-3 py-2 text-base text-slate-100 outline-none focus:border-violet-500/40 disabled:opacity-60 disabled:cursor-not-allowed"
+            />
+            <p className="text-[10px] text-slate-600">Applies only to Simple Direct Book Mode for chapter generation, voice analysis, and front/back matter. Range: 0.00 to 1.00.</p>
           </div>
 
           {/* Chapter mode toggle — entire row is the tap target */}

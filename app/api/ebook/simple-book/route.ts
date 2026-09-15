@@ -22,6 +22,7 @@ const RequestSchema = z.object({
   desiredChapters: z.number().int().min(3).max(12).optional().default(6),
   oneChapterPerSlot: z.boolean().optional().default(true),
   eBookModel: z.enum(["deepseek", "gemini"]).default("deepseek"),
+  llmTemperature: z.number().min(0).max(1).optional(),
 });
 
 const SectionSchema = z.object({
@@ -387,6 +388,7 @@ export async function POST(req: NextRequest) {
     );
   }
   const { eBookModel } = input;
+  const reasoningTemperature = input.llmTemperature ?? getEbookTemperature(eBookModel, "reasoning");
 
   const slotBlocks = (input.slotTranscripts ?? [])
     .filter((slot) => slot.text.trim().length > 0)
@@ -586,7 +588,7 @@ ${slot.text}${priorClaimsBlock}`;
               model: getEbookModel(eBookModel),
               schema: SlotChapterSchema,
               mode: "json",
-              temperature: getEbookTemperature(eBookModel, "reasoning"),
+              temperature: reasoningTemperature,
               maxTokens,
               system,
               prompt: attemptPrompt,
@@ -609,7 +611,7 @@ ${slot.text}${priorClaimsBlock}`;
           try {
             const { text } = await generateText({
               model: getEbookModel(eBookModel),
-              temperature: getEbookTemperature(eBookModel, "reasoning"),
+              temperature: reasoningTemperature,
               maxTokens,
               system,
               prompt: `${slotPrompt}\n\nReturn ONLY JSON in this exact shape:\n${slotChapterTemplate}`,
@@ -685,7 +687,7 @@ ${slot.text}${priorClaimsBlock}`;
           model: deepSeekReasonerModel,
           schema: SimpleBookSchema,
           mode: "json",
-          temperature: 0.28,
+          temperature: reasoningTemperature,
           maxTokens,
           system,
           prompt: `${prompt}\n\n${storyIntegrationBlock}`,
@@ -701,7 +703,7 @@ ${slot.text}${priorClaimsBlock}`;
 
     const { text } = await generateText({
       model: deepSeekReasonerModel,
-      temperature: 0.28,
+      temperature: reasoningTemperature,
       maxTokens,
       system,
       prompt: `${prompt}\n\n${storyIntegrationBlock}\n\nReturn ONLY JSON in this exact shape:\n${jsonTemplate}`,

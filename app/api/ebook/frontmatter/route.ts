@@ -15,6 +15,7 @@ const IntroConclSchema = FrontBackMatterSchema.omit({ preface: true, scriptureIn
 
 const FrontMatterExtendedRequestSchema = FrontMatterRequestSchema.extend({
   eBookModel: z.enum(["deepseek", "gemini"]).default("deepseek"),
+  llmTemperature: z.number().min(0).max(1).optional(),
 });
 
 export async function POST(req: NextRequest) {
@@ -27,6 +28,7 @@ export async function POST(req: NextRequest) {
   }
 
   const { eBookModel } = input;
+  const reasoningTemperature = input.llmTemperature ?? getEbookTemperature(eBookModel, "reasoning");
   const transcript = typeof input.masterTranscript === "string" ? input.masterTranscript : "";
   const authorConfig = input.authorConfig;
   const authorConfigBlock = (authorConfig?.instructions || authorConfig?.targetAudience)
@@ -189,7 +191,7 @@ ${input.architecture.chapters.map((c, i) => `Chapter ${i + 1}: "${c.title}"\n  C
       model: getEbookModel(eBookModel),
       schema: IntroConclSchema,
       mode: "json",
-      temperature: getEbookTemperature(eBookModel, "reasoning"),
+      temperature: reasoningTemperature,
       system: frontmatterSystem,
       prompt: frontmatterPrompt,
     });
@@ -202,7 +204,7 @@ ${input.architecture.chapters.map((c, i) => `Chapter ${i + 1}: "${c.title}"\n  C
         model: fallbackModel,
         schema: IntroConclSchema,
         mode: "json",
-        temperature: 0.35,
+        temperature: reasoningTemperature,
         system: frontmatterSystem,
         prompt: frontmatterPrompt,
       });
