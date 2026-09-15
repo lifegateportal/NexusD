@@ -3075,23 +3075,27 @@ export function EbookPipeline({
             return next;
           });
 
-          // ── Per-slot signal filter — catches opening prayers, closings, altar
-          //    calls and announcements specific to each audio/transcript file ──
+          // ── Per-slot signal filter — skipped in Simple Direct mode so that
+          //    chapter generation receives full raw slot transcript content. ──
           let slotText = rawText;
-          try {
-            addLog(`  Filtering ${label} signal…`);
-            const slotFilter = await postJson<FilterResult>("/api/ebook/filter-signal", { masterTranscript: rawText });
-            slotText = slotFilter.cleanedTranscript || rawText;
-            const rawWords = countWords(rawText);
-            const cleanWords = countWords(slotText);
-            const trimmed = rawWords - cleanWords;
-            if (trimmed > 0) {
-              addLog(`  ✓ ${label} filtered — ${trimmed.toLocaleString()} non-teaching words removed (${slotFilter.summary})`);
-            } else {
-              addLog(`  ✓ ${label} — no non-teaching content found`);
+          if (!useSimpleDirectBookMode) {
+            try {
+              addLog(`  Filtering ${label} signal…`);
+              const slotFilter = await postJson<FilterResult>("/api/ebook/filter-signal", { masterTranscript: rawText });
+              slotText = slotFilter.cleanedTranscript || rawText;
+              const rawWords = countWords(rawText);
+              const cleanWords = countWords(slotText);
+              const trimmed = rawWords - cleanWords;
+              if (trimmed > 0) {
+                addLog(`  ✓ ${label} filtered — ${trimmed.toLocaleString()} non-teaching words removed (${slotFilter.summary})`);
+              } else {
+                addLog(`  ✓ ${label} — no non-teaching content found`);
+              }
+            } catch {
+              addLog(`  ⚠ ${label} signal filter skipped — using raw text`);
             }
-          } catch {
-            addLog(`  ⚠ ${label} signal filter skipped — using raw text`);
+          } else {
+            addLog(`  ↷ ${label} Simple Direct mode — skipping signal filter, using full raw transcript`);
           }
 
           transcriptResults.push({ label, text: slotText });
@@ -3129,7 +3133,15 @@ export function EbookPipeline({
       //    Catches any non-teaching content that spans a slot boundary or was
       //    missed by the per-slot pass (e.g. a multi-slot altar call finale). ─
       let filteredTranscript = (acc as EbookJobState & { filteredTranscript?: string }).filteredTranscript ?? "";
-      if (!filteredTranscript) {
+      if (useSimpleDirectBookMode) {
+        filteredTranscript = masterTranscript;
+        setSignalFilterState("skipped");
+        setSignalFilterDetail("Simple Direct mode bypasses signal filtering");
+        addLog("Simple Direct mode — skipping final combined signal filter pass");
+        (acc as EbookJobState & { filteredTranscript: string; filterRemovedCount: number }).filteredTranscript = filteredTranscript;
+        (acc as EbookJobState & { filteredTranscript: string; filterRemovedCount: number }).filterRemovedCount = 0;
+        await checkpoint("analyzing");
+      } else if (!filteredTranscript) {
         setStage("filtering");
         addLog("Running final combined signal filter pass…");
         try {
