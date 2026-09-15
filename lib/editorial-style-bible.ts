@@ -135,7 +135,7 @@ const AUDIENCE_PATTERNS = [
 	/\byour neighbor\b/gi,
 	/\bthis audience\b/gi,
 	// Extended audience plurals and addressing
-	/\b(y'all|you\s+all|everybody|somebody|someone|anybody|anybody\s+here)\b/gi,
+	/\b(y'all|you\s+all|everybody|somebody|anybody|anybody\s+here)\b/gi,
 	/,?\s*(church|saints|family|believers|church\s+family),?\s+/gi,
 	/\b(look\s+around|shake\s+your\s+neighbor|wave\s+at|nod\s+if)\b/gi,
 	// Worship/response language
