@@ -72,6 +72,14 @@ type SimpleSectionSourceLink = {
   keyPoints: string[];
 };
 
+type UncoveredTeachingBlock = {
+  sourceAudio: `audio-${number}`;
+  chapterNumber: number;
+  blockId: string;
+  wordCount: number;
+  excerpt: string;
+};
+
 function nonEmptySubtitle(targetAudience: string, coreThesis: string): string {
   const audience = targetAudience.trim();
   const thesis = coreThesis.trim();
@@ -120,7 +128,7 @@ type TeachingBlock = {
   excerpt: string;
 };
 
-function buildTeachingBlocks(text: string, maxBlocks = 18): TeachingBlock[] {
+function buildTeachingBlocks(text: string): TeachingBlock[] {
   const paragraphs = text
     .split(/\n\s*\n/g)
     .map((p) => p.replace(/\s+/g, " ").trim())
@@ -133,7 +141,7 @@ function buildTeachingBlocks(text: string, maxBlocks = 18): TeachingBlock[] {
 
   for (const para of paragraphs) {
     const paraWords = countWords(para);
-    if (currentWords >= targetWordsPerBlock && chunks.length < maxBlocks - 1) {
+    if (currentWords >= targetWordsPerBlock) {
       chunks.push(current.trim());
       current = para;
       currentWords = paraWords;
@@ -153,13 +161,11 @@ function buildTeachingBlocks(text: string, maxBlocks = 18): TeachingBlock[] {
     if (merged.trim()) chunks.push(merged.trim());
   }
 
-  const sampled = chunks.slice(0, maxBlocks).map((chunk, idx) => ({
+  return chunks.map((chunk, idx) => ({
     id: `B${idx + 1}`,
     wordCount: countWords(chunk),
     excerpt: chunk.slice(0, 360),
   }));
-
-  return sampled;
 }
 
 function chapterWordCount(chapter: z.infer<typeof ChapterSchema>): number {
@@ -398,7 +404,7 @@ export async function POST(req: NextRequest) {
         sourceId,
         label: slot.label,
         fullText: slot.text,
-        text: clampSlotTranscript(slot.text, 32000),
+        text: slot.text,
       };
     });
 
@@ -525,12 +531,13 @@ ${sourceBlock}`;
       const chapters: z.infer<typeof ChapterSchema>[] = [];
       const sourceSegments: SimpleSourceSegment[] = [];
       const sectionSourceLinks: SimpleSectionSourceLink[] = [];
+      const uncoveredTeachingBlocks: UncoveredTeachingBlock[] = [];
       let allSectionClaims: string[] = [];
 
       for (let i = 0; i < slotBlocks.length; i++) {
         const slot = slotBlocks[i];
         const chapterNumber = i + 1;
-        const teachingBlocks = buildTeachingBlocks(slot.fullText, 20);
+          const teachingBlocks = buildTeachingBlocks(slot.fullText);
         const teachingBlockManifest = teachingBlocks.length > 0
           ? teachingBlocks.map((b) => `- ${b.id} (${b.wordCount} words): ${b.excerpt}`).join("\n")
           : "- B1: (no extracted block; use full transcript coverage)";
@@ -652,6 +659,21 @@ ${slot.text}${priorClaimsBlock}`;
           );
         }
 
+        const uncoveredBlocks = missingTeachingBlocks(normalizedChapter, teachingBlocks);
+        if (uncoveredBlocks.length > 0) {
+          const missing = new Set(uncoveredBlocks);
+          const uncoveredForSlot = teachingBlocks
+            .filter((block) => missing.has(block.id))
+            .map((block) => ({
+              sourceAudio: slot.sourceId as `audio-${number}`,
+              chapterNumber,
+              blockId: block.id,
+              wordCount: block.wordCount,
+              excerpt: block.excerpt,
+            }));
+          uncoveredTeachingBlocks.push(...uncoveredForSlot);
+        }
+
         const sourceAudio = slot.sourceId as `audio-${number}`;
         const slotSegments = buildSlotSourceSegments(slot.fullText, sourceAudio);
         const slotLinks = mapChapterSectionsToSourceLinks(normalizedChapter, slotSegments);
@@ -678,6 +700,7 @@ ${slot.text}${priorClaimsBlock}`;
         ...normalizedSlotsBook,
         sourceSegments,
         sectionSourceLinks,
+        uncoveredTeachingBlocks,
       });
     }
 
