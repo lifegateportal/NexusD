@@ -1,10 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
-import { generateObject, generateText, streamText } from "ai";
+import { generateObject, streamText } from "ai";
 import { z } from "zod";
 import { deepSeekModel } from "@/lib/ai-providers";
 import { SectionAssignmentSchema } from "@/lib/schemas/ebook";
 import { PREMIUM_BOOK_STYLE_RULES, PROSE_MASTERY_RULES, SOURCE_LOCK_RULES, READER_NORMALIZATION_RULES } from "@/lib/editorial-style-bible";
-import { SCRIPTURE_FORMATTING_RULES, validateScriptureFormatting } from "@/lib/scripture-formatter";
+import { SCRIPTURE_FORMATTING_RULES } from "@/lib/scripture-formatter";
 
 export const runtime = "nodejs";
 export const maxDuration = 180;
@@ -46,40 +46,6 @@ function splitParagraphs(body: string): string[] {
     .split(/\n\n+/)
     .map((paragraph) => paragraph.trim())
     .filter(Boolean);
-}
-
-async function enforceScriptureFormatting(body: string, primaryTranslation?: string): Promise<string> {
-  const report = validateScriptureFormatting(body);
-  if (report.violations.length === 0) return body;
-
-  try {
-    const translationLine = primaryTranslation
-      ? `Primary translation fallback: ${primaryTranslation}.`
-      : "Primary translation fallback: use a valid translation abbreviation for every scripture quote.";
-
-    const { text } = await generateText({
-      model: deepSeekModel,
-      temperature: 0.1,
-      maxTokens: 2200,
-      system: `You are a scripture-format compliance editor. Repair formatting only while preserving meaning and source fidelity.
-
-${SCRIPTURE_FORMATTING_RULES}
-
-${translationLine}
-
-Rules:
-- Keep non-scripture prose intact except minimal transition text needed for the 3-part scripture pattern.
-- Convert inline scripture to mandatory blockquote format.
-- Enforce intro sentence ending with colon, blockquote with reference line, and immediate application paragraph.
-- Keep citation form: — Book Chapter:Verse (Translation).`,
-      prompt: `Repair this section so all scripture formatting is compliant:\n\n${body}`,
-    });
-
-    const repaired = text.trim();
-    return repaired || body;
-  } catch {
-    return body;
-  }
 }
 
 // Helper function removed - grounding validation is redundant with LLM fidelity rules
@@ -148,31 +114,20 @@ You are rewriting the entire section from scratch using all provided transcript 
 
   const rewriteSystem = `You are an elite editor rewriting one section of a teaching book.
 
-════════════════════════════════════════════════════════════════
-⚠️  PRIORITY TIER 1: ABSOLUTE RULES (NON-NEGOTIABLE)
-════════════════════════════════════════════════════════════════
-
+${boundaryInstructions}
 ${SCRIPTURE_FORMATTING_RULES}
 
 ${SOURCE_LOCK_RULES}
 
-════════════════════════════════════════════════════════════════
-PRIORITY TIER 2: PRODUCTION STANDARDS  
-════════════════════════════════════════════════════════════════
+Apply author configuration (below) as high-priority presentation guidance for structure, emphasis, pacing, and reader-facing delivery.
+
+⚠️ CRITICAL: Author configuration does NOT override SOURCE-LOCK-RULES. Never add content not in the transcript to satisfy author instructions. Write less rather than invent.
 
 ${READER_NORMALIZATION_RULES}
 
 ${PROSE_MASTERY_RULES}
 
 ${PREMIUM_BOOK_STYLE_RULES}
-
-════════════════════════════════════════════════════════════════
-PRIORITY TIER 3: REWRITE-SPECIFIC CONSTRAINTS
-════════════════════════════════════════════════════════════════
-
-${boundaryInstructions}
-
-⚠️ CRITICAL: Author configuration (below) is for TONE and AUDIENCE only. It does NOT override SOURCE-LOCK-RULES or SCRIPTURE formatting. Never add content not in the transcript to satisfy author instructions. Write less rather than invent.
 
 ADDITIONAL FIDELITY RULES:
 • [MUST INCLUDE] excerpts → GUARANTEED inclusion. Non-negotiable. User selected these intentionally.
@@ -185,9 +140,8 @@ ADDITIONAL FIDELITY RULES:
 CRITICAL OUTPUT VERIFICATION (ADDITIVE MODE ONLY):
 Before returning, verify that:
 1. Every [MUST INCLUDE] excerpt has been integrated into the prose
-2. Every scripture quote follows SCRIPTURE_FORMATTING_RULES (blockquote-only, 3-part pattern)
-3. The returned body is MATERIALLY DIFFERENT from the input currentBody
-4. If an excerpt was already somewhat present, you have EXPANDED or ENRICHED how that content is presented
+2. The returned body is MATERIALLY DIFFERENT from the input currentBody
+3. If an excerpt was already somewhat present, you have EXPANDED or ENRICHED how that content is presented
 
 If you cannot add new substantive content for the selected excerpts, explain why in a brief error message instead of returning the unchanged body.
 
@@ -349,12 +303,7 @@ ELEVATION RULES (apply before returning):
 - CLOSING SENTENCE: Must either land a definitive statement with force OR create forward pull via an unresolved implication. Never close by summarizing what the paragraph just said.
 - FIRST PERSON: Write entirely as the author. No "the speaker," "the preacher," or any third-person reference to the author.
 - NO EM DASHES: Never use — in any form. Use commas, colons, or subordinate clauses instead.
-- SOURCE FIDELITY: Every sentence must trace to the transcript excerpts. Zero fabrication, zero extension.
-
-SCRIPTURE EXCEPTION TO DASH RULE:
-- Scripture citation lines MUST follow SCRIPTURE_FORMATTING_RULES and therefore MUST use em-dash in citation lines only.
-
-${SCRIPTURE_FORMATTING_RULES}`,
+- SOURCE FIDELITY: Every sentence must trace to the transcript excerpts. Zero fabrication, zero extension.`,
         prompt: refinePrompt,
       });
 
@@ -365,8 +314,7 @@ ${SCRIPTURE_FORMATTING_RULES}`,
 
       const merged = [...paragraphs];
       merged[paragraphIndex] = refinedParagraph;
-      let mergedBody = merged.join("\n\n");
-      mergedBody = await enforceScriptureFormatting(mergedBody, assignment.primaryTranslation);
+      const mergedBody = merged.join("\n\n");
       const usage = (object.excerptUsage ?? []).filter((n) => n > 0);
 
       return NextResponse.json({ body: mergedBody, excerptUsage: usage }, { status: 200 });
@@ -385,11 +333,10 @@ ${SCRIPTURE_FORMATTING_RULES}`,
       fullText += chunk;
     }
 
-    let trimmedBody = fullText.trim();
+    const trimmedBody = fullText.trim();
     if (!trimmedBody) {
       return NextResponse.json({ error: "Rewrite returned empty output" }, { status: 422 });
     }
-    trimmedBody = await enforceScriptureFormatting(trimmedBody, assignment.primaryTranslation);
 
     return NextResponse.json(
       {

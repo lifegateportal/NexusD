@@ -427,10 +427,12 @@ export async function POST(req: NextRequest) {
   const authorConfig = input.authorConfig;
   const authorConfigBlock = (authorConfig?.instructions || authorConfig?.targetAudience)
     ? `\n\n════════════════════════════════════════════
-AUTHOR BOOK CONFIGURATION (tone & audience only)
+AUTHOR BOOK CONFIGURATION (presentation directives)
 ════════════════════════════════════════════${authorConfig.targetAudience ? `\nTARGET AUDIENCE: ${authorConfig.targetAudience}\nWrite at the vocabulary level, cultural register, and depth appropriate for this specific audience. Every example, illustration, and application point must land for this reader.` : ""}${authorConfig.instructions ? `\nAUTHOR WRITING INSTRUCTIONS: ${authorConfig.instructions}\nThese are the author's direct instructions for how the book should read. Honor them on every paragraph. They override any default style preference where they conflict.` : ""}
 
-⚠️ CRITICAL BOUNDARY: Author configuration applies ONLY to tone, vocabulary, pacing, and style. It DOES NOT grant permission to:
+Apply this configuration as high-priority guidance for HOW the section is presented: structure, narrative stance, emphasis, transitions, pacing, and rhetorical form.
+
+⚠️ CRITICAL BOUNDARY: Author configuration shapes presentation only. It DOES NOT grant permission to:
   • Add examples, illustrations, or applications NOT in the transcript
   • Introduce new concepts or theological extensions
   • Invent supporting details or expand on thin source material

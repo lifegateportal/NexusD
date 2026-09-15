@@ -71,9 +71,11 @@ export async function POST(req: NextRequest) {
   const { input: chapter } = input;
   const authorConfig = input.authorConfig;
   const authorConfigBlock = (authorConfig?.instructions || authorConfig?.targetAudience)
-    ? `\n\nAUTHOR BOOK CONFIGURATION (tone & audience only):\n${authorConfig.targetAudience ? `TARGET AUDIENCE: ${authorConfig.targetAudience}` : ""}${authorConfig.instructions ? `\nAUTHOR WRITING INSTRUCTIONS: ${authorConfig.instructions}` : ""}
+    ? `\n\nAUTHOR BOOK CONFIGURATION (presentation directives):\n${authorConfig.targetAudience ? `TARGET AUDIENCE: ${authorConfig.targetAudience}` : ""}${authorConfig.instructions ? `\nAUTHOR WRITING INSTRUCTIONS: ${authorConfig.instructions}` : ""}
 
-⚠️ CRITICAL: Author config is for TONE and AUDIENCE only. Never fabricate examples, context, or takeaways. All intro text, key takeaways, and reflection questions must derive from section headings and content already in the chapter body.`
+Apply this configuration as high-priority guidance for presentation: framing, emphasis, pacing, question style, and reader experience.
+
+⚠️ CRITICAL: Presentation directives do not permit fabrication. Never invent examples, context, or takeaways. All intro text, key takeaways, and reflection questions must derive from section headings and content already in the chapter body.`
     : "";
 
   try {

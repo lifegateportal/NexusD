@@ -4415,17 +4415,17 @@ export function EbookPipeline({
           </div>
           <div>
             <label className="mb-1.5 block text-[10px] font-bold uppercase tracking-widest text-slate-500">
-              Writing Instructions <span className="ml-1 text-slate-600 normal-case font-normal">(optional)</span>
+              Book Instructions <span className="ml-1 text-slate-600 normal-case font-normal">(chat-style, optional)</span>
             </label>
             <textarea
               value={authorInstructions}
               onChange={(e) => setAuthorInstructions(e.target.value)}
-              placeholder="e.g. Keep a warm, conversational tone. Use simple language suitable for first-generation believers. Emphasize practical application over theological theory…"
+              placeholder="e.g. Write in a direct pastoral voice with short chapters and strong section hooks. Keep examples concrete, use prayer moments sparingly, and end each chapter with one forward-facing question."
               rows={4}
               className="w-full rounded-xl border border-slate-700/60 bg-slate-950/70 px-3 py-2 text-base text-slate-100 placeholder:text-slate-600 outline-none focus:border-violet-500/40 resize-none"
               disabled={isRunning}
             />
-            <p className="mt-1 text-[10px] text-slate-600">Tell the AI how you want your book to read. Be specific about tone, vocabulary level, and style.</p>
+            <p className="mt-1 text-[10px] text-slate-600">Use this like a chat prompt for presentation: voice, structure, emphasis, pacing, and reader experience. Source facts still stay locked to your transcript.</p>
           </div>
 
           {/* Simple direct mode toggle */}

@@ -433,6 +433,11 @@ NON-NEGOTIABLE RULES:
 16) Thoroughness is mandatory: cover the full transcript and all significant teaching blocks, not just highlights.
 17) Never paste transcript blocks verbatim. Rewrite into publication-ready prose with clear section flow and transitions.
 
+AUTHOR CONFIGURATION POLICY:
+- Treat TARGET AUDIENCE and AUTHOR INSTRUCTIONS as high-priority presentation directives.
+- Apply them to voice, structure, emphasis, pacing, framing, and reader experience across the manuscript.
+- These directives never permit source invention. If an instruction requires facts not present in transcript material, keep source fidelity and write less.
+
 ${SOURCE_LOCK_RULES}`;
 
   const chapterRoutingBlock = usingSlots
@@ -458,6 +463,11 @@ TARGET AUDIENCE: ${input.targetAudience || "(not provided)"}
 CORE THESIS: ${input.coreThesis || "(not provided)"}
 VOICE TONE: ${input.voiceTone || "(not provided)"}
 AUTHOR INSTRUCTIONS: ${input.authorInstructions || "(not provided)"}
+
+AUTHOR CONFIGURATION APPLICATION:
+- Use TARGET AUDIENCE and AUTHOR INSTRUCTIONS as high-priority guidance for presentation choices.
+- Honor these directives in chapter flow, section voice, framing, and rhetorical delivery.
+- Do not invent new ideas, examples, facts, or theology to satisfy directives.
 ${chapterRoutingBlock}
 
 SCRIPTURE FORMATTING:
@@ -539,6 +549,11 @@ TARGET AUDIENCE: ${input.targetAudience || "(not provided)"}
 CORE THESIS: ${input.coreThesis || "(not provided)"}
 VOICE TONE: ${input.voiceTone || "(not provided)"}
 AUTHOR INSTRUCTIONS: ${input.authorInstructions || "(not provided)"}
+
+AUTHOR CONFIGURATION APPLICATION (HARD RULE):
+- Treat TARGET AUDIENCE and AUTHOR INSTRUCTIONS as high-priority presentation directives for this chapter.
+- Apply them to chapter shape, section emphasis, sentence rhythm, and reader-facing clarity.
+- Never invent source content to satisfy them; keep strict transcript grounding.
 
 TEACHING BLOCK COVERAGE CONTRACT (HARD REQUIREMENT):
 - Every significant teaching block listed below must be covered in this chapter.

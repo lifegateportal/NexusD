@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { generateObject } from "ai";
 import { z } from "zod";
-import { deepSeekReasonerModel } from "@/lib/ai-providers";
+import { deepSeekModel } from "@/lib/ai-providers";
 import { ArchitectRequestSchema } from "@/lib/schemas/ebook";
 import { SOURCE_LOCK_RULES } from "@/lib/editorial-style-bible";
 
@@ -33,64 +33,6 @@ const MinimalArchitectureSchema = z.object({
   chapters: z.array(MinimalChapterSchema).default([]),
 });
 
-function clampSectionCount(segmentCount: number, requestedCount: number): number {
-  if (segmentCount <= 0) return 0;
-  const bounded = Math.max(4, Math.min(5, requestedCount || 4));
-  return Math.min(segmentCount, bounded);
-}
-
-function buildContiguousBucketSizes(segmentCount: number, sectionCount: number): number[] {
-  if (sectionCount <= 0 || segmentCount <= 0) return [];
-  const safeSectionCount = Math.min(sectionCount, segmentCount);
-
-  // Prefer at least 2 segments per section when mathematically possible.
-  if (segmentCount >= safeSectionCount * 2) {
-    const sizes = Array(safeSectionCount).fill(2);
-    let remaining = segmentCount - safeSectionCount * 2;
-    let idx = 0;
-    while (remaining > 0) {
-      sizes[idx] += 1;
-      idx = (idx + 1) % safeSectionCount;
-      remaining -= 1;
-    }
-    return sizes;
-  }
-
-  // Otherwise distribute as evenly as possible with minimum 1.
-  const base = Math.floor(segmentCount / safeSectionCount);
-  let remainder = segmentCount % safeSectionCount;
-  return Array.from({ length: safeSectionCount }, () => {
-    const extra = remainder > 0 ? 1 : 0;
-    if (remainder > 0) remainder -= 1;
-    return base + extra;
-  });
-}
-
-function buildDeterministicSections(
-  segs: Array<{ id: string; topic: string; estimatedWordCount?: number }>,
-  plannedSections: Array<{ heading?: string }> | undefined,
-) {
-  const requestedCount = plannedSections?.length ?? 4;
-  const sectionCount = clampSectionCount(segs.length, requestedCount);
-  const sizes = buildContiguousBucketSizes(segs.length, sectionCount);
-
-  let cursor = 0;
-  return sizes.map((size, idx) => {
-    const bucket = segs.slice(cursor, cursor + size);
-    cursor += size;
-
-    const fallbackHeading = bucket[0]?.topic || `Section ${idx + 1}`;
-    const heading = (plannedSections?.[idx]?.heading || "").trim() || fallbackHeading;
-
-    return {
-      sectionNumber: idx + 1,
-      heading,
-      sourceSegmentIds: bucket.map((s) => s.id),
-      targetWordCount: bucket.reduce((sum, s) => sum + (s.estimatedWordCount || 0), 0),
-    };
-  });
-}
-
 // ── Simple fallback: group by audio, use topic as chapter title ──────────────
 function simpleFallback(input: z.infer<typeof ArchitectRequestSchema>) {
   const audioOrder = ["audio-1", "audio-2", "audio-3", "audio-4", "audio-5", "audio-6", "audio-7", "audio-8", "audio-9", "audio-10"];
@@ -107,9 +49,14 @@ function simpleFallback(input: z.infer<typeof ArchitectRequestSchema>) {
     const segs = segmentsByAudio.get(audioKey)!;
     const chapterTitle = (input.contentMap.overarchingThemes[idx] || "").trim()
       || segs[0]?.topic || `Chapter ${idx + 1}`;
-
-    // Use the same deterministic contiguous 4-5 section allocation as the main path.
-    const sections = buildDeterministicSections(segs, undefined);
+    
+    // Simple 1-segment = 1-section mapping for fallback
+    const sections = segs.map((seg, si) => ({
+      sectionNumber: si + 1,
+      heading: seg.topic,
+      sourceSegmentIds: [seg.id],
+      targetWordCount: seg.estimatedWordCount || 500,
+    }));
 
     return { number: idx + 1, title: chapterTitle, keyTheme: chapterTitle, sections };
   });
@@ -137,13 +84,15 @@ export async function POST(req: NextRequest) {
   const authorConfig = input.authorConfig;
   const authorConfigBlock = (authorConfig?.instructions || authorConfig?.targetAudience)
     ? `\n\n════════════════════════════════════════════
-AUTHOR BOOK CONFIGURATION (tone & audience only)
+AUTHOR BOOK CONFIGURATION (presentation directives)
 ════════════════════════════════════════════${authorConfig.targetAudience ? `\nTARGET AUDIENCE: ${authorConfig.targetAudience}\nEvery chapter heading, section depth, and conceptual progression must be appropriate for this specific audience. Adjust complexity, terminology, and pacing accordingly.` : ""}${authorConfig.instructions ? `\nAUTHOR WRITING INSTRUCTIONS: ${authorConfig.instructions}\nThese instructions apply to how the book is structured AND written. Honor them when designing chapters and sections.` : ""}
 
-⚠️ CRITICAL BOUNDARY: Author configuration applies ONLY to tone, vocabulary, pacing, and audience calibration. It DOES NOT grant permission to:
+Apply this configuration as high-priority guidance for presentation decisions: chapter framing, section emphasis, progression rhythm, and the overall reader journey.
+
+⚠️ CRITICAL BOUNDARY: Author configuration shapes presentation and organization of existing source material. It DOES NOT grant permission to:
   • Fabricate chapter themes or section breakdowns
   • Add structure that requires content not in the source material
-  • Split or reorganize segments to achieve the author's style
+  • Invent segment meaning that is not present in the transcript
   • Override SOURCE-LOCK-RULES in ANY way
 
 Every chapter heading and section must come from the actual transcript. When author instructions would require new content, prioritize the actual teaching material instead.`
@@ -190,10 +139,10 @@ Every chapter heading and section must come from the actual transcript. When aut
 
           try {
             const { object } = await generateObject({
-                model: deepSeekReasonerModel,
+              model: deepSeekModel,
               schema: MinimalChapterSchema,
               mode: "json",
-                temperature: 1,
+              temperature: 0.2,
               maxTokens: 8000,
               system: `You are a structural editor. Transform a sermon into a book chapter.
 
@@ -204,22 +153,16 @@ RULES:
 • Never start headings with: Introduction, Intro, Overview, Opening, Summary, Conclusion
 • Never end headings with: to, in, for, on, the, our, and, but, or, let (complete the thought!)
 • Minimum 4 sections, maximum 5 sections per chapter (never fewer than 4, never more than 5)
-• CRITICAL: Sections MUST follow transcript order — first section uses early excerpts, final section uses late excerpts
-• CRITICAL: Excerpt distribution must be roughly balanced — if 20 excerpts exist and you create 5 sections, each gets ~4 excerpts (±1 okay, but never 4-4-4-4-4 with 0 remaining)
-• CRITICAL: No section should contain fewer than 2 excerpts — thin sections indicate poor structuring
-• Each section: one focused teaching point from that part of the transcript
-• Every segment ID appears in exactly one section, in order
+• Each section: one focused teaching point
+• Every segment ID appears in exactly one section
 • targetWordCount = sum of assigned segments' word counts
 
 ${SOURCE_LOCK_RULES}${authorConfigBlock}`,
 
-              prompt: `SEGMENT IDs (IN ORDER): ${segs.map((s) => s.id).join(", ")}
-TOTAL EXCERPTS: ${segs.length}
+              prompt: `SEGMENT IDs: ${segs.map((s) => s.id).join(", ")}
 THEME: ${chapterHint}
 CORE THESIS: ${input.contentMap.coreThesis}
 VOICE TONE: ${input.voiceDNA.toneProfile}
-
-STRUCTURE CONSTRAINT: Divide these ${segs.length} segments into 4-5 sections, each covering a contiguous block of the transcript in chronological order.
 
 ${transcriptBlock}`,
             });
@@ -233,17 +176,32 @@ ${transcriptBlock}`,
       const chapters = chapterPlans.map((plan, idx) => {
         const segs = segsByAudio.get(audioKeys[idx])!;
         const themeHint = (input.contentMap.overarchingThemes[idx] || segs[0]?.topic || `Chapter ${idx + 1}`).trim();
-
-        const deterministicSections = buildDeterministicSections(
-          segs,
-          plan?.sections?.map((s) => ({ heading: s.heading }))
-        );
+        
+        if (!plan || plan.sections.length === 0) {
+          // Fallback: one segment = one section
+          return {
+            number: idx + 1,
+            title: themeHint,
+            keyTheme: themeHint,
+            sections: segs.map((seg, si) => ({
+              sectionNumber: si + 1,
+              heading: seg.topic,
+              sourceSegmentIds: [seg.id],
+              targetWordCount: seg.estimatedWordCount || 500,
+            })),
+          };
+        }
 
         return {
           number: idx + 1,
-          title: (plan?.title || themeHint).trim(),
-          keyTheme: (plan?.keyTheme || plan?.title || themeHint).trim(),
-          sections: deterministicSections,
+          title: (plan.title || themeHint).trim(),
+          keyTheme: (plan.keyTheme || plan.title || themeHint).trim(),
+          sections: plan.sections.map((sec, si) => ({
+            sectionNumber: si + 1,
+            heading: sec.heading,
+            sourceSegmentIds: (sec.sourceSegmentIds ?? []).filter((id) => validSegmentIds.has(id)),
+            targetWordCount: sec.targetWordCount || 0,
+          })),
         };
       });
 
@@ -269,6 +227,7 @@ ${transcriptBlock}`,
         title: (chapter.title || "Chapter " + (cidx + 1)).trim(),
         keyTheme: (chapter.keyTheme || chapter.title || "").trim(),
         sections: (chapter.sections ?? [])
+          .slice(0, 5) // ── CAP: Maximum 5 sections per chapter ──
           .map((section, sidx) => {
             const uniqueIds = (section.sourceSegmentIds ?? [])
               .filter((id) => validSegmentIds.has(id) && !globalUsedSegIds.has(id));
@@ -283,7 +242,7 @@ ${transcriptBlock}`,
           .filter((sec) => sec.sourceSegmentIds.length > 0)
           .map((sec, si) => ({ ...sec, sectionNumber: si + 1 })),
       }))
-        .filter((ch) => ch.sections.length > 0);
+      .filter((ch) => ch.sections.length >= 4 && ch.sections.length <= 5); // ── ENFORCE: 4-5 sections only ──
 
     // ── Warn-only on heading quality (no mutations) ─────────────────────────────
     const warnings: string[] = [];
@@ -295,34 +254,9 @@ ${transcriptBlock}`,
         if (words.length > 8) warnings.push(`Ch${ch.number} §${sec.sectionNumber}: Long heading (${words.length} words)`);
         if (DANGLING_END.test(sec.heading)) warnings.push(`Ch${ch.number} §${sec.sectionNumber}: Dangling ending: "${sec.heading}"`);
       }
-
-      // ── Validate section ordering and balance ──────────────────────────────
-      const allSegIds = input.contentMap.segments.map((s) => s.id);
-      let lastSeenIdx = -1;
-      
-      for (const sec of ch.sections) {
-        const segIndices = sec.sourceSegmentIds.map((id) => allSegIds.indexOf(id));
-        const minIdx = Math.min(...segIndices);
-        
-        // Check order: sections must follow transcript progression
-        if (minIdx < lastSeenIdx) {
-          warnings.push(`Ch${ch.number} §${sec.sectionNumber}: Out of order — uses excerpts before previous section`);
-        }
-        
-        // Check minimum coverage: each section should have at least 2 excerpts
-        if (sec.sourceSegmentIds.length < 2) {
-          warnings.push(`Ch${ch.number} §${sec.sectionNumber}: Thin section (${sec.sourceSegmentIds.length} excerpt) — may lack substantive content`);
-        }
-        
-        lastSeenIdx = Math.max(lastSeenIdx, ...segIndices);
-      }
-
-        if (ch.sections.length < 4 || ch.sections.length > 5) {
-          warnings.push(`Ch${ch.number}: Section count is ${ch.sections.length} (target 4-5 when enough source material is available)`);
-        }
     }
 
-    if (warnings.length > 0) console.warn("[architect] Heading/structure warnings:", warnings);
+    if (warnings.length > 0) console.warn("[architect] Heading warnings:", warnings);
 
     // ── Rehydrate with segment details ───────────────────────────────────────
     const result = {

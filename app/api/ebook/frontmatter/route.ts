@@ -30,9 +30,11 @@ export async function POST(req: NextRequest) {
   const transcript = typeof input.masterTranscript === "string" ? input.masterTranscript : "";
   const authorConfig = input.authorConfig;
   const authorConfigBlock = (authorConfig?.instructions || authorConfig?.targetAudience)
-    ? `\n\n════════════════════════════════════════════\nAUTHOR BOOK CONFIGURATION (tone & audience only)\n════════════════════════════════════════════${authorConfig.targetAudience ? `\nTARGET AUDIENCE: ${authorConfig.targetAudience}` : ""}${authorConfig.instructions ? `\nAUTHOR WRITING INSTRUCTIONS: ${authorConfig.instructions}` : ""}
+    ? `\n\n════════════════════════════════════════════\nAUTHOR BOOK CONFIGURATION (presentation directives)\n════════════════════════════════════════════${authorConfig.targetAudience ? `\nTARGET AUDIENCE: ${authorConfig.targetAudience}` : ""}${authorConfig.instructions ? `\nBOOK INSTRUCTIONS: ${authorConfig.instructions}` : ""}
 
-⚠️ CRITICAL: Author config is for TONE and AUDIENCE only. It does NOT override SOURCE-LOCK-RULES. Never fabricate examples, background, or theological context. Intro/conclusion must be grounded entirely in what the author actually taught in the master transcript.`
+Apply this configuration as high-priority guidance for HOW this material is presented: voice, framing, emphasis, pacing, structure, and reader experience.
+
+⚠️ CRITICAL BOUNDARY: These directives shape presentation, not source truth. They do NOT override SOURCE-LOCK-RULES. Never fabricate examples, background, or theological context. Intro/conclusion must stay grounded in what the author actually taught in the master transcript.`
     : "";
 
   // Scripture already quoted in full elsewhere in the book (chapter bodies, epigraphs) —

@@ -39,10 +39,12 @@ Avoid words: ${(voiceDNA.avoidWords ?? []).slice(0, 20).join(", ")}${voiceDNA.op
 
   const authorConfigBlock = (authorConfig?.instructions || authorConfig?.targetAudience)
     ? `\n\n════════════════════════════════════════════
-AUTHOR CONFIGURATION (tone & audience only)
+AUTHOR CONFIGURATION (presentation directives)
 ════════════════════════════════════════════${authorConfig.targetAudience ? `\nTARGET AUDIENCE: ${authorConfig.targetAudience}` : ""}${authorConfig.instructions ? `\nAUTHOR INSTRUCTIONS: ${authorConfig.instructions}` : ""}
 
-⚠️ CRITICAL: Author config is for TONE and AUDIENCE only. It does NOT override SOURCE-LOCK-RULES. Never add content not in the transcript to satisfy author instructions. Write less rather than invent.`
+Apply this configuration as high-priority guidance for presentation choices: voice, sequencing, section rhythm, emphasis, transitions, and reader-facing clarity.
+
+⚠️ CRITICAL: Author configuration does NOT override SOURCE-LOCK-RULES. Never add content not in the transcript to satisfy author instructions. Write less rather than invent.`
     : "";
 
   // ── Cross-chapter dedup context ────────────────────────────────────────────
