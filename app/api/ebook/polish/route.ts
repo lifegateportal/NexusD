@@ -3,7 +3,7 @@ import { generateText } from "ai";
 import { deepSeekModel } from "@/lib/ai-providers";
 import { z } from "zod";
 import { PolishChapterRequestSchema } from "@/lib/schemas/ebook";
-import { PREMIUM_BOOK_STYLE_RULES, PROSE_MASTERY_RULES, READER_NORMALIZATION_RULES, SOURCE_LOCK_RULES, stripAudienceLanguage, extractChapterOpeningQuote } from "@/lib/editorial-style-bible";
+import { PREMIUM_BOOK_STYLE_RULES, PROSE_MASTERY_RULES, READER_NORMALIZATION_RULES, SOURCE_LOCK_RULES, stripAudienceLanguage } from "@/lib/editorial-style-bible";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
@@ -42,13 +42,19 @@ function fallbackPolishOutput(chapter: z.infer<typeof PolishChapterRequestSchema
       ];
 
   // Intro: derive from headings and key points — never copy the body prose.
-  const headingsSummary = sections
+  const headingList = sections
     .map((s) => s.heading?.trim())
-    .filter(Boolean)
-    .join(", ");
-  const fallbackIntro = headingsSummary
-    ? `This chapter examines: ${headingsSummary}.`
-    : chapter.title || "";
+    .filter((h): h is string => Boolean(h))
+    .slice(0, 3);
+  const fallbackIntro = headingList.length > 0
+    ? [
+        `This chapter develops ${chapter.title ? `the argument of ${chapter.title}` : "its central argument"} through a clear progression of teaching points.`,
+        `It opens by grounding the reader in the core tension, then moves through ${headingList.join(", ")} with practical and theological clarity.`,
+        "The aim is to establish the chapter's burden before the section-level exposition unfolds in full detail.",
+      ].join(" ")
+    : chapter.title
+      ? `This chapter establishes the central burden of ${chapter.title} and prepares the reader for the argument developed in the sections that follow.`
+      : "This chapter establishes its central burden and prepares the reader for the argument developed in the sections that follow.";
 
   return {
     intro: stripAudienceLanguage(fallbackIntro),
@@ -57,6 +63,34 @@ function fallbackPolishOutput(chapter: z.infer<typeof PolishChapterRequestSchema
     keyTakeaways: takeaways.length > 0 ? takeaways.map((item) => stripAudienceLanguage(item)) : [stripAudienceLanguage(chapter.title || "")].filter(Boolean),
     reflectionQuestions: reflectionQuestions.map((item) => stripAudienceLanguage(item)).filter(Boolean),
   };
+}
+
+function sentenceCount(text: string): number {
+  return text
+    .split(/(?<=[.!?])\s+/)
+    .map((s) => s.trim())
+    .filter(Boolean).length;
+}
+
+function wordCount(text: string): number {
+  return text
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean).length;
+}
+
+function hasScriptureReference(text: string): boolean {
+  return /\b\d+\s*:\s*\d+\b/.test(text);
+}
+
+function introNeedsRepair(intro: string): boolean {
+  const trimmed = intro.trim();
+  if (!trimmed) return true;
+  if (wordCount(trimmed) < 60) return true;
+  if (sentenceCount(trimmed) < 3) return true;
+  const firstTwoSentences = trimmed.split(/(?<=[.!?])\s+/).slice(0, 2).join(" ");
+  if (hasScriptureReference(firstTwoSentences)) return true;
+  return false;
 }
 
 export async function POST(req: NextRequest) {
@@ -131,10 +165,12 @@ Apply this configuration as high-priority guidance for presentation: framing, em
         }).join("\n")}`
       : "";
 
-    // AMENDMENT: Extract chapter opening quote from first section instead of AI-generating intro
-    // This ensures the intro is a direct, powerful statement from the author's own teaching,
-    // not a fabricated opener. This matches industry standards for book intros.
-    const extractedIntro = extractChapterOpeningQuote(chapter.sections ?? []);
+    const firstSectionOpening = (chapter.sections ?? [])
+      .map((s) => (s.body ?? "").trim())
+      .find(Boolean)
+      ?.split(/(?<=[.!?])\s+/)
+      .slice(0, 3)
+      .join(" ") ?? "";
 
     let object: z.infer<typeof PolishOutputSchema>;
     try {
@@ -152,7 +188,15 @@ HUMANIZATION: Use contractions naturally. Avoid "not just...but", "not merely...
 
 Your tasks:
 1. EPIGRAPH: From the provided scripture candidates, pick the ONE most resonant opening quote for this chapter. Return it formatted as: "Quote text." — Reference (Translation). The translation abbreviation is REQUIRED and must never be omitted — every candidate below already gives you one to use. If no candidate strongly fits or none are provided, return an empty string. Never invent a quote.
-2. INTRO: THIS FIELD IS NOW EXTRACTED (not generated). Skip generating intro — return empty string. The intro is automatically extracted from the chapter body as a significant opening quote.
+2. INTRO: Write a STANDARD BOOK CHAPTER INTRODUCTION, not an extracted quote pull.
+  Requirements:
+  • Length: 120-220 words
+  • Structure: 2-3 paragraphs
+  • Function: frame the chapter's central burden and argument trajectory before section-level exposition
+  • Tone: polished trade-book prose in first person as the author
+  • Prohibition: do NOT make this a one-sentence intro, and do NOT open with a scripture citation or quoted verse text
+  • The first two sentences must be prose framing only (no verse references like "3:16")
+  • Keep it source-faithful: no fabricated stories, no invented theology, no new claims outside provided chapter material
 3. FORWARD QUESTION: ONE sentence — a preemptive question that plants anticipation for where the book goes next.
    This is the last thing the reader sees before turning the page. It should feel like an open door, not a closed summary.
    It must point forward, not backward. Never restate what the chapter covered.
@@ -185,19 +229,26 @@ ${PREMIUM_BOOK_STYLE_RULES}${authorConfigBlock}
 
 Respond with ONLY a valid JSON object — no markdown, no code blocks, no explanation:
 {"intro":"...","forwardQuestion":"...","keyTakeaways":["..."],"reflectionQuestions":["..."],"epigraph":"...","sectionTransitions":[{"sectionNumber":1,"revisedLastSentence":"..."}]}`,
-        prompt: `Finalize this chapter.\n\nCHAPTER ${chapter.number}: ${chapter.title}\n\nVOICE DNA:\n${JSON.stringify(voiceDNASlim)}\n\nSECTION SUMMARIES:\n${sectionsSummary}${epigraphCandidates ? `\n\nSCRIPTURE CANDIDATES FOR EPIGRAPH (pick the most resonant ONE, or return empty string if none fits):\n${epigraphCandidates}` : ""}${prevChapterBlock}${chapterPremiseBlock}${seriesArcBlock}${sectionBoundariesBlock}`,
+        prompt: `Finalize this chapter.\n\nCHAPTER ${chapter.number}: ${chapter.title}\n\nVOICE DNA:\n${JSON.stringify(voiceDNASlim)}\n\nSECTION SUMMARIES:\n${sectionsSummary}${firstSectionOpening ? `\n\nOPENING MOVEMENT FROM SECTION 1 (for grounding only; do not copy verbatim into intro):\n${firstSectionOpening}` : ""}${epigraphCandidates ? `\n\nSCRIPTURE CANDIDATES FOR EPIGRAPH (pick the most resonant ONE, or return empty string if none fits):\n${epigraphCandidates}` : ""}${prevChapterBlock}${chapterPremiseBlock}${seriesArcBlock}${sectionBoundariesBlock}`,
       });
       const _jsonMatch = text.match(/\{[\s\S]*\}/);
       const parsed = PolishOutputSchema.parse(_jsonMatch ? JSON.parse(_jsonMatch[0]) : {});
-      // AMENDMENT: Override with extracted intro (actual quote from chapter)
-      object = { ...parsed, intro: extractedIntro };
+      object = parsed;
     } catch {
       try {
         const fallback = fallbackPolishOutput(chapter);
-        object = { ...fallback, intro: extractedIntro };
+        object = fallback;
       } catch {
-        object = { intro: extractedIntro, forwardQuestion: "", keyTakeaways: [], reflectionQuestions: [] };
+        object = { intro: "", forwardQuestion: "", keyTakeaways: [], reflectionQuestions: [] };
       }
+    }
+
+    if (introNeedsRepair(object.intro ?? "")) {
+      const repaired = fallbackPolishOutput(chapter);
+      object = {
+        ...object,
+        intro: repaired.intro,
+      };
     }
 
     // Merge: preserve section bodies that were already written

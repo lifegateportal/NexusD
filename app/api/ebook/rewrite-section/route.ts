@@ -48,6 +48,38 @@ function splitParagraphs(body: string): string[] {
     .filter(Boolean);
 }
 
+function normalizeSentenceForRepetition(sentence: string): string {
+  return sentence
+    .toLowerCase()
+    .replace(/[^a-z0-9\s']/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function detectRepeatedSentences(body: string): Array<{ sentence: string; count: number }> {
+  const sentences = body
+    .split(/(?<=[.!?])\s+/)
+    .map((s) => s.trim())
+    .filter((s) => s.length >= 30);
+
+  const buckets = new Map<string, { sentence: string; count: number }>();
+  for (const sentence of sentences) {
+    const key = normalizeSentenceForRepetition(sentence);
+    if (key.length < 24) continue;
+    const existing = buckets.get(key);
+    if (existing) {
+      existing.count += 1;
+    } else {
+      buckets.set(key, { sentence, count: 1 });
+    }
+  }
+
+  return Array.from(buckets.values())
+    .filter((entry) => entry.count >= 2)
+    .sort((a, b) => b.count - a.count)
+    .slice(0, 4);
+}
+
 // Helper function removed - grounding validation is redundant with LLM fidelity rules
 
 export async function POST(req: NextRequest) {
@@ -211,6 +243,15 @@ ${usedScriptures.map(q => `• ${q.reference} — DO NOT REPRODUCE TEXT`).join("
 
   try {
     if (mode === "critiqueSection") {
+      const repeatedSentences = detectRepeatedSentences(currentBody);
+      const repeatedSentenceBlock = repeatedSentences.length > 0
+        ? [
+            "DETECTED REPETITION CANDIDATES (exact/near-exact normalized matches):",
+            ...repeatedSentences.map((r) => `- \"${r.sentence.slice(0, 180)}${r.sentence.length > 180 ? "..." : ""}\" (appears ${r.count}x)`),
+            "Treat these as high-priority checks and include them in issues/actions when valid.",
+          ].join("\n")
+        : "";
+
       const critiquePrompt = [
         `CHAPTER ${assignment.chapterNumber}: ${assignment.chapterTitle}`,
         `SECTION ${assignment.sectionNumber}: ${assignment.heading}`,
@@ -220,6 +261,8 @@ ${usedScriptures.map(q => `• ${q.reference} — DO NOT REPRODUCE TEXT`).join("
         "",
         "SOURCE EXCERPTS:",
         excerptBlock,
+        "",
+        repeatedSentenceBlock,
         "",
         instruction.trim() ? `USER NOTE:\n${instruction.trim()}\n` : "",
         "Return concise editorial guidance:",
@@ -242,13 +285,30 @@ Evaluate on these five dimensions:
 3. ARGUMENT MOMENTUM — Does each paragraph advance the argument? Flag any paragraph that restates a previous one, treads water, or fails to move the reader forward.
 4. VOICE & PERSON — Is every sentence written in first person as the author? Flag any "the speaker," "the preacher," or third-person reference to the author.
 5. RHYTHM & STRUCTURE — Are sentence lengths varied? Flag runs of uniform-length sentences, back-to-back rhetorical questions, and paragraphs that close with a restatement of their opening.
+6. REPETITION CONTROL — Detect repeated sentences and near-duplicate claims. Explicitly identify any sentence repeated verbatim (or almost verbatim) and prescribe which occurrence to keep vs cut/rewrite.
 
 For each issue identified, give a specific action: not "improve the flow" but "rewrite the third sentence of paragraph 2 — it restates paragraph 1's conclusion."
 Do not invent new source facts or suggest content not in the transcript.`,
         prompt: critiquePrompt,
       });
 
-      return NextResponse.json(object, { status: 200 });
+      const normalizedIssues = [...(object.issues ?? [])];
+      const normalizedActions = [...(object.actions ?? [])];
+      for (const repeated of repeatedSentences.slice(0, 3)) {
+        const snippet = repeated.sentence.slice(0, 80).toLowerCase();
+        const alreadyFlagged = normalizedIssues.some((issue) => issue.toLowerCase().includes(snippet));
+        if (alreadyFlagged) continue;
+        normalizedIssues.push(`Sentence repetition: \"${repeated.sentence.slice(0, 160)}${repeated.sentence.length > 160 ? "..." : ""}\" appears ${repeated.count} times.`);
+        normalizedActions.push("Keep the strongest occurrence, then cut or substantially rewrite the repeated sentence where it appears later.");
+      }
+
+      const enriched = {
+        ...object,
+        issues: normalizedIssues.slice(0, 6),
+        actions: normalizedActions.slice(0, 6),
+      };
+
+      return NextResponse.json(enriched, { status: 200 });
     }
 
     if (mode === "refineParagraph") {

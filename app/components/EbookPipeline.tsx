@@ -2860,18 +2860,17 @@ export function EbookPipeline({
 
   const handleTranscriptEdit = useCallback((slot: number, newTranscript: string) => {
     const label = `Slot-${slot + 1}`;
-    setSourceTranscripts((prev) => {
-      const next = [...prev];
-      const existing = next.find((t) => t.label === label);
-      if (existing) {
-        existing.text = newTranscript;
-      } else {
-        next.push({ label, text: newTranscript });
-      }
-      return next;
-    });
+    const nextTranscripts = [...sourceTranscripts];
+    const existing = nextTranscripts.find((t) => t.label === label);
+    if (existing) {
+      existing.text = newTranscript;
+    } else {
+      nextTranscripts.push({ label, text: newTranscript });
+    }
+    setSourceTranscripts(nextTranscripts);
+    void persistSourceMapState(sectionAssignments, nextTranscripts);
     addLog(`✓ ${label} transcript edited manually — ${countWords(newTranscript).toLocaleString()} words`);
-  }, [addLog]);
+  }, [addLog, persistSourceMapState, sectionAssignments, sourceTranscripts]);
 
   const handleRemoveSource = useCallback((slot: number) => {
     const label = `Slot-${slot + 1}`;
@@ -2885,7 +2884,9 @@ export function EbookPipeline({
       next[slot] = null;
       return next;
     });
-    setSourceTranscripts((prev) => prev.filter((t) => t.label !== label));
+    const nextTranscripts = sourceTranscripts.filter((t) => t.label !== label);
+    setSourceTranscripts(nextTranscripts);
+    void persistSourceMapState(sectionAssignments, nextTranscripts);
     setAudioSourceStatuses((prev) => {
       const next = [...prev];
       next[slot] = "idle";
@@ -2893,7 +2894,7 @@ export function EbookPipeline({
     });
     addLog(`✗ ${label} removed from pipeline`);
     addLog(`⚠ Manuscript will need regeneration to reflect source removal.`);
-  }, [addLog]);
+  }, [addLog, persistSourceMapState, sectionAssignments, sourceTranscripts]);
 
   // ── Resolve one slot: use pre-existing transcript or call Deepgram ─────────
 

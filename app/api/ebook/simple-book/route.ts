@@ -4,7 +4,6 @@ import { z } from "zod";
 import { deepSeekReasonerModel } from "@/lib/ai-providers";
 import { SOURCE_LOCK_RULES, stripAudienceLanguage } from "@/lib/editorial-style-bible";
 import { SCRIPTURE_FORMATTING_RULES } from "@/lib/scripture-formatter";
-import { getEbookModel, getEbookTemperature } from "@/lib/ebook-model-selector";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
@@ -21,8 +20,6 @@ const RequestSchema = z.object({
   authorInstructions: z.string().max(4000).optional().default(""),
   desiredChapters: z.number().int().min(3).max(12).optional().default(6),
   oneChapterPerSlot: z.boolean().optional().default(true),
-  eBookModel: z.enum(["deepseek", "gemini"]).default("deepseek"),
-  llmTemperature: z.number().min(0).max(1).optional(),
 });
 
 const SectionSchema = z.object({
@@ -70,14 +67,6 @@ type SimpleSectionSourceLink = {
   sourceSegmentIds: string[];
   transcriptExcerpts: string[];
   keyPoints: string[];
-};
-
-type UncoveredTeachingBlock = {
-  sourceAudio: `audio-${number}`;
-  chapterNumber: number;
-  blockId: string;
-  wordCount: number;
-  excerpt: string;
 };
 
 function nonEmptySubtitle(targetAudience: string, coreThesis: string): string {
@@ -128,7 +117,7 @@ type TeachingBlock = {
   excerpt: string;
 };
 
-function buildTeachingBlocks(text: string): TeachingBlock[] {
+function buildTeachingBlocks(text: string, maxBlocks = 18): TeachingBlock[] {
   const paragraphs = text
     .split(/\n\s*\n/g)
     .map((p) => p.replace(/\s+/g, " ").trim())
@@ -141,7 +130,7 @@ function buildTeachingBlocks(text: string): TeachingBlock[] {
 
   for (const para of paragraphs) {
     const paraWords = countWords(para);
-    if (currentWords >= targetWordsPerBlock) {
+    if (currentWords >= targetWordsPerBlock && chunks.length < maxBlocks - 1) {
       chunks.push(current.trim());
       current = para;
       currentWords = paraWords;
@@ -161,11 +150,13 @@ function buildTeachingBlocks(text: string): TeachingBlock[] {
     if (merged.trim()) chunks.push(merged.trim());
   }
 
-  return chunks.map((chunk, idx) => ({
+  const sampled = chunks.slice(0, maxBlocks).map((chunk, idx) => ({
     id: `B${idx + 1}`,
     wordCount: countWords(chunk),
     excerpt: chunk.slice(0, 360),
   }));
+
+  return sampled;
 }
 
 function chapterWordCount(chapter: z.infer<typeof ChapterSchema>): number {
@@ -393,8 +384,6 @@ export async function POST(req: NextRequest) {
       { status: 400 }
     );
   }
-  const { eBookModel } = input;
-  const reasoningTemperature = input.llmTemperature ?? getEbookTemperature(eBookModel, "reasoning");
 
   const slotBlocks = (input.slotTranscripts ?? [])
     .filter((slot) => slot.text.trim().length > 0)
@@ -404,7 +393,7 @@ export async function POST(req: NextRequest) {
         sourceId,
         label: slot.label,
         fullText: slot.text,
-        text: slot.text,
+        text: clampSlotTranscript(slot.text, 32000),
       };
     });
 
@@ -440,11 +429,8 @@ NON-NEGOTIABLE RULES:
 15) Remove all pulpit and live-audience language from narration. Forbidden examples: "say amen", "turn to your neighbor", "lift your hands", "good morning church".
 16) Thoroughness is mandatory: cover the full transcript and all significant teaching blocks, not just highlights.
 17) Never paste transcript blocks verbatim. Rewrite into publication-ready prose with clear section flow and transitions.
-
-AUTHOR CONFIGURATION POLICY:
-- Treat TARGET AUDIENCE and AUTHOR INSTRUCTIONS as high-priority presentation directives.
-- Apply them to voice, structure, emphasis, pacing, framing, and reader experience across the manuscript.
-- These directives never permit source invention. If an instruction requires facts not present in transcript material, keep source fidelity and write less.
+18) CHAPTER BODY OPENING PROTOCOL: In section 1 of every chapter, begin with at least two full prose paragraphs (120-220 words total) that frame the chapter burden before scripture exposition.
+19) The first two sentences of section 1 must not contain verse citations (e.g. 3:16) or direct quoted scripture text.
 
 ${SOURCE_LOCK_RULES}`;
 
@@ -471,11 +457,6 @@ TARGET AUDIENCE: ${input.targetAudience || "(not provided)"}
 CORE THESIS: ${input.coreThesis || "(not provided)"}
 VOICE TONE: ${input.voiceTone || "(not provided)"}
 AUTHOR INSTRUCTIONS: ${input.authorInstructions || "(not provided)"}
-
-AUTHOR CONFIGURATION APPLICATION:
-- Use TARGET AUDIENCE and AUTHOR INSTRUCTIONS as high-priority guidance for presentation choices.
-- Honor these directives in chapter flow, section voice, framing, and rhetorical delivery.
-- Do not invent new ideas, examples, facts, or theology to satisfy directives.
 ${chapterRoutingBlock}
 
 SCRIPTURE FORMATTING:
@@ -531,13 +512,12 @@ ${sourceBlock}`;
       const chapters: z.infer<typeof ChapterSchema>[] = [];
       const sourceSegments: SimpleSourceSegment[] = [];
       const sectionSourceLinks: SimpleSectionSourceLink[] = [];
-      const uncoveredTeachingBlocks: UncoveredTeachingBlock[] = [];
       let allSectionClaims: string[] = [];
 
       for (let i = 0; i < slotBlocks.length; i++) {
         const slot = slotBlocks[i];
         const chapterNumber = i + 1;
-          const teachingBlocks = buildTeachingBlocks(slot.fullText);
+        const teachingBlocks = buildTeachingBlocks(slot.fullText, 20);
         const teachingBlockManifest = teachingBlocks.length > 0
           ? teachingBlocks.map((b) => `- ${b.id} (${b.wordCount} words): ${b.excerpt}`).join("\n")
           : "- B1: (no extracted block; use full transcript coverage)";
@@ -559,11 +539,6 @@ CORE THESIS: ${input.coreThesis || "(not provided)"}
 VOICE TONE: ${input.voiceTone || "(not provided)"}
 AUTHOR INSTRUCTIONS: ${input.authorInstructions || "(not provided)"}
 
-AUTHOR CONFIGURATION APPLICATION (HARD RULE):
-- Treat TARGET AUDIENCE and AUTHOR INSTRUCTIONS as high-priority presentation directives for this chapter.
-- Apply them to chapter shape, section emphasis, sentence rhythm, and reader-facing clarity.
-- Never invent source content to satisfy them; keep strict transcript grounding.
-
 TEACHING BLOCK COVERAGE CONTRACT (HARD REQUIREMENT):
 - Every significant teaching block listed below must be covered in this chapter.
 - Each section must declare coveredBlockIds.
@@ -577,6 +552,11 @@ ${storyIntegrationBlock}
 
 SCRIPTURE FORMATTING:
 ${SCRIPTURE_FORMATTING_RULES}
+
+CHAPTER BODY OPENING RULE (HARD REQUIREMENT):
+- In section 1, write a substantial opening movement before scripture exposition.
+- Use at least two prose paragraphs (120-220 words total) to frame the chapter burden and argument trajectory.
+- Do not include verse citations or quoted scripture in the first two sentences.
 
 SOURCE SLOT:
 SOURCE ID: ${slot.sourceId}
@@ -592,10 +572,10 @@ ${slot.text}${priorClaimsBlock}`;
             : `${slotPrompt}\n\nREVISION REQUIRED:\n- Prior attempt copied transcript phrasing too closely or failed structure.\n- Rewrite with stronger synthesis, cleaner transitions, and no long verbatim transcript spans.\n- Keep strict source grounding and keep all significant teaching blocks covered.`;
           try {
             const { object } = await generateObject({
-              model: getEbookModel(eBookModel),
+              model: deepSeekReasonerModel,
               schema: SlotChapterSchema,
               mode: "json",
-              temperature: reasoningTemperature,
+              temperature: 0.28,
               maxTokens,
               system,
               prompt: attemptPrompt,
@@ -617,8 +597,8 @@ ${slot.text}${priorClaimsBlock}`;
         if (!chapterObject) {
           try {
             const { text } = await generateText({
-              model: getEbookModel(eBookModel),
-              temperature: reasoningTemperature,
+              model: deepSeekReasonerModel,
+              temperature: 0.28,
               maxTokens,
               system,
               prompt: `${slotPrompt}\n\nReturn ONLY JSON in this exact shape:\n${slotChapterTemplate}`,
@@ -658,22 +638,6 @@ ${slot.text}${priorClaimsBlock}`;
             { status: 502 }
           );
         }
-
-        const uncoveredBlocks = missingTeachingBlocks(normalizedChapter, teachingBlocks);
-        if (uncoveredBlocks.length > 0) {
-          const missing = new Set(uncoveredBlocks);
-          const uncoveredForSlot = teachingBlocks
-            .filter((block) => missing.has(block.id))
-            .map((block) => ({
-              sourceAudio: slot.sourceId as `audio-${number}`,
-              chapterNumber,
-              blockId: block.id,
-              wordCount: block.wordCount,
-              excerpt: block.excerpt,
-            }));
-          uncoveredTeachingBlocks.push(...uncoveredForSlot);
-        }
-
         const sourceAudio = slot.sourceId as `audio-${number}`;
         const slotSegments = buildSlotSourceSegments(slot.fullText, sourceAudio);
         const slotLinks = mapChapterSectionsToSourceLinks(normalizedChapter, slotSegments);
@@ -700,7 +664,6 @@ ${slot.text}${priorClaimsBlock}`;
         ...normalizedSlotsBook,
         sourceSegments,
         sectionSourceLinks,
-        uncoveredTeachingBlocks,
       });
     }
 
@@ -710,7 +673,7 @@ ${slot.text}${priorClaimsBlock}`;
           model: deepSeekReasonerModel,
           schema: SimpleBookSchema,
           mode: "json",
-          temperature: reasoningTemperature,
+          temperature: 0.28,
           maxTokens,
           system,
           prompt: `${prompt}\n\n${storyIntegrationBlock}`,
@@ -726,7 +689,7 @@ ${slot.text}${priorClaimsBlock}`;
 
     const { text } = await generateText({
       model: deepSeekReasonerModel,
-      temperature: reasoningTemperature,
+      temperature: 0.28,
       maxTokens,
       system,
       prompt: `${prompt}\n\n${storyIntegrationBlock}\n\nReturn ONLY JSON in this exact shape:\n${jsonTemplate}`,
@@ -755,7 +718,6 @@ ${slot.text}${priorClaimsBlock}`;
         { status: 502 }
       );
     }
-
     return NextResponse.json(normalized);
   } catch (err) {
     return NextResponse.json(
