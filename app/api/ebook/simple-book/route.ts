@@ -414,22 +414,37 @@ export async function POST(req: NextRequest) {
     : clampTranscript(input.rawTranscript, 160000);
   const maxTokens = usingSlots ? 22000 : 24000;
 
-  const system = `You are writing the Simple Direct Pipeline draft from sermon transcripts.
+  const system = `You are a bestselling nonfiction ghostwriter commissioned to transform sermon transcripts into a premium, publication-ready book manuscript.
 
-Keep it simple, clear, and grounded.
+You must produce a clean, publication-ready book draft from sermon transcript material using one deterministic philosophy:
+- Simple and direct structure like Sermon Assistant
+- Strong chapter titles and section headings
+- Zero concept duplication across sections and chapters
+- Strict transcript grounding
 
-CORE RULES:
-1) Follow transcript sequence and cover the meaningful teaching blocks.
-2) Use clear chapter titles and section headings.
-3) Avoid duplication: do not fully reteach the same claim or story in later sections.
-4) Remove live-audience language (for example: "say amen", "turn to your neighbor", "good morning church").
-5) Rewrite into clean reader prose; do not paste long transcript spans verbatim.
-6) Return valid JSON only.
+NON-NEGOTIABLE RULES:
+1) Section count is content-driven. Choose as many sections as needed for clear flow and full coverage.
+2) Chapter titles must be 4-7 words, punchy, complete phrases.
+3) Section headings must be 4-8 words, complete phrases, never dangling.
+4) Subtitle must be useful and reader-facing, never empty.
+5) No duplication: once a concept is fully developed in one section, do not repeat it in later sections.
+6) Keep chronological integrity unless a minimal reorder is required for clarity.
+7) Every section body must be transcript-grounded and specific.
+8) Avoid generic headings like Introduction, Overview, Summary, Conclusion.
+9) Output valid JSON only.
+10) Write full-length chapter prose: target 700-1000 words per section when content supports it so each chapter lands around 3500-4500 words.
+11) Preserve scripture fidelity and render scripture with premium readability.
+12) Preserve and integrate live examples/stories from the transcript. Do not strip them out. Use them as evidence that advances the teaching point.
+13) Story discipline: setup, tension, and payoff must stay in order and attach to the section argument.
+14) Never duplicate a full story in multiple sections. If recalled later, reference briefly and move forward.
+15) Remove all pulpit and live-audience language from narration. Forbidden examples: "say amen", "turn to your neighbor", "lift your hands", "good morning church".
+16) Thoroughness is mandatory: cover the full transcript and all significant teaching blocks, not just highlights.
+17) Never paste transcript blocks verbatim. Rewrite into publication-ready prose with clear section flow and transitions.
 
 AUTHOR CONFIGURATION POLICY:
-- Treat TARGET AUDIENCE and AUTHOR INSTRUCTIONS as high-priority presentation guidance.
-- They guide voice, structure, and emphasis.
-- They never permit invented content. If source support is thin, write less.
+- Treat TARGET AUDIENCE and AUTHOR INSTRUCTIONS as high-priority presentation directives.
+- Apply them to voice, structure, emphasis, pacing, framing, and reader experience across the manuscript.
+- These directives never permit source invention. If an instruction requires facts not present in transcript material, keep source fidelity and write less.
 
 ${SOURCE_LOCK_RULES}`;
 
@@ -499,15 +514,17 @@ ${sourceBlock}`;
       "sectionNumber": 1,
       "heading": "...",
       "body": "...",
-      "keyClaims": ["..."]
+      "keyClaims": ["..."],
+      "coveredBlockIds": ["B1", "B2"]
     }
   ]
 }`;
 
-  const storyIntegrationBlock = `LIVE EXAMPLES AND STORIES:
-- Keep meaningful stories and testimonies from the transcript.
-- Use them to advance the section's teaching point.
-- Do not retell the same story in full across multiple sections.`;
+  const storyIntegrationBlock = `LIVE EXAMPLES AND STORIES (NON-NEGOTIABLE):
+- Keep the speaker's live examples, testimonies, and personal stories in the chapter.
+- Integrate each story into the argument, not as a detached anecdote.
+- After each story movement, state the teaching implication in plain terms.
+- Do not flatten vivid details that carry emotional force unless they are repetitive noise.`;
 
   try {
     if (usingSlots && slotBlocks.length > 0) {
@@ -547,11 +564,11 @@ AUTHOR CONFIGURATION APPLICATION (HARD RULE):
 - Apply them to chapter shape, section emphasis, sentence rhythm, and reader-facing clarity.
 - Never invent source content to satisfy them; keep strict transcript grounding.
 
-TEACHING COVERAGE PRIORITY:
-- Use the significant teaching blocks below as coverage guidance.
-- Keep major ideas represented in natural flow.
-- Use as many sections as needed; do not force structure.
-- Include coveredBlockIds when helpful for traceability.
+TEACHING BLOCK COVERAGE CONTRACT (HARD REQUIREMENT):
+- Every significant teaching block listed below must be covered in this chapter.
+- Each section must declare coveredBlockIds.
+- No block may be skipped.
+- You may cover multiple blocks in one section when naturally related.
 
 SIGNIFICANT TEACHING BLOCKS:
 ${teachingBlockManifest}
@@ -572,7 +589,7 @@ ${slot.text}${priorClaimsBlock}`;
         for (let attempt = 0; attempt < 3; attempt++) {
           const attemptPrompt = attempt === 0
             ? slotPrompt
-            : `${slotPrompt}\n\nREVISION REQUIRED:\n- Prior attempt copied transcript phrasing too closely or felt structurally rigid.\n- Rewrite with stronger synthesis, cleaner transitions, and no long verbatim transcript spans.\n- Keep strict source grounding and preserve the major teaching movement from the slot.`;
+            : `${slotPrompt}\n\nREVISION REQUIRED:\n- Prior attempt copied transcript phrasing too closely or failed structure.\n- Rewrite with stronger synthesis, cleaner transitions, and no long verbatim transcript spans.\n- Keep strict source grounding and keep all significant teaching blocks covered.`;
           try {
             const { object } = await generateObject({
               model: getEbookModel(eBookModel),
