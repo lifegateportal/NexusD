@@ -440,7 +440,7 @@ NON-NEGOTIABLE RULES:
 15) Remove all pulpit and live-audience language from narration. Forbidden examples: "say amen", "turn to your neighbor", "lift your hands", "good morning church".
 16) Thoroughness is mandatory: cover the full transcript and all significant teaching blocks, not just highlights, but never restate the same core claim in multiple sections to prove coverage.
 17) Never paste transcript blocks verbatim. Rewrite into publication-ready prose with clear section flow and transitions.
-18) SECTION ENDING RULE: For every non-final section, the final sentence must create forward pull using one unresolved question or open implication from that section's own content. Do not close non-final sections with a recap sentence.
+18) SECTION ENDING RULE: For every non-final section, the final sentence must create forward pull from that section's own content. Use an unresolved tension, implication, contrast, or hinge statement. A question is optional, not required. Do not close non-final sections with a recap sentence.
 19) FINAL SECTION RULE: Only the last section may deliver chapter closure. Keep it decisive and do not add a recap paragraph that re-lists prior section points.
 20) CONCEPT OWNERSHIP: The first section that develops a concept owns it. Later sections may reference it in one short clause only; they must contribute new movement, not re-development.
 
@@ -582,7 +582,7 @@ SCRIPTURE FORMATTING:
 ${SCRIPTURE_FORMATTING_RULES}
 
 SECTION FLOW AND BOUNDARIES (HARD REQUIREMENTS):
-- Non-final sections must end with one forward-driving unresolved question or implication rooted in that section's own material.
+- Non-final sections must end with one forward-driving bridge rooted in that section's own material (question optional).
 - Never end a non-final section with recap phrasing (forbidden examples: "In summary...", "So we see...", "This section showed...").
 - Do not preview or summarize the next section's content.
 - The final section may close the chapter, but must not re-list prior section points as a summary paragraph.

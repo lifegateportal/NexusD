@@ -640,13 +640,15 @@ The following concepts, section headings, and key points are OWNED BY OTHER CHAP
 ${foreignConcepts.map(([concept, chNum]) => `• Ch ${chNum} owns: "${concept}"`).join("\n")}`
     : "";
 
-  const nextSectionBlock = assignment.nextSectionHeading
-    ? `\nFORWARD BRIDGE — STRICT LIMITS: The final sentence of this section may create forward reading momentum, but ONLY through an unresolved question, an open tension, or a logical implication that arises naturally from THIS section's own content. The next section is titled "${assignment.nextSectionHeading}" — use this ONLY as directional context for tone. You MUST NOT:
+    const nextSectionBlock = assignment.nextSectionHeading
+      ? `\nFORWARD BRIDGE — REQUIRED ENDING SHAPE: This section is NOT chapter-final, so the final sentence MUST create forward pull from THIS section's own content. Use an unresolved tension, implication, contrast, or hinge statement; a question is optional and should be used only when natural. The next section is titled "${assignment.nextSectionHeading}" — use this ONLY as directional context for tone. You MUST NOT:
   • Preview, introduce, or summarize any content from that next section
   • Name the next section or its heading
   • Begin developing any argument not grounded in this section's transcript excerpts
   • Use bridge phrases like "Next, we will see…", "In the following section…", "This leads us to explore…"
-The closing sentence is a door that swings open — not a trailer for what lies behind it.`
+  • Force every transition into a question when a stronger declarative hinge is available
+    • End with a recap or summary sentence (e.g., "In summary...", "So we see...", "This section showed...")
+  The closing sentence is a door that swings open — not a trailer and not a recap.`
     : "";
 
   // Chapter-final sections get an explicit hard stop at the chapter boundary.
