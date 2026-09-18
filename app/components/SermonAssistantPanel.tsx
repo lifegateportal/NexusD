@@ -55,10 +55,6 @@ type SermonProjectRecord = {
   sermonAssistant: SermonCloudSnapshot;
 };
 
-type SermonApiResponse = {
-  markdown: string;
-};
-
 type MonitorBackgroundId = "black" | "midnight" | "sunrise" | "ocean" | "charcoal" | "transparent";
 type MonitorFontStyle = "serif" | "sans" | "display";
 type LowerThirdSize = "compact" | "standard" | "large";
@@ -324,6 +320,17 @@ function stripMarkdown(md: string): string {
     .replace(/\*/g, "")
     .replace(/`/g, "")
     .trim();
+}
+
+function isMeaningfulSermonMarkdown(markdown: string): boolean {
+  const normalized = markdown.replace(/[\u200B-\u200D\uFEFF]/g, "").trim();
+  if (!normalized) return false;
+
+  const words = normalized.match(/\b[\p{L}\p{N}][\p{L}\p{N}'-]*\b/gu) ?? [];
+  if (words.length < 8) return false;
+
+  const lettersAndDigits = normalized.match(/[\p{L}\p{N}]/gu) ?? [];
+  return lettersAndDigits.length >= 24;
 }
 
 function normalizeForTriggers(text: string): string {
@@ -1887,10 +1894,18 @@ export function SermonAssistantPanel() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action: "outline", rawTranscript, sermonAssistantModel: selectedSermonAssistantModel }),
       });
-      if (!res.ok) throw new Error("Outline generation failed");
-      const data = await res.json() as SermonApiResponse;
-      setOrganizedMarkdown(data.markdown);
-      const outlineRefs = extractScriptureRefs(data.markdown);
+      const payload = await res.json().catch(() => ({})) as { markdown?: string; error?: string };
+      if (!res.ok) {
+        throw new Error(payload.error ?? `Outline generation failed (${res.status})`);
+      }
+
+      const markdown = typeof payload.markdown === "string" ? payload.markdown.trim() : "";
+      if (!isMeaningfulSermonMarkdown(markdown)) {
+        throw new Error("The model returned an empty or partial outline. Please retry.");
+      }
+
+      setOrganizedMarkdown(markdown);
+      const outlineRefs = extractScriptureRefs(markdown);
       if (outlineRefs.length > 0) {
         const cards: ScriptureCard[] = outlineRefs.map((ref) => ({
           id: `${ref}-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
@@ -1903,8 +1918,9 @@ export function SermonAssistantPanel() {
       }
       setActiveTab("organized");
       pushToast("Outline generated.", "success");
-    } catch {
-      pushToast("Nexus Engine request failed.", "error");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Nexus Engine request failed.";
+      pushToast(message, "error");
     } finally {
       setIsGenerating(false);
     }
@@ -1938,14 +1954,22 @@ export function SermonAssistantPanel() {
         }),
       });
 
-      if (!res.ok) throw new Error("Assistant command failed");
-      const data = await res.json() as SermonApiResponse;
+      const payload = await res.json().catch(() => ({})) as { markdown?: string; error?: string };
+      if (!res.ok) {
+        throw new Error(payload.error ?? `Assistant command failed (${res.status})`);
+      }
+
+      const markdown = typeof payload.markdown === "string" ? payload.markdown.trim() : "";
+      if (!isMeaningfulSermonMarkdown(markdown)) {
+        throw new Error("The model returned empty output. Please resend the command.");
+      }
+
       setChatEntries((prev) => [
         ...prev,
-        { id: `a-${Date.now()}`, role: "assistant", markdown: data.markdown },
+        { id: `a-${Date.now()}`, role: "assistant", markdown },
       ]);
-      setOrganizedMarkdown(data.markdown);
-      const responseRefs = extractScriptureRefs(data.markdown);
+      setOrganizedMarkdown(markdown);
+      const responseRefs = extractScriptureRefs(markdown);
       if (responseRefs.length > 0) {
         const cards: ScriptureCard[] = responseRefs.map((ref) => ({
           id: `${ref}-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
@@ -1957,8 +1981,13 @@ export function SermonAssistantPanel() {
         mergeScriptureCards(cards);
       }
       pushToast("Organized notes updated.", "success");
-    } catch {
-      pushToast("Assistant request failed.", "error");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Assistant request failed.";
+      setChatEntries((prev) => [
+        ...prev,
+        { id: `a-${Date.now()}`, role: "assistant", markdown: `Assistant error: ${message}` },
+      ]);
+      pushToast(message, "error");
     } finally {
       setIsAssistantThinking(false);
     }

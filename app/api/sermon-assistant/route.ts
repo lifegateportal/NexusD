@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { generateText } from "ai";
 import { z } from "zod";
-import { deepSeekModel, deepSeekReasonerModel } from "@/lib/ai-providers";
 import { getSermonOutlineModel, getSermonCommandModel, getSermonTemperature } from "@/lib/sermon-assistant-model-selector";
 
 export const runtime = "nodejs";
@@ -99,6 +98,83 @@ function looksAggressivelyTrimmed(previous: string, next: string, command: strin
   return wordRatio < 0.7 || headingRatio < 0.6;
 }
 
+function isLowSignalMarkdown(markdown: string): boolean {
+  const normalized = markdown.replace(/[\u200B-\u200D\uFEFF]/g, "").trim();
+  if (!normalized) return true;
+
+  const words = normalized.match(/\b[\p{L}\p{N}][\p{L}\p{N}'-]*\b/gu) ?? [];
+  if (words.length < 8) return true;
+
+  const lettersAndDigits = normalized.match(/[\p{L}\p{N}]/gu) ?? [];
+  if (lettersAndDigits.length < 24) return true;
+
+  return false;
+}
+
+async function generateMarkdownWithFallback(args: {
+  action: "outline" | "command";
+  prompt: string;
+  system: string;
+  maxTokens: number;
+  preferredChoice: "deepseek" | "gemini";
+}): Promise<string> {
+  const alternateChoice = args.preferredChoice === "deepseek" ? "gemini" : "deepseek";
+
+  const modelAttempts = args.action === "outline"
+    ? [
+        {
+          model: getSermonOutlineModel(args.preferredChoice),
+          temperature: getSermonTemperature(args.preferredChoice, "outline"),
+        },
+        {
+          model: getSermonOutlineModel(alternateChoice),
+          temperature: getSermonTemperature(alternateChoice, "outline"),
+        },
+      ]
+    : [
+        {
+          model: getSermonCommandModel(args.preferredChoice),
+          temperature: getSermonTemperature(args.preferredChoice, "command"),
+        },
+        {
+          model: getSermonOutlineModel(args.preferredChoice),
+          temperature: getSermonTemperature(args.preferredChoice, "command"),
+        },
+        {
+          model: getSermonCommandModel(alternateChoice),
+          temperature: getSermonTemperature(alternateChoice, "command"),
+        },
+      ];
+
+  let lastError: unknown = null;
+
+  for (const attempt of modelAttempts) {
+    try {
+      const { text } = await generateText({
+        model: attempt.model,
+        temperature: attempt.temperature,
+        maxTokens: args.maxTokens,
+        system: args.system,
+        prompt: args.prompt,
+      });
+
+      const markdown = text.trim();
+      if (isLowSignalMarkdown(markdown)) {
+        lastError = new Error("Model returned low-signal output");
+        continue;
+      }
+
+      return markdown;
+    } catch (error) {
+      lastError = error;
+    }
+  }
+
+  throw lastError instanceof Error
+    ? lastError
+    : new Error("Generation failed after fallback attempts");
+}
+
 export async function POST(req: NextRequest) {
   let parsed: z.infer<typeof RequestSchema>;
   try {
@@ -122,16 +198,15 @@ export async function POST(req: NextRequest) {
     if (parsed.action === "outline") {
       const transcriptLength = parsed.rawTranscript.length;
       const maxTokens = calculateMaxTokens(transcriptLength);
-      
-      const { text } = await generateText({
-        model: getSermonOutlineModel(parsed.sermonAssistantModel),
-        temperature: getSermonTemperature(parsed.sermonAssistantModel, "outline"),
-        maxTokens,
-        system: outlineSystemPrompt(),
+      const markdown = await generateMarkdownWithFallback({
+        action: "outline",
         prompt: `RAW TRANSCRIPT:\n${parsed.rawTranscript}`,
+        system: outlineSystemPrompt(),
+        maxTokens,
+        preferredChoice: parsed.sermonAssistantModel,
       });
 
-      return NextResponse.json({ markdown: text.trim() });
+      return NextResponse.json({ markdown });
     }
 
     const prompt = [
@@ -142,16 +217,13 @@ export async function POST(req: NextRequest) {
 
     const combinedLength = parsed.rawTranscript.length + parsed.organizedMarkdown.length;
     const maxTokens = calculateMaxTokens(combinedLength);
-    
-    const { text } = await generateText({
-      model: getSermonCommandModel(parsed.sermonAssistantModel),
-      temperature: getSermonTemperature(parsed.sermonAssistantModel, "command"),
-      maxTokens,
-      system: commandSystemPrompt(),
+    const markdown = await generateMarkdownWithFallback({
+      action: "command",
       prompt,
+      system: commandSystemPrompt(),
+      maxTokens,
+      preferredChoice: parsed.sermonAssistantModel,
     });
-
-    const markdown = text.trim();
 
     // OPTIMIZATION: Disabled automatic retry logic (was firing on ~100% of outlines)
     // Outlines are intentionally condensed; apparent trimming is expected behavior.
