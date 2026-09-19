@@ -443,6 +443,8 @@ NON-NEGOTIABLE RULES:
 18) SECTION ENDING RULE: For every non-final section, the final sentence must create forward pull from that section's own content. Use an unresolved tension, implication, contrast, or hinge statement. A question is optional, not required. Do not close non-final sections with a recap sentence.
 19) FINAL SECTION RULE: Only the last section may deliver chapter closure. Keep it decisive and do not add a recap paragraph that re-lists prior section points.
 20) CONCEPT OWNERSHIP: The first section that develops a concept owns it. Later sections may reference it in one short clause only; they must contribute new movement, not re-development.
+21) CHAPTER OPENER SCOPE: Only section 1 may include a chapter-orientation opener. Keep it simple: one short opening paragraph (about 60-110 words) that helps the reader land in the chapter's core burden before deeper exposition.
+22) NO RE-INTRODUCTIONS: Sections 2+ must not re-introduce the chapter gist, thesis framing, or opening hook language. Continue the argument directly from new movement.
 
 AUTHOR CONFIGURATION POLICY:
 - Treat TARGET AUDIENCE and AUTHOR INSTRUCTIONS as high-priority presentation directives.
@@ -582,6 +584,8 @@ SCRIPTURE FORMATTING:
 ${SCRIPTURE_FORMATTING_RULES}
 
 SECTION FLOW AND BOUNDARIES (HARD REQUIREMENTS):
+- Section 1 only: begin with one short chapter-orientation opener paragraph (about 60-110 words) that lands the reader in the chapter burden.
+- Sections 2+: do not re-introduce chapter context, thesis framing, or opening-hook phrasing from section 1.
 - Non-final sections must end with one forward-driving bridge rooted in that section's own material (question optional).
 - Never end a non-final section with recap phrasing (forbidden examples: "In summary...", "So we see...", "This section showed...").
 - Do not preview or summarize the next section's content.
