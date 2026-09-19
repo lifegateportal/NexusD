@@ -443,6 +443,8 @@ NON-NEGOTIABLE RULES:
 18) SECTION ENDING RULE: For every non-final section, the final sentence must create forward pull from that section's own content. Use an unresolved tension, implication, contrast, or hinge statement. A question is optional, not required. Do not close non-final sections with a recap sentence.
 19) FINAL SECTION RULE: Only the last section may deliver chapter closure. Keep it decisive and do not add a recap paragraph that re-lists prior section points.
 20) CONCEPT OWNERSHIP: The first section that develops a concept owns it. Later sections may reference it in one short clause only; they must contribute new movement, not re-development.
+21) CHAPTER BODY INTRODUCTION: Section 1 of every chapter must open with a strong trade-book introduction movement before deep exposition. Use 2-3 opening paragraphs (about 120-220 words total) to frame the chapter burden, stakes, and direction using transcript-grounded details.
+22) HOOK UNIQUENESS: If you choose a hook line (provocative claim, image, or question), use it only in that section-1 opening movement. Do not echo, paraphrase, or re-run the same hook phrasing later in the chapter.
 
 AUTHOR CONFIGURATION POLICY:
 - Treat TARGET AUDIENCE and AUTHOR INSTRUCTIONS as high-priority presentation directives.
@@ -582,6 +584,8 @@ SCRIPTURE FORMATTING:
 ${SCRIPTURE_FORMATTING_RULES}
 
 SECTION FLOW AND BOUNDARIES (HARD REQUIREMENTS):
+- In section 1, begin with a chapter-body introduction movement: 2-3 opening paragraphs (about 120-220 words total) that establish burden and stakes before deep exposition.
+- If a hook is used in section 1, keep that hook exclusive to the opening movement; never repeat or paraphrase it later in the chapter.
 - Non-final sections must end with one forward-driving bridge rooted in that section's own material (question optional).
 - Never end a non-final section with recap phrasing (forbidden examples: "In summary...", "So we see...", "This section showed...").
 - Do not preview or summarize the next section's content.
