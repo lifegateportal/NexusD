@@ -46,6 +46,60 @@ const SlotChapterSchema = z.object({
   sections: z.array(SectionSchema).default([]),
 });
 
+const SlotChapterBlueprintSchema = z.object({
+  title: z.string().default(""),
+  premise: z.string().default(""),
+  argumentArc: z.string().default(""),
+  sections: z.array(z.object({
+    sectionNumber: z.number().int().positive(),
+    heading: z.string().default(""),
+    movement: z.string().default(""),
+    coveredBlockIds: z.array(z.string()).optional().default([]),
+    storyPlacement: z.string().optional().default(""),
+    plannedKeyClaims: z.array(z.string()).optional().default([]),
+    targetWords: z.number().int().optional(),
+  })).default([]),
+});
+
+const BLUEPRINT_SYSTEM = `You are the structural architect for a bestselling nonfiction book. Plan ONE chapter from a sermon transcript slot before any prose is written.
+
+Produce a blueprint with:
+- title: 4-7 words, punchy, complete phrase
+- premise: 1-2 sentences — the chapter's core burden
+- argumentArc: 2-3 sentences tracing how the chapter moves from its opening burden to its final resolution
+- sections: the full section map. For each section:
+  - heading: 4-8 words, complete phrase, never a generic label
+  - movement: 1-2 sentences — the NEW movement this section contributes (not a summary of the chapter)
+  - coveredBlockIds: which significant teaching blocks this section owns
+  - storyPlacement: the live example/story from the source that lands here, or "" if none
+  - plannedKeyClaims: 2-4 specific claims this section will develop
+  - targetWords: 700-1200 when the material supports it
+
+PLANNING RULES:
+- Every teaching block must be owned by exactly one section.
+- A story appears in exactly one section.
+- The first section that develops a concept owns it; later sections must plan NEW movement.
+- Only section 1 may open the chapter; sections 2+ must plan direct continuation.
+- The final section must plan closure without a recap list.
+- Ground everything in the transcript. Plan nothing the source does not support.`;
+
+function formatSlotBlueprint(b: z.infer<typeof SlotChapterBlueprintSchema>): string {
+  const sectionLines = b.sections.map((s) => [
+    `  Section ${s.sectionNumber}: "${s.heading}"${s.targetWords ? ` (~${s.targetWords} words)` : ""}`,
+    `    Movement: ${s.movement}`,
+    (s.coveredBlockIds ?? []).length ? `    Owns blocks: ${s.coveredBlockIds.join(", ")}` : "",
+    s.storyPlacement ? `    Story: ${s.storyPlacement}` : "",
+    (s.plannedKeyClaims ?? []).length ? `    Claims: ${s.plannedKeyClaims.join(" | ")}` : "",
+  ].filter(Boolean).join("\n"));
+  return [
+    "CHAPTER BLUEPRINT (BINDING — follow this plan exactly):",
+    `Title: ${b.title}`,
+    `Premise: ${b.premise}`,
+    `Argument arc: ${b.argumentArc}`,
+    ...sectionLines,
+  ].join("\n");
+}
+
 const SimpleBookSchema = z.object({
   bookTitle: z.string().default("Untitled"),
   subtitle: z.string().default(""),
@@ -548,6 +602,46 @@ ${sourceBlock}`;
           ? `\n\nPRIOR CHAPTER CLAIMS (DO NOT REPEAT IN FULL):\n${allSectionClaims.slice(-30).map((c) => `- ${c}`).join("\n")}`
           : "";
 
+        // ── Pass 1: blueprint ────────────────────────────────────────────
+        // A dedicated reasoning pass maps the argument arc, section movements,
+        // block ownership, and story placement BEFORE any prose is written, so
+        // the write pass drafts against a plan instead of planning and drafting
+        // in one constrained shot.
+        let blueprintSection = "";
+        try {
+          const { object: blueprint } = await generateObject({
+            model: getEbookModel(eBookModel),
+            schema: SlotChapterBlueprintSchema,
+            schemaName: "ChapterBlueprint",
+            schemaDescription: "Structural plan for one chapter: argument arc, section map, block ownership, story placement",
+            mode: "json",
+            temperature: reasoningTemperature,
+            maxTokens: 8000,
+            system: BLUEPRINT_SYSTEM,
+            prompt: [
+              `Plan ONE complete chapter from SOURCE SLOT ${chapterNumber}.`,
+              "",
+              `CHAPTER NUMBER: ${chapterNumber}`,
+              `TARGET AUDIENCE: ${input.targetAudience || "(not provided)"}`,
+              `CORE THESIS: ${input.coreThesis || "(not provided)"}`,
+              `VOICE TONE: ${input.voiceTone || "(not provided)"}`,
+              `AUTHOR INSTRUCTIONS: ${input.authorInstructions || "(not provided)"}`,
+              "",
+              "SIGNIFICANT TEACHING BLOCKS (every block must be owned by exactly one planned section):",
+              teachingBlockManifest,
+              "",
+              "SOURCE SLOT TRANSCRIPT:",
+              slot.text,
+            ].join("\n"),
+          });
+          if (blueprint.sections.length > 0) {
+            blueprintSection = `${formatSlotBlueprint(blueprint)}\n\nBLUEPRINT DISCIPLINE (HARD RULE):\n- Follow the blueprint exactly: same section order, headings, block ownership, and story placement.\n- Write each section's full prose to deliver its planned movement and claims.\n- Deviate from the blueprint only where it contradicts source grounding.`;
+          }
+        } catch {
+          // Blueprint is an accelerator, not a hard dependency: on failure,
+          // fall through to direct single-pass writing.
+        }
+
         const slotPrompt = `Transform SOURCE SLOT ${chapterNumber} into one complete chapter.
 
 HARD ASSIGNMENT:
@@ -577,6 +671,8 @@ SIGNIFICANT TEACHING BLOCKS:
 ${teachingBlockManifest}
 
 ${storyIntegrationBlock}
+
+${blueprintSection}
 
 SCRIPTURE FORMATTING:
 ${SCRIPTURE_FORMATTING_RULES}
