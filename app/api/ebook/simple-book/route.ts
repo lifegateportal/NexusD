@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { generateObject, generateText } from "ai";
 import { z } from "zod";
 import { deepSeekReasonerModel } from "@/lib/ai-providers";
-import { SOURCE_LOCK_RULES, stripAudienceLanguage } from "@/lib/editorial-style-bible";
+import { SIMPLE_DIRECT_EDITORIAL_BIBLE, stripAudienceLanguage } from "@/lib/editorial-style-bible";
 import { SCRIPTURE_FORMATTING_RULES } from "@/lib/scripture-formatter";
 import { getEbookModel, getEbookTemperature } from "@/lib/ebook-model-selector";
 
@@ -412,44 +412,46 @@ export async function POST(req: NextRequest) {
   const transcriptForPrompt = usingSlots
     ? ""
     : clampTranscript(input.rawTranscript, 160000);
-  // deepseek-reasoner counts CoT + output tokens together under max_tokens;
-  // keep headroom so deep reasoning never compresses or truncates the prose.
-  const maxTokens = usingSlots ? 32000 : 48000;
+  const maxTokens = usingSlots ? 22000 : 24000;
 
-  const system = `You are a bestselling nonfiction ghostwriter commissioned to transform sermon transcripts into a premium, publication-ready book manuscript. Write with the full depth, craft, and authority of a professionally published book.
+  const system = `You are a bestselling nonfiction ghostwriter commissioned to transform sermon transcripts into a premium, publication-ready book manuscript.
 
-FIVE GOVERNING PRINCIPLES:
+You must produce a clean, publication-ready book draft from sermon transcript material using one deterministic philosophy:
+- Simple and direct structure like Sermon Assistant
+- Strong chapter titles and section headings
+- Zero concept duplication across sections and chapters
+- Strict transcript grounding
 
-1) GROUNDING. Every sentence must be traceable to the transcript. Never invent ideas, examples, facts, statistics, or theology. Rewrite into polished, publication-ready prose — never paste transcript blocks verbatim.
-
-2) DEPTH. Develop every argument fully. Target 700-1200 words per section when the material supports it, so each chapter lands around 3500-4500 words. Write until each section's movement is complete. Thoroughness is mandatory: cover the full transcript and all significant teaching blocks, not just highlights. If the material on a point is thin, write what it supports with excellence and move on — never pad with filler.
-
-3) ARCHITECTURE. Section count is content-driven: use as many sections as clear flow and full coverage require. Chapter titles: 4-7 words, punchy, complete phrases. Section headings: 4-8 words, complete phrases, never dangling, never generic labels like Introduction, Overview, Summary, or Conclusion. Keep chronological integrity unless a minimal reorder improves clarity.
-
-4) NO DUPLICATION. The first section that develops a concept owns it. Later sections may reference it in one short clause only; they must contribute new movement, not re-development. Never retell a full story in multiple sections — reference it briefly and move forward.
-
-5) FLOW. Only section 1 may open with a short chapter-orientation paragraph (60-110 words) that lands the reader in the chapter's core burden. Sections 2+ continue the argument directly — no re-introductions, no thesis re-framing, no opening-hook echoes. Every non-final section ends with forward pull from its own content: an unresolved tension, implication, contrast, or hinge statement (a question is optional); never recap phrasing. Only the final section delivers closure, without re-listing prior section points.
-
-PROSE CRAFT:
-- Preserve scripture fidelity and render scripture with premium readability.
-- Preserve and integrate the speaker's live examples and stories: keep setup, tension, and payoff in order, attached to the section's argument. Draw the teaching implication at the story's turning point, then move forward.
-- Remove all pulpit and live-audience language from narration (e.g. "say amen", "turn to your neighbor", "lift your hands", "good morning church").
-- Output valid JSON only.
-
-GOLD STANDARD — match this depth, rhythm, and authority in every section (craft benchmark only; never reuse its subject matter):
-
-"Faith is not the absence of fear; it is the decision to move while fear is still in the room. When Peter stepped out of the boat, the wind did not stop. The waves did not lie down. Scripture is careful to tell us that he saw the wind — which means the storm was still raging while he walked on the water. That is the detail most of us skip. We wait for conditions to improve before we obey, but obedience in the kingdom rarely waits for calm seas. It answers the voice first and negotiates with the weather later.
-
-Notice what the story does not say. It does not say Peter felt ready. It does not say the other disciples cheered him on. They stayed in the boat — eleven competent men holding on to the only thing that looked safe. And that is where many believers quietly live: competent, cautious, and dry, watching someone else do the very thing they were all invited to do.
-
-So the question is never whether the storm is real. The storm is real. The question is whether His voice carries more weight than the wind."
+NON-NEGOTIABLE RULES:
+1) Section count is content-driven. Choose as many sections as needed for clear flow and full coverage.
+2) Chapter titles must be 4-7 words, punchy, complete phrases.
+3) Section headings must be 4-8 words, complete phrases, never dangling.
+4) Subtitle must be useful and reader-facing, never empty.
+5) No duplication: once a concept is fully developed in one section, do not repeat it in later sections.
+6) Keep chronological integrity unless a minimal reorder is required for clarity.
+7) Every section body must be transcript-grounded and specific.
+8) Avoid generic headings like Introduction, Overview, Summary, Conclusion.
+9) Output valid JSON only.
+10) Write full-length chapter prose: target 700-1000 words per section when content supports it so each chapter lands around 3500-4500 words.
+11) Preserve scripture fidelity and render scripture with premium readability.
+12) Preserve and integrate live examples/stories from the transcript. Do not strip them out. Use them as evidence that advances the teaching point.
+13) Story discipline: setup, tension, and payoff must stay in order and attach to the section argument.
+14) Never duplicate a full story in multiple sections. If recalled later, reference briefly and move forward.
+15) Remove all pulpit and live-audience language from narration. Forbidden examples: "say amen", "turn to your neighbor", "lift your hands", "good morning church".
+16) Thoroughness is mandatory: cover the full transcript and all significant teaching blocks, not just highlights, but never restate the same core claim in multiple sections to prove coverage.
+17) Never paste transcript blocks verbatim. Rewrite into publication-ready prose with clear section flow and transitions.
+18) SECTION ENDING RULE: For every non-final section, the final sentence must create forward pull from that section's own content. Use an unresolved tension, implication, contrast, or hinge statement. A question is optional, not required. Do not close non-final sections with a recap sentence.
+19) FINAL SECTION RULE: Only the last section may deliver chapter closure. Keep it decisive and do not add a recap paragraph that re-lists prior section points.
+20) CONCEPT OWNERSHIP: The first section that develops a concept owns it. Later sections may reference it in one short clause only; they must contribute new movement, not re-development.
+21) CHAPTER OPENER SCOPE: Only section 1 may include a chapter-orientation opener. Keep it simple: one short opening paragraph (about 60-110 words) that helps the reader land in the chapter's core burden before deeper exposition.
+22) NO RE-INTRODUCTIONS: Sections 2+ must not re-introduce the chapter gist, thesis framing, or opening hook language. Continue the argument directly from new movement.
 
 AUTHOR CONFIGURATION POLICY:
 - Treat TARGET AUDIENCE and AUTHOR INSTRUCTIONS as high-priority presentation directives.
 - Apply them to voice, structure, emphasis, pacing, framing, and reader experience across the manuscript.
 - These directives never permit source invention. If an instruction requires facts not present in transcript material, keep source fidelity and write less.
 
-${SOURCE_LOCK_RULES}`;
+${SIMPLE_DIRECT_EDITORIAL_BIBLE}`;
 
   const chapterRoutingBlock = usingSlots
     ? `CHAPTER-SLOT ASSIGNMENT (HARD RULE):
