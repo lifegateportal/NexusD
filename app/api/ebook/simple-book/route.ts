@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { generateObject, generateText } from "ai";
 import { z } from "zod";
 import { deepSeekReasonerModel } from "@/lib/ai-providers";
-import { PREMIUM_BOOK_STYLE_RULES, SOURCE_LOCK_RULES, stripAudienceLanguage } from "@/lib/editorial-style-bible";
+import { PREMIUM_BOOK_STYLE_RULES, SOURCE_LOCK_RULES } from "@/lib/editorial-style-bible";
 import { SCRIPTURE_FORMATTING_RULES } from "@/lib/scripture-formatter";
 import { getEbookModel, getEbookTemperature } from "@/lib/ebook-model-selector";
 
@@ -90,9 +90,7 @@ function nonEmptySubtitle(targetAudience: string, coreThesis: string): string {
 }
 
 function cleanGeneratedBody(text: string): string {
-  return stripAudienceLanguage(text)
-    .replace(/\b(say amen|turn to your neighbor|lift your hands|clap your hands|can i get an amen|shout hallelujah)\b/gi, "")
-    .replace(/\b(good morning church|good evening church|thank you for coming|welcome everyone)\b/gi, "")
+  return text
     .replace(/[ \t]{2,}/g, " ")
     .replace(/\n{3,}/g, "\n\n")
     .trim();
