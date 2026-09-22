@@ -3,7 +3,7 @@ import { generateObject } from "ai";
 import { z } from "zod";
 import { deepSeekReasonerModel, deepSeekModel } from "@/lib/ai-providers";
 import { FrontMatterRequestSchema, FrontBackMatterSchema } from "@/lib/schemas/ebook";
-import { PREMIUM_BOOK_STYLE_RULES, PROSE_MASTERY_RULES, READER_NORMALIZATION_RULES, SOURCE_LOCK_RULES, stripAudienceLanguage } from "@/lib/editorial-style-bible";
+import { PREMIUM_BOOK_STYLE_RULES, PROSE_MASTERY_RULES, READER_NORMALIZATION_RULES, SOURCE_LOCK_RULES } from "@/lib/editorial-style-bible";
 import { SCRIPTURE_FORMATTING_RULES } from "@/lib/scripture-formatter";
 import { getEbookModel, getEbookTemperature } from "@/lib/ebook-model-selector";
 
@@ -150,10 +150,10 @@ ${input.architecture.chapters.map((c, i) => `Chapter ${i + 1}: "${c.title}"\n  C
     NextResponse.json({
       ...object,
       preface: "",
-      introduction: stripAudienceLanguage(object.introduction ?? ""),
-      conclusion: stripAudienceLanguage(object.conclusion ?? ""),
-      aboutAuthor: object.aboutAuthor ? stripAudienceLanguage(object.aboutAuthor) : null,
-      resourcesList: (object.resourcesList ?? []).map((r) => stripAudienceLanguage(r)),
+      introduction: object.introduction ?? "",
+      conclusion: object.conclusion ?? "",
+      aboutAuthor: object.aboutAuthor ?? null,
+      resourcesList: object.resourcesList ?? [],
       scriptureIndex: (() => {
         const seenRefs = new Set<string>();
         return (input.architecture?.chapters ?? [])
