@@ -51,12 +51,24 @@ ABSOLUTE CONTENT RULE — ZERO FABRICATION:
 Every sentence must come verbatim-idea from the provided transcript. You may not add content, context, or ideas not present in the audio/transcript — not even plausible extensions, inferred background, theological context the author "probably" knows, or biographical details you can reasonably assume. If you cannot point to the exact idea in the transcript text below, delete the sentence. Write shorter output rather than pad with invented content.
 
 ════════════════════════════════════════════
+INDUSTRY-STANDARD FRONTMATTER REQUIREMENT
+════════════════════════════════════════════
+This introduction and conclusion must read like a professionally published book, not a sermon transcript or a study-guide preview. The standard is: a reader-facing invitation at the start and a grounded close at the end, with no roadmap language, no chapter summary, and no table-of-contents framing.
+
+Strictly avoid these common failures:
+- "In this book, we will look at chapters 1, 2, and 3..."
+- "First, we will discuss..., then..., and finally..."
+- "This chapter explores..." or any mention of chapter sequence, chapter themes, or chapter titles
+- recap prose that says what the reader already learned
+- sermon-style signposts like "today we are going to..." or "as we move through the book"
+
+════════════════════════════════════════════
 INTRODUCTION — INDUSTRY STANDARDS (CRITICAL — MOST COMMON FAILURE: table-of-contents style previews)
 ════════════════════════════════════════════
 🚨 INTRODUCTION MANDATE: Write as the author speaking DIRECTLY to the reader about why they need THIS book RIGHT NOW. Never explain what chapters exist or what readers will learn. Never preview or list chapter content.
 
-NO CHAPTER PREVIEWS. NO ROADMAP PROSE. NEVER.
-The introduction does NOT list, foreshadow, or reference chapter titles, themes, or sequence. Readers already see the table of contents. Your job is not to restate it.
+NO CHAPTER PREVIEWS. NO ROADMAP PROSE. NO CHAPTER SEQUENCE. NEVER.
+The introduction does NOT list, foreshadow, or reference chapter titles, themes, or sequence. Readers already see the table of contents. Your job is not to restate it. Do not say "this book is divided into", "in the next chapters", "first we will", "finally we will", or anything that acts like a syllabus.
 
 STRUCTURE (first person, author voice):
 1. READER'S PROBLEM/NEED: Start with the specific tension, confusion, or hunger the reader brings to this book. Ground it in a real human situation, not abstract theology. Use a moment or truth from the author's own understanding.
@@ -66,37 +78,8 @@ STRUCTURE (first person, author voice):
 5. LANDING: A powerful forward motion into the text—not a summary, but a threshold the reader now crosses.
 
 HARD CONSTRAINTS:
-- NEVER state or foreshadow chapter titles, chapter themes, or the order of ideas in the book.
-- NEVER repeat examples, stories, illustrations, or scriptural grounds already used in chapter bodies.
-- NEVER create a "roadmap" or table-of-contents prose. Readers already know what chapters exist.
-- DO draw from the author's opening moment in the transcript (the first 3–4 minutes) for voice calibration, but DO NOT copy the opening's content directly.
-- DO use signature phrases and rhetorical patterns from Voice DNA naturally embedded (not quoted).
-
-TARGET: 3–5 paragraphs, 500–800 words maximum.
-
-════════════════════════════════════════════
-CONCLUSION — INDUSTRY STANDARDS (CRITICAL — MOST COMMON FAILURE: chapter recap/summary mode)
-════════════════════════════════════════════
-🚨 CONCLUSION MANDATE: This is NOT a recap. Never remind the reader what each chapter taught. Never summarize the book's structure. Write as the author returning to complete a conversation, not closing a sermon.
-
-NO RECAP MODE. NO CHAPTER SUMMARY. NEVER.
-The conclusion does NOT list chapter themes, remind readers of chapter content, or summarize what each section covered. Readers already read the book. Your job is not to tell them what they just learned.
-
-STRUCTURE (first person, author voice):
-1. RETURN TO THE READER'S NEED: Echo the problem or hunger named in the introduction, but now contextualized by all the author has shared. Show how the journey through the book lands on that original question.
-2. THE COHESIVE IDEA: Articulate the ONE big idea that holds all chapters together—not a list, not a summary, but the connective tissue. What unifies this whole teaching?
-3. BEYOND THE BOOK: What is the reader's next move? Not "go read more" or "apply these principles abstractly," but a concrete forward orientation grounded in the author's own conviction about what happens after this book ends.
-4. FINAL GESTURE: A closing statement that honors the reader's time and sends them forward with permission, not obligation. Avoid manufactured emotion—let the author's authentic conviction land.
-
-HARD CONSTRAINTS:
-- NEVER list or summarize chapter content.
-- NEVER reintroduce illustrations, stories, or scripture examples from the chapter bodies.
-- NEVER add applications or implications the author did not voice explicitly.
-- DO synthesize the through-line that runs across all chapters (from Voice DNA and chapter architecture).
-- DO use the author's own closing sentiment from the transcript (final minutes) for emotional resonance, but DO NOT copy the closing verbatim or import its specific examples.
-
-TARGET: 2–4 paragraphs, 300–500 words maximum.
-
+- NEVER state or foreshadow chapter titles, chapter themes, chapter count, or the order of ideas in the book.
+- NEVER use numbering, section labels, roadmap phrasing, or 
 ABOUT AUTHOR:
 - ONLY write if the author explicitly discussed their background, personal journey, credentials, or "how I came to this." Return null otherwise.
 - Focus on what makes the author credible to write THIS book—not a résumé.
