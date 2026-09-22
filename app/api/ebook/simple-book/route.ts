@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { generateObject, generateText } from "ai";
 import { z } from "zod";
 import { deepSeekReasonerModel } from "@/lib/ai-providers";
-import { PREMIUM_BOOK_STYLE_RULES, SOURCE_LOCK_RULES } from "@/lib/editorial-style-bible";
+import { SOURCE_LOCK_RULES } from "@/lib/editorial-style-bible";
 import { SCRIPTURE_FORMATTING_RULES } from "@/lib/scripture-formatter";
 import { getEbookModel, getEbookTemperature } from "@/lib/ebook-model-selector";
 
@@ -87,32 +87,6 @@ function nonEmptySubtitle(targetAudience: string, coreThesis: string): string {
   if (audience) return `A field guide for ${audience}`;
   if (thesis) return "A transcript-grounded teaching journey";
   return "A transcript-grounded teaching journey";
-}
-
-function cleanGeneratedBody(text: string): string {
-  return text
-    .replace(/[ \t]{2,}/g, " ")
-    .replace(/\n{3,}/g, "\n\n")
-    .trim();
-}
-
-function clampTranscript(text: string, maxChars = 140000): string {
-  if (text.length <= maxChars) return text;
-  const head = text.slice(0, Math.floor(maxChars * 0.6));
-  const tail = text.slice(-Math.floor(maxChars * 0.4));
-  return `${head}\n\n[... transcript middle omitted for length ...]\n\n${tail}`;
-}
-
-function clampSlotTranscript(text: string, maxChars = 22000): string {
-  if (text.length <= maxChars) return text;
-  const headChars = Math.floor(maxChars * 0.4);
-  const middleChars = Math.floor(maxChars * 0.25);
-  const tailChars = maxChars - headChars - middleChars;
-  const midStart = Math.max(0, Math.floor((text.length - middleChars) / 2));
-  const head = text.slice(0, headChars);
-  const middle = text.slice(midStart, midStart + middleChars);
-  const tail = text.slice(-tailChars);
-  return `${head}\n\n[... slot transcript middle sample ...]\n\n${middle}\n\n[... slot transcript tail sample ...]\n\n${tail}`;
 }
 
 function countWords(text: string): number {
@@ -278,7 +252,7 @@ function normalizeSimpleBook(object: z.infer<typeof SimpleBookSchema>, input: z.
             ...section,
             sectionNumber: sectionIndex + 1,
             heading: (section.heading || `Section ${sectionIndex + 1}`).trim(),
-            body: cleanGeneratedBody(section.body || ""),
+            body: section.body || "",
           })),
       }))
       .filter((chapter) => chapter.sections.length > 0),
@@ -374,7 +348,7 @@ function normalizeSlotChapter(object: z.infer<typeof SlotChapterSchema>, chapter
         ...section,
         sectionNumber: sectionIndex + 1,
         heading: (section.heading || `Section ${sectionIndex + 1}`).trim(),
-        body: cleanGeneratedBody(section.body || ""),
+        body: section.body || "",
       })),
   };
 }
@@ -407,9 +381,7 @@ export async function POST(req: NextRequest) {
     });
 
   const usingSlots = input.oneChapterPerSlot && slotBlocks.length > 0;
-  const transcriptForPrompt = usingSlots
-    ? ""
-    : clampTranscript(input.rawTranscript, 160000);
+  const transcriptForPrompt = usingSlots ? "" : input.rawTranscript;
   const maxTokens = usingSlots ? 22000 : 24000;
 
   const system = `You are a bestselling nonfiction ghostwriter commissioned to transform sermon transcripts into a premium, publication-ready book manuscript.
@@ -452,7 +424,11 @@ AUTHOR CONFIGURATION POLICY:
 
 ${SOURCE_LOCK_RULES}
 
-${PREMIUM_BOOK_STYLE_RULES}`;
+PROSE PRINCIPLES:
+- Write clear, direct, publication-ready prose for a reader, not a live audience.
+- Preserve the transcript's ideas, examples, scripture, and order unless a minimal change improves clarity.
+- Use your judgment for sentence rhythm, transitions, emphasis, and section structure.
+- Do not pad thin source material, invent facts, or mechanically remove words from finished prose.`;
 
   const chapterRoutingBlock = usingSlots
     ? `CHAPTER-SLOT ASSIGNMENT (HARD RULE):
