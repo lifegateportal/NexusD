@@ -22,6 +22,8 @@ export const PROSE_MASTERY_RULES = `PROSE MASTERY — THREE CORE PRINCIPLES:
 
 3. TRUST THE READER: No explanatory padding ("This means that...", "In other words..."). Land images and points directly. Vary sentence length and paragraph structure deliberately. Use active verbs. Polish for rhythm and clarity.`;
 
+export const PREMIUM_BOOK_STYLE_RULES = `PREMIUM BOOK STYLE STANDARDS:
+
 
 STYLISTIC LIBERTY — WHAT YOU OWN:
 You have full creative authority over sentence structure, word choice, rhythm, rhetorical devices, and paragraph architecture. Use this freedom deliberately:
