@@ -402,7 +402,7 @@ NON-NEGOTIABLE RULES:
 7) Every section body must be transcript-grounded and specific.
 8) Avoid generic headings like Introduction, Overview, Summary, Conclusion.
 9) Output valid JSON only.
-10) Write full-length chapter prose: target 700-1000 words per section when content supports it so each chapter lands around 3500-4500 words.
+10) Write complete section prose: aim for 500–1000 words per section, driven by content completeness and clarity. Do not pad thin material to reach word targets.
 11) Preserve scripture fidelity and render scripture with premium readability.
 12) Preserve and integrate live examples/stories from the transcript. Do not strip them out. Use them as evidence that advances the teaching point.
 13) Story discipline: setup, tension, and payoff must stay in order and attach to the section argument.
@@ -410,11 +410,11 @@ NON-NEGOTIABLE RULES:
 15) Remove all pulpit and live-audience language from narration. Forbidden examples: "say amen", "turn to your neighbor", "lift your hands", "good morning church".
 16) Thoroughness is mandatory: cover the full transcript and all significant teaching blocks, not just highlights, but never restate the same core claim in multiple sections to prove coverage.
 17) Never paste transcript blocks verbatim. Rewrite into publication-ready prose with clear section flow and transitions.
-18) SECTION ENDING RULE: For every non-final section, the final sentence must create forward pull from that section's own content. Use an unresolved tension, implication, contrast, or hinge statement. A question is optional, not required. Do not close non-final sections with a recap sentence.
+18) SECTION ENDING RULE: Non-final sections must end with forward-driving tension or contrast rooted in that section's own content (unresolved tension, implication, or hinge). Never reference or recycle the chapter's main thesis as a bridge. Keep endings decisive and rooted in section-specific movement only.
 19) FINAL SECTION RULE: Only the last section may deliver chapter closure. Keep it decisive and do not add a recap paragraph that re-lists prior section points.
 20) CONCEPT OWNERSHIP: The first section that develops a concept owns it. Later sections may reference it in one short clause only; they must contribute new movement, not re-development.
 21) CHAPTER OPENER SCOPE: Only section 1 may include a chapter-orientation opener. Keep it simple: one short opening paragraph (about 60-110 words) that helps the reader land in the chapter's core burden before deeper exposition.
-22) CHAPTER BODY INTRODUCTION: In the first paragraph of section 1, the opening sentence should echo the spirit of the chapter premise without quoting it verbatim. Let it orient the reader toward the central tension or claim, then let the following paragraphs build from that momentum.
+22) CHAPTER BODY INTRODUCTION: Section 1 only: the opening sentence may echo the spirit of the chapter premise once, to orient the reader toward the central tension. Sections 2+: never repeat, reference, or re-introduce the chapter premise. Continue the argument directly from new movement.
 23) NO RE-INTRODUCTIONS: Sections 2+ must not re-introduce the chapter gist, thesis framing, or opening hook language. Continue the argument directly from new movement.
 
 AUTHOR CONFIGURATION POLICY:
