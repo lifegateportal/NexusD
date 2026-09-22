@@ -454,7 +454,7 @@ function countWords(text: string): number {
 export function harmonizeBookManifest<T extends HarmonizeManifestInput>(manifest: T): T {
 	const chapters = manifest.chapters.map((chapter) => {
 		const sections = chapter.sections.map((section) => {
-			const body = stripNonBookLanguage(section.body ?? "");
+			const body = section.body ?? "";
 			return {
 				...section,
 				body,
@@ -462,13 +462,13 @@ export function harmonizeBookManifest<T extends HarmonizeManifestInput>(manifest
 			};
 		});
 
-		const intro = stripNonBookLanguage(chapter.intro ?? "");
-		const conclusion = stripNonBookLanguage(chapter.conclusion ?? "");
+		const intro = chapter.intro ?? "";
+		const conclusion = chapter.conclusion ?? "";
 		const keyTakeaways = (chapter.keyTakeaways ?? [])
-			.map((item) => stripNonBookLanguage(item))
+			.map((item) => item ?? "")
 			.filter(Boolean);
 		const reflectionQuestions = (chapter.reflectionQuestions ?? [])
-			.map((item) => stripNonBookLanguage(item))
+			.map((item) => item ?? "")
 			.filter(Boolean);
 
 		const totalWordCount =
@@ -488,11 +488,11 @@ export function harmonizeBookManifest<T extends HarmonizeManifestInput>(manifest
 
 	const frontMatter = {
 		...manifest.frontMatter,
-		preface: stripNonBookLanguage(manifest.frontMatter.preface ?? ""),
-		introduction: stripNonBookLanguage(manifest.frontMatter.introduction ?? ""),
-		conclusion: stripNonBookLanguage(manifest.frontMatter.conclusion ?? ""),
-		aboutAuthor: manifest.frontMatter.aboutAuthor ? stripNonBookLanguage(manifest.frontMatter.aboutAuthor) : null,
-		resourcesList: (manifest.frontMatter.resourcesList ?? []).map((item) => stripNonBookLanguage(item)).filter(Boolean),
+		preface: manifest.frontMatter.preface ?? "",
+		introduction: manifest.frontMatter.introduction ?? "",
+		conclusion: manifest.frontMatter.conclusion ?? "",
+		aboutAuthor: manifest.frontMatter.aboutAuthor ?? null,
+		resourcesList: (manifest.frontMatter.resourcesList ?? []).map((item) => item ?? "").filter(Boolean),
 	};
 
 	return {
