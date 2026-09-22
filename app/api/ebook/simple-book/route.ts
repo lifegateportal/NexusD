@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { generateObject, generateText } from "ai";
 import { z } from "zod";
 import { deepSeekReasonerModel } from "@/lib/ai-providers";
-import { SIMPLE_DIRECT_EDITORIAL_BIBLE, stripAudienceLanguage } from "@/lib/editorial-style-bible";
+import { PREMIUM_BOOK_STYLE_RULES, SOURCE_LOCK_RULES, stripAudienceLanguage } from "@/lib/editorial-style-bible";
 import { SCRIPTURE_FORMATTING_RULES } from "@/lib/scripture-formatter";
 import { getEbookModel, getEbookTemperature } from "@/lib/ebook-model-selector";
 
@@ -451,7 +451,9 @@ AUTHOR CONFIGURATION POLICY:
 - Apply them to voice, structure, emphasis, pacing, framing, and reader experience across the manuscript.
 - These directives never permit source invention. If an instruction requires facts not present in transcript material, keep source fidelity and write less.
 
-${SIMPLE_DIRECT_EDITORIAL_BIBLE}`;
+${SOURCE_LOCK_RULES}
+
+${PREMIUM_BOOK_STYLE_RULES}`;
 
   const chapterRoutingBlock = usingSlots
     ? `CHAPTER-SLOT ASSIGNMENT (HARD RULE):
