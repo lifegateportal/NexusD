@@ -389,34 +389,21 @@ export async function POST(req: NextRequest) {
 You must produce a clean, publication-ready book draft from sermon transcript material using one deterministic philosophy:
 - Simple and direct structure like Sermon Assistant
 - Strong chapter titles and section headings
-- Zero concept duplication across sections and chapters
+- Avoid redundant concept re-development across sections and chapters
 - Strict transcript grounding
+Write the strongest coherent, publication-ready nonfiction book supported by the source. Use your judgment about chapter architecture, section count, section length, titles, pacing, transitions, callbacks, and closure. Favor specific, vivid, reader-facing prose over a mechanical outline.
 
-NON-NEGOTIABLE RULES:
-1) Section count is content-driven. Choose as many sections as needed for clear flow and full coverage.
-2) Chapter titles must be 4-7 words, punchy, complete phrases.
-3) Section headings must be 4-8 words, complete phrases, never dangling.
-4) Subtitle must be useful and reader-facing, never empty.
-5) No duplication: once a concept is fully developed in one section, do not repeat it in later sections.
-6) Keep chronological integrity unless a minimal reorder is required for clarity.
-7) Every section body must be transcript-grounded and specific.
-8) Avoid generic headings like Introduction, Overview, Summary, Conclusion.
-9) Output valid JSON only.
-10) Write complete section prose: aim for 500–1000 words per section, driven by content completeness and clarity. Do not pad thin material to reach word targets.
-11) Preserve scripture fidelity and render scripture with premium readability.
-12) Preserve and integrate live examples/stories from the transcript. Do not strip them out. Use them as evidence that advances the teaching point.
-13) Story discipline: setup, tension, and payoff must stay in order and attach to the section argument.
-14) Never duplicate a full story in multiple sections. If recalled later, reference briefly and move forward.
-15) Remove all pulpit and live-audience language from narration. Forbidden examples: "say amen", "turn to your neighbor", "lift your hands", "good morning church".
-16) Thoroughness is mandatory: cover the full transcript and all significant teaching blocks, not just highlights, but never restate the same core claim in multiple sections to prove coverage.
-17) Never paste transcript blocks verbatim. Rewrite into publication-ready prose with clear section flow and transitions.
-18) SECTION ENDING RULE: Non-final sections must end with forward-driving tension or contrast rooted in that section's own content (unresolved tension, implication, or hinge). Never reference or recycle the chapter's main thesis as a bridge. Keep endings decisive and rooted in section-specific movement only.
-19) FINAL SECTION RULE: Only the last section may deliver chapter closure. Keep it decisive and do not add a recap paragraph that re-lists prior section points.
-20) CONCEPT OWNERSHIP: The first section that develops a concept owns it. Later sections may reference it in one short clause only; they must contribute new movement, not re-development.
-21) CHAPTER OPENER SCOPE: Only section 1 may include a chapter-orientation opener. Keep it simple: one short opening paragraph (about 60-110 words) that helps the reader land in the chapter's core burden before deeper exposition.
-22) CHAPTER BODY INTRODUCTION: Section 1 only: the opening sentence may echo the spirit of the chapter premise once, to orient the reader toward the central tension. Sections 2+: never repeat, reference, or re-introduce the chapter premise. Continue the argument directly from new movement.
-23) NO RE-INTRODUCTIONS: Sections 2+ must not re-introduce the chapter gist, thesis framing, or opening hook language. Continue the argument directly from new movement.
-
+EDITORIAL GUARDRAILS:
+- Stay faithful to the transcript. Do not invent facts, theology, experiences, quotations, Scripture, or applications presented as source truth.
+- Select and arrange material for the clearest book argument. Preserve the internal order of stories, testimonies, and other time-dependent events, but rearrange concepts when that improves comprehension.
+- Develop each major idea where it belongs. Avoid re-explaining a completed idea merely to reinforce the chapter thesis, but allow brief, purposeful callbacks when they create continuity or insight.
+- Give each chapter an opening that earns the reader's attention and establishes its burden. Let later sections continue with new movement rather than repeatedly re-introducing the chapter premise.
+- Let sections end naturally. Use a transition, implication, or unresolved tension only when the material calls for it; do not manufacture a bridge or recap.
+- Preserve the setup, tension, and payoff of stories. Do not repeat a full story in multiple sections unless the source itself requires a meaningful return.
+- Integrate live examples as evidence for the argument, while removing pulpit and live-audience language from the narration (for example: "say amen," "turn to your neighbor," "lift your hands," or "good morning church").
+- Rewrite transcript material into original publication-ready prose. Do not paste long transcript passages verbatim.
+- Preserve Scripture fidelity and render Scripture with premium readability.
+- Output valid JSON only.
 AUTHOR CONFIGURATION POLICY:
 - Treat TARGET AUDIENCE and AUTHOR INSTRUCTIONS as high-priority presentation directives.
 - Apply them to voice, structure, emphasis, pacing, framing, and reader experience across the manuscript.
@@ -426,9 +413,8 @@ ${SOURCE_LOCK_RULES}
 
 PROSE PRINCIPLES:
 - Write clear, direct, publication-ready prose for a reader, not a live audience.
-- Preserve the transcript's ideas, examples, scripture, and order unless a minimal change improves clarity.
-- Use your judgment for sentence rhythm, transitions, emphasis, and section structure.
-- Do not pad thin source material, invent facts, or mechanically remove words from finished prose.`;
+- Use your judgment for chapter architecture, sentence rhythm, transitions, emphasis, section structure, pacing, and closure.
+- Do not pad thin source material or mechanically remove words from finished prose.`;
 
   const chapterRoutingBlock = usingSlots
     ? `CHAPTER-SLOT ASSIGNMENT (HARD RULE):
@@ -436,7 +422,7 @@ PROSE PRINCIPLES:
 - Create exactly ONE chapter per slot.
 - Chapter 1 must use only audio-1, Chapter 2 only audio-2, and so on.
 - Never mix content from different source slots in the same chapter.
-- If a slot is thin, still keep one chapter and deepen commentary from that slot only.`
+- If a slot is thin, still keep one chapter, but let its length and depth follow the available material. Do not invent or pad.`
     : `CHAPTER ASSIGNMENT:
 - Create approximately ${input.desiredChapters} chapters from the full transcript.`;
 
@@ -546,11 +532,10 @@ AUTHOR CONFIGURATION APPLICATION (HARD RULE):
 - Apply them to chapter shape, section emphasis, sentence rhythm, and reader-facing clarity.
 - Never invent source content to satisfy them; keep strict transcript grounding.
 
-TEACHING BLOCK COVERAGE CONTRACT (HARD REQUIREMENT):
-- Every significant teaching block listed below must be covered in this chapter.
+TEACHING BLOCK COVERAGE GUIDANCE:
+- Use the significant teaching blocks as source guidance and prioritize material that serves the chapter's clearest argument.
 - Each section must declare coveredBlockIds.
-- No block may be skipped.
-- You may cover multiple blocks in one section when naturally related.
+- Combine related blocks naturally; do not force minor or repetitive material into the chapter.
 
 SIGNIFICANT TEACHING BLOCKS:
 ${teachingBlockManifest}
@@ -560,13 +545,11 @@ ${storyIntegrationBlock}
 SCRIPTURE FORMATTING:
 ${SCRIPTURE_FORMATTING_RULES}
 
-SECTION FLOW AND BOUNDARIES (HARD REQUIREMENTS):
-- Section 1 only: begin with one short chapter-orientation opener paragraph (about 60-110 words) that lands the reader in the chapter burden.
-- Sections 2+: do not re-introduce chapter context, thesis framing, or opening-hook phrasing from section 1.
-- Non-final sections must end with one forward-driving bridge rooted in that section's own material (question optional).
-- Never end a non-final section with recap phrasing (forbidden examples: "In summary...", "So we see...", "This section showed...").
-- Do not preview or summarize the next section's content.
-- The final section may close the chapter, but must not re-list prior section points as a summary paragraph.
+SECTION FLOW:
+- Give section 1 an engaging, appropriately sized opening that establishes the chapter's burden.
+- Let later sections advance from new material; do not repeatedly re-introduce the chapter premise or opening hook.
+- Let each section end according to its own material. Avoid manufactured bridges, previews, and recap paragraphs.
+- Give the final section a satisfying closure without mechanically re-listing prior points.
 
 SOURCE SLOT:
 SOURCE ID: ${slot.sourceId}
