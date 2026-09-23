@@ -332,7 +332,6 @@ export async function POST(req: NextRequest) {
   const reasoningTemperature = requestedTemperature === undefined
     ? getEbookTemperature(eBookModel, "reasoning")
     : Math.min(1, Math.max(0, requestedTemperature));
-  const objectGenerationMode = eBookModel === "deepseek" ? "tool" : "json";
 
   const slotBlocks = (input.slotTranscripts ?? [])
     .filter((slot) => slot.text.trim().length > 0)
@@ -499,7 +498,7 @@ ${slot.text}${priorClaimsBlock}`;
             const { object } = await generateObject({
               model: getEbookModel(eBookModel),
               schema: SlotChapterSchema,
-              mode: objectGenerationMode,
+              mode: "json",
               temperature: reasoningTemperature,
               maxTokens,
               system,
@@ -595,7 +594,7 @@ ${slot.text}${priorClaimsBlock}`;
         const { object } = await generateObject({
           model: getEbookModel(eBookModel),
           schema: SimpleBookSchema,
-          mode: objectGenerationMode,
+          mode: "json",
           temperature: reasoningTemperature,
           maxTokens,
           system,
