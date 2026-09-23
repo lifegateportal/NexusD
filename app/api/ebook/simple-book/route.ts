@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { generateObject, generateText } from "ai";
+import { generateObject } from "ai";
 import { z } from "zod";
-import { deepSeekReasonerModel } from "@/lib/ai-providers";
 import { SOURCE_LOCK_RULES } from "@/lib/editorial-style-bible";
 import { SCRIPTURE_FORMATTING_RULES } from "@/lib/scripture-formatter";
 import { getEbookModel, getEbookTemperature } from "@/lib/ebook-model-selector";
@@ -36,13 +35,11 @@ const SectionSchema = z.object({
 const ChapterSchema = z.object({
   number: z.number().int().positive(),
   title: z.string().default(""),
-  premise: z.string().default(""),
   sections: z.array(SectionSchema).default([]),
 });
 
 const SlotChapterSchema = z.object({
   title: z.string().default(""),
-  premise: z.string().default(""),
   sections: z.array(SectionSchema).default([]),
 });
 
@@ -152,40 +149,6 @@ function missingTeachingBlocks(chapter: z.infer<typeof SlotChapterSchema>, block
       .filter(Boolean)
   );
   return blocks.map((b) => b.id).filter((id) => !covered.has(id));
-}
-
-function extractFirstJsonObject(text: string): string | null {
-  const start = text.indexOf("{");
-  if (start < 0) return null;
-  let depth = 0;
-  let inString = false;
-  let escaped = false;
-
-  for (let i = start; i < text.length; i++) {
-    const ch = text[i];
-    if (inString) {
-      if (escaped) {
-        escaped = false;
-      } else if (ch === "\\") {
-        escaped = true;
-      } else if (ch === '"') {
-        inString = false;
-      }
-      continue;
-    }
-
-    if (ch === '"') {
-      inString = true;
-      continue;
-    }
-    if (ch === "{") depth++;
-    if (ch === "}") {
-      depth--;
-      if (depth === 0) return text.slice(start, i + 1);
-    }
-  }
-
-  return null;
 }
 
 function normalizeForComparison(text: string): string {
@@ -341,7 +304,6 @@ function normalizeSlotChapter(object: z.infer<typeof SlotChapterSchema>, chapter
   return {
     number: chapterNumber,
     title: (object.title || `Chapter ${chapterNumber}`).trim(),
-    premise: (object.premise || "").trim(),
     sections: (object.sections ?? [])
       .filter((section) => (section.body || "").trim().length > 0)
       .map((section, sectionIndex) => ({
@@ -366,7 +328,10 @@ export async function POST(req: NextRequest) {
     );
   }
   const { eBookModel } = input;
-  const reasoningTemperature = input.llmTemperature ?? getEbookTemperature(eBookModel, "reasoning");
+  const requestedTemperature = input.llmTemperature;
+  const reasoningTemperature = requestedTemperature === undefined
+    ? getEbookTemperature(eBookModel, "reasoning")
+    : Math.min(1, Math.max(0, requestedTemperature));
 
   const slotBlocks = (input.slotTranscripts ?? [])
     .filter((slot) => slot.text.trim().length > 0)
@@ -397,12 +362,13 @@ EDITORIAL GUARDRAILS:
 - Stay faithful to the transcript. Do not invent facts, theology, experiences, quotations, Scripture, or applications presented as source truth.
 - Select and arrange material for the clearest book argument. Preserve the internal order of stories, testimonies, and other time-dependent events, but rearrange concepts when that improves comprehension.
 - Develop each major idea where it belongs. Avoid re-explaining a completed idea merely to reinforce the chapter thesis, but allow brief, purposeful callbacks when they create continuity or insight.
-- Give each chapter an opening that earns the reader's attention and establishes its burden. Let later sections continue with new movement rather than repeatedly re-introducing the chapter premise.
+- Begin each chapter with a natural reader entry: a concrete moment, image, question, tension, or lived detail from the source that eases the reader into the subject. Do not write a premise summary, an orientation paragraph, or an artificial announcement of what the chapter will explain. Let later sections continue with new movement rather than repeatedly re-introducing the chapter premise.
 - Let sections end naturally. Use a transition, implication, or unresolved tension only when the material calls for it; do not manufacture a bridge or recap.
 - Preserve the setup, tension, and payoff of stories. Do not repeat a full story in multiple sections unless the source itself requires a meaningful return.
 - Integrate live examples as evidence for the argument, while removing pulpit and live-audience language from the narration (for example: "say amen," "turn to your neighbor," "lift your hands," or "good morning church").
 - Rewrite transcript material into original publication-ready prose. Do not paste long transcript passages verbatim.
 - Preserve Scripture fidelity and render Scripture with premium readability.
+- Use em dashes sparingly. Prefer commas, colons, semicolons, or full stops when they read more naturally; do not remove them mechanically, and preserve any em dash required by Scripture citation formatting.
 - Output valid JSON only.
 AUTHOR CONFIGURATION POLICY:
 - Treat TARGET AUDIENCE and AUTHOR INSTRUCTIONS as high-priority presentation directives.
@@ -451,42 +417,6 @@ ${SCRIPTURE_FORMATTING_RULES}
 
 SOURCE MATERIAL:
 ${sourceBlock}`;
-
-  const jsonTemplate = `{
-  "bookTitle": "...",
-  "subtitle": "...",
-  "authorName": "the Author",
-  "strategy": "single-pass-sermon-style",
-  "chapters": [
-    {
-      "number": 1,
-      "title": "...",
-      "premise": "...",
-      "sections": [
-        {
-          "sectionNumber": 1,
-          "heading": "...",
-          "body": "...",
-          "keyClaims": ["..."]
-        }
-      ]
-    }
-  ]
-}`;
-
-  const slotChapterTemplate = `{
-  "title": "...",
-  "premise": "...",
-  "sections": [
-    {
-      "sectionNumber": 1,
-      "heading": "...",
-      "body": "...",
-      "keyClaims": ["..."],
-      "coveredBlockIds": ["B1", "B2"]
-    }
-  ]
-}`;
 
   const storyIntegrationBlock = `LIVE EXAMPLES AND STORIES (NON-NEGOTIABLE):
 - Keep the speaker's live examples, testimonies, and personal stories in the chapter.
@@ -546,7 +476,7 @@ SCRIPTURE FORMATTING:
 ${SCRIPTURE_FORMATTING_RULES}
 
 SECTION FLOW:
-- Give section 1 an engaging, appropriately sized opening that establishes the chapter's burden.
+- Begin section 1 directly with a concrete, reader-facing entrance drawn from the source. Do not add a premise summary, orientation paragraph, or "this chapter" introduction.
 - Let later sections advance from new material; do not repeatedly re-introduce the chapter premise or opening hook.
 - Let each section end according to its own material. Avoid manufactured bridges, previews, and recap paragraphs.
 - Give the final section a satisfying closure without mechanically re-listing prior points.
@@ -558,6 +488,7 @@ TRANSCRIPT:
 ${slot.text}${priorClaimsBlock}`;
 
         let chapterObject: z.infer<typeof SlotChapterSchema> | null = null;
+        let lastGenerationError = "";
 
         for (let attempt = 0; attempt < 3; attempt++) {
           const attemptPrompt = attempt === 0
@@ -582,38 +513,18 @@ ${slot.text}${priorClaimsBlock}`;
             }
             chapterObject = object;
             break;
-          } catch {
-            // Try text-mode JSON salvage pass below.
-          }
-        }
-
-        if (!chapterObject) {
-          try {
-            const { text } = await generateText({
-              model: getEbookModel(eBookModel),
-              temperature: reasoningTemperature,
-              maxTokens,
-              system,
-              prompt: `${slotPrompt}\n\nReturn ONLY JSON in this exact shape:\n${slotChapterTemplate}`,
-            });
-            const json = extractFirstJsonObject(text);
-            if (json) {
-              const parsed = SlotChapterSchema.safeParse(JSON.parse(json));
-              if (parsed.success) {
-                const normalizedCandidate = normalizeSlotChapter(parsed.data, chapterNumber);
-                if (normalizedCandidate.sections.length > 0 && !looksLikeUnprocessedTranscript(normalizedCandidate, slot.fullText)) {
-                  chapterObject = parsed.data;
-                }
-              }
-            }
-          } catch {
-            // No local fallback: fail closed if model output cannot be parsed.
+          } catch (err) {
+            lastGenerationError = err instanceof Error ? err.message : String(err);
+            // Retry structured generation with the same model and schema.
           }
         }
 
         if (!chapterObject) {
           return NextResponse.json(
-            { error: `Simple book generation failed: slot ${chapterNumber} did not return valid chapter JSON` },
+            {
+              error: `Simple book generation failed: slot ${chapterNumber} did not return valid structured output`,
+              details: lastGenerationError || "The model returned no usable sections after retries.",
+            },
             { status: 502 }
           );
         }
@@ -677,10 +588,11 @@ ${slot.text}${priorClaimsBlock}`;
       });
     }
 
-    for (let attempt = 0; attempt < 2; attempt++) {
+    let lastGenerationError = "";
+    for (let attempt = 0; attempt < 3; attempt++) {
       try {
         const { object } = await generateObject({
-          model: deepSeekReasonerModel,
+          model: getEbookModel(eBookModel),
           schema: SimpleBookSchema,
           mode: "json",
           temperature: reasoningTemperature,
@@ -692,44 +604,18 @@ ${slot.text}${priorClaimsBlock}`;
         if (normalized.chapters.length > 0) {
           return NextResponse.json(normalized);
         }
-      } catch {
-        // Fall through to next attempt or fallback text mode.
+      } catch (err) {
+        lastGenerationError = err instanceof Error ? err.message : String(err);
+        // Retry structured generation with the same model and schema.
       }
     }
-
-    const { text } = await generateText({
-      model: deepSeekReasonerModel,
-      temperature: reasoningTemperature,
-      maxTokens,
-      system,
-      prompt: `${prompt}\n\n${storyIntegrationBlock}\n\nReturn ONLY JSON in this exact shape:\n${jsonTemplate}`,
-    });
-
-    const json = extractFirstJsonObject(text);
-    if (!json) {
-      return NextResponse.json(
-        { error: "Simple book generation failed: model did not return parseable JSON" },
-        { status: 502 }
-      );
-    }
-
-    const parsed = SimpleBookSchema.safeParse(JSON.parse(json));
-    if (!parsed.success) {
-      return NextResponse.json(
-        { error: "Simple book generation failed: JSON shape invalid", details: parsed.error.issues.slice(0, 5) },
-        { status: 502 }
-      );
-    }
-
-    const normalized = normalizeSimpleBook(parsed.data, input);
-    if (normalized.chapters.length === 0) {
-      return NextResponse.json(
-        { error: "Simple book generation failed: no chapter content returned" },
-        { status: 502 }
-      );
-    }
-
-    return NextResponse.json(normalized);
+    return NextResponse.json(
+      {
+        error: "Simple book generation failed: structured model output was unavailable after retries",
+        details: lastGenerationError || "The model returned no usable chapters after retries.",
+      },
+      { status: 502 }
+    );
   } catch (err) {
     return NextResponse.json(
       { error: err instanceof Error ? err.message : "Simple book generation failed" },
