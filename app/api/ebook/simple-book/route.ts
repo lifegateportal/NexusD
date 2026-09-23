@@ -7,6 +7,7 @@ import { getEbookModel, getEbookTemperature } from "@/lib/ebook-model-selector";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
+const generationTimeoutMs = 240_000;
 
 const RequestSchema = z.object({
   rawTranscript: z.string().min(500).max(500000),
@@ -502,7 +503,7 @@ ${slot.text}${priorClaimsBlock}`;
         let chapterObject: z.infer<typeof SlotChapterSchema> | null = null;
         let lastGenerationError = "";
 
-        for (let attempt = 0; attempt < 3; attempt++) {
+        for (let attempt = 0; attempt < 2; attempt++) {
           const attemptPrompt = attempt === 0
             ? slotPrompt
             : `${slotPrompt}\n\nREVISION REQUIRED:\n- Prior attempt copied transcript phrasing too closely or failed structure.\n- Rewrite with stronger synthesis, cleaner transitions, and no long verbatim transcript spans.\n- Keep strict source grounding and keep all significant teaching blocks covered.`;
@@ -515,6 +516,7 @@ ${slot.text}${priorClaimsBlock}`;
               maxTokens,
               system,
               prompt: attemptPrompt,
+              abortSignal: AbortSignal.timeout(generationTimeoutMs),
             });
             const normalizedCandidate = normalizeSlotChapter(object, chapterNumber);
             if (normalizedCandidate.sections.length === 0) {
@@ -601,7 +603,7 @@ ${slot.text}${priorClaimsBlock}`;
     }
 
     let lastGenerationError = "";
-    for (let attempt = 0; attempt < 3; attempt++) {
+    for (let attempt = 0; attempt < 2; attempt++) {
       try {
         const { object } = await generateObject({
           model: getEbookModel(eBookModel),
@@ -611,6 +613,7 @@ ${slot.text}${priorClaimsBlock}`;
           maxTokens,
           system,
           prompt: `${prompt}\n\n${storyIntegrationBlock}`,
+          abortSignal: AbortSignal.timeout(generationTimeoutMs),
         });
         const normalized = normalizeSimpleBook(object, input);
         if (normalized.chapters.length > 0) {
