@@ -330,6 +330,7 @@ function sanitizeJobStateForPersistence(input: EbookJobState): EbookJobState {
 
   return {
     jobId: String(normalized.jobId),
+    simpleDirect: Boolean(normalized.simpleDirect),
     status: "idle",
     audioFileNames: [],
     transcripts: [],
@@ -3003,6 +3004,7 @@ export function EbookPipeline({
         }
       : {
           jobId,
+          simpleDirect: useSimpleDirectBookMode,
           status: "transcribing",
           audioFileNames: audioFiles.filter(Boolean).map((f) => f!.name),
           transcripts: [],
@@ -3021,6 +3023,8 @@ export function EbookPipeline({
           createdAt: now,
           updatedAt: now,
         };
+    const simpleDirectRun = resume?.simpleDirect === true || useSimpleDirectBookMode;
+    acc.simpleDirect = simpleDirectRun;
     savedJobRef.current = { ...acc };
     onJobStateChange?.({ ...acc });
     const checkpoint = async (s: PipelineStage) => {
@@ -3079,7 +3083,7 @@ export function EbookPipeline({
           // ── Per-slot signal filter — skipped in Simple Direct mode so that
           //    chapter generation receives full raw slot transcript content. ──
           let slotText = rawText;
-          if (!useSimpleDirectBookMode) {
+          if (!simpleDirectRun) {
             try {
               addLog(`  Filtering ${label} signal…`);
               const slotFilter = await postJson<FilterResult>("/api/ebook/filter-signal", { masterTranscript: rawText });
@@ -3134,7 +3138,7 @@ export function EbookPipeline({
       //    Catches any non-teaching content that spans a slot boundary or was
       //    missed by the per-slot pass (e.g. a multi-slot altar call finale). ─
       let filteredTranscript = (acc as EbookJobState & { filteredTranscript?: string }).filteredTranscript ?? "";
-      if (useSimpleDirectBookMode) {
+      if (simpleDirectRun) {
         filteredTranscript = masterTranscript;
         setSignalFilterState("skipped");
         setSignalFilterDetail("Simple Direct mode bypasses signal filtering");
@@ -3178,10 +3182,10 @@ export function EbookPipeline({
       const teachingTranscript = filteredTranscript || masterTranscript;
 
       // Optional fast path: simple direct pipeline (slot -> chapter)
-      if (useSimpleDirectBookMode) {
+      if (simpleDirectRun) {
         setStage("analyzing");
         addLog("Simple Direct Book Mode: extracting Voice DNA tone…");
-        const simpleVoiceDNA = await postJson<VoiceDNA>("/api/ebook/voice-dna", {
+        const simpleVoiceDNA = acc.voiceDNA ?? await postJson<VoiceDNA>("/api/ebook/voice-dna", {
           masterTranscript: teachingTranscript,
           eBookModel: selectedEbookModel,
           llmTemperature: simpleDirectTemperature,
@@ -3198,22 +3202,24 @@ export function EbookPipeline({
           : [{ label: "Slot-1", text: teachingTranscript }];
 
         const desiredChapters = Math.max(3, Math.min(12, slotWriteList.length));
-        const builtChapters: ChapterDraft[] = [];
+        const builtChapters: ChapterDraft[] = (acc.chapters ?? []).filter(
+          (chapter) => chapter.status === "complete" && chapter.sections.length > 0
+        );
         const simpleSegments: ContentMap["segments"] = [];
         const simpleAssignments: SectionAssignment[] = [];
 
-        setProgress({ total: slotWriteList.length, completed: 0 });
-        acc.progress = { total: slotWriteList.length, completed: 0 };
-        acc.chapters = [];
-        acc.sections = [];
-        acc.sectionAssignments = [];
+        setProgress({ total: slotWriteList.length, completed: builtChapters.length });
+        acc.progress = { total: slotWriteList.length, completed: builtChapters.length };
+        acc.chapters = [...builtChapters];
+        acc.sections = builtChapters.flatMap((chapter) => chapter.sections);
+        acc.sectionAssignments = [...(acc.sectionAssignments ?? [])];
         await checkpoint("writing");
 
-        let bookTitleFromRuns = "";
+        let bookTitleFromRuns = builtChapters[0]?.title || "";
         let subtitleFromRuns = "";
         let authorNameFromRuns = "the Author";
 
-        for (let slotIndex = 0; slotIndex < slotWriteList.length; slotIndex++) {
+        for (let slotIndex = builtChapters.length; slotIndex < slotWriteList.length; slotIndex++) {
           const slot = slotWriteList[slotIndex];
           const chapterNumber = slotIndex + 1;
           const sourceAudio = `audio-${chapterNumber}` as ContentMap["segments"][number]["sourceAudio"];
@@ -4305,6 +4311,7 @@ export function EbookPipeline({
       acc.updatedAt = new Date().toISOString();
       const persistableFailure = sanitizeJobStateForPersistence({ ...acc });
       try { 
+        localStorage.setItem(JOB_STATE_KEY, JSON.stringify(persistableFailure));
         await saveEbookJob({ ...persistableFailure }); 
       } catch (err) {
         addLog(`⚠ Front matter save failed: ${err instanceof Error ? err.message : 'unknown error'}`);
@@ -5136,7 +5143,9 @@ export function EbookPipeline({
                 setSignalFilterState(parseSignalFilterLog(saved.errorLog ?? []).state);
                 setSignalFilterDetail(parseSignalFilterLog(saved.errorLog ?? []).detail);
                 // Determine which stage to label the resume from
-                const resumeStage = saved.contentMap
+                const resumeStage = saved.simpleDirect
+                  ? `writing from chapter ${(saved.chapters?.length ?? 0) + 1}`
+                  : saved.contentMap
                   ? saved.architecture ? "writing" : "architecting"
                   : saved.voiceDNA ? "content mapping" : "voice DNA";
                 addLog(`↩ Resuming from ${resumeStage}…`);
@@ -5146,6 +5155,9 @@ export function EbookPipeline({
             >
               {(() => {
                 const saved = savedJobRef.current!;
+                if (saved.simpleDirect) {
+                  return `Resume — continue from chapter ${(saved.chapters?.length ?? 0) + 1}`;
+                }
                 if (!saved.voiceDNA) return "Resume — retry from Voice DNA";
                 if (!saved.contentMap) return "Resume — retry from Content Map";
                 if (!saved.architecture) return "Resume — retry from Chapter Design";

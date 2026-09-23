@@ -417,6 +417,7 @@ export const EbookManifestSchema = z.object({
 
 export const EbookJobStateSchema = z.object({
   jobId: z.string(),
+  simpleDirect: z.boolean().default(false),
   status: z.enum([
     "idle", "transcribing", "filtering", "analyzing", "mapping",
     "architecting", "assigning", "writing", "polishing",
