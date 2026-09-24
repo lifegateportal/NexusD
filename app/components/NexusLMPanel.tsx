@@ -165,6 +165,7 @@ export function NexusLMPanel({ manifest, pipelineSnapshot, transcripts, onManife
           history: nextMessages.filter((message) => message.role !== "system").slice(-14),
           pipeline: pipelineSnapshot ?? undefined,
           manifestVersion: (manifest as Record<string, unknown>).__version as string | undefined,
+          transcriptSources: transcripts,
           dryRun: requestMode !== "edit",
         }),
       });
@@ -217,6 +218,7 @@ export function NexusLMPanel({ manifest, pipelineSnapshot, transcripts, onManife
           history: messages.filter((message) => message.role !== "system").slice(-14),
           pipeline: pipelineSnapshot ?? undefined,
           manifestVersion: (manifest as Record<string, unknown>).__version as string | undefined,
+          transcriptSources: transcripts,
           dryRun: false,
         }),
       });

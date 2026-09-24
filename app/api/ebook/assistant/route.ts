@@ -28,10 +28,16 @@ const ChatMessageSchema = z.object({
   content: z.string().max(8000),
 });
 
+const TranscriptSourceSchema = z.object({
+  label: z.string().min(1).max(200),
+  text: z.string().max(250000),
+});
+
 const RequestSchema = z.object({
   manifest: EbookManifestSchema,
   instruction: z.string().min(1).max(4000),
   history: z.array(ChatMessageSchema).max(20).optional(),
+  transcriptSources: z.array(TranscriptSourceSchema).max(20).optional(),
   dryRun: z.boolean().optional(),
   manifestVersion: z.string().optional(),
   pipeline: z.object({
@@ -173,6 +179,22 @@ export async function POST(req: NextRequest) {
   // Gather refs from the full conversation so contextual follow-ups ("make it longer") work
   const historyText = (history ?? []).map((m) => m.content).join(" ");
   const explicitRefs = parseExplicitSectionRefs(instruction + " " + historyText);
+
+  const transcriptTerms = (instruction + " " + historyText)
+    .toLowerCase()
+    .split(/[^a-z0-9']+/)
+    .filter((term) => term.length > 2);
+  const transcriptEvidence = (input.transcriptSources ?? [])
+    .flatMap((source) => source.text.split(/\n\s*\n/).map((excerpt) => ({ label: source.label, excerpt: excerpt.trim() })))
+    .filter((source) => source.excerpt.length > 80)
+    .map((source) => ({
+      ...source,
+      score: transcriptTerms.reduce((score, term) => score + (source.excerpt.toLowerCase().includes(term) ? 1 : 0), 0),
+    }))
+    .sort((a, b) => b.score - a.score)
+    .slice(0, 8)
+    .map((source, index) => `[T${index + 1} | ${source.label}]\n${source.excerpt.slice(0, 2200)}`)
+    .join("\n\n---\n\n");
 
   // Detect structural / high-reasoning operations that benefit from R1:
   // Structural: reorder/move/merge/split/add/remove chapters or sections
@@ -426,6 +448,10 @@ OUTPUT RULES
       prompt: [
         "CURRENT BOOK STRUCTURE:",
         JSON.stringify(bookSummary, null, 2),
+        transcriptEvidence ? [
+          "TRANSCRIPT SOURCE EVIDENCE (use this when rewriting; cite internally as [T#] while reasoning):",
+          transcriptEvidence,
+        ].join("\n") : "NO TRANSCRIPT SOURCE EVIDENCE WAS PROVIDED.",
         pipelineSummary ? ["CURRENT PIPELINE STATE:", JSON.stringify(pipelineSummary, null, 2)].join("\n") : "",
         "",
         ...(history && history.length > 0
