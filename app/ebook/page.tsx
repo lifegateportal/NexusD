@@ -1020,9 +1020,15 @@ function EbookPageClient() {
                   onManifestReady={handleManifestReady}
                   onPipelineSnapshotChange={handlePipelineSnapshotChange}
                   onJobStateChange={(job) => {
-                    liveJobStateRef.current = job;
-                    setEbookJobState(job);
-                    setHasContinueState(hasResumableProgress(job));
+                    const previous = liveJobStateRef.current;
+                    const nextTranscripts = job && Array.isArray(job.transcripts) ? job.transcripts : [];
+                    const previousTranscripts = previous && Array.isArray(previous.transcripts) ? previous.transcripts : [];
+                    const mergedJob = job && previous && nextTranscripts.length === 0 && previousTranscripts.length > 0
+                      ? { ...job, transcripts: previousTranscripts }
+                      : job;
+                    liveJobStateRef.current = mergedJob;
+                    setEbookJobState(mergedJob);
+                    setHasContinueState(hasResumableProgress(mergedJob));
                   }}
                   onSaveProject={(name) => void handleSaveProject(name)}
                 />
