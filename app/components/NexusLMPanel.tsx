@@ -216,6 +216,7 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
             mode: activeMode,
             persona: PERSONAS[persona].label,
             book: { title: manifest?.bookTitle ?? pipelineSnapshot?.bookTitle ?? "Untitled book", chapters: manifest?.chapters.map((chapter) => ({ number: chapter.number, title: chapter.title })) ?? [] },
+            manuscript: manifest ? { frontMatter: manifest.frontMatter, chapters: manifest.chapters } : null,
             transcripts,
             history: compactHistory(nextMessages),
           }),
@@ -440,7 +441,8 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
           <p className="mt-2 text-sm text-slate-200">{manifest?.bookTitle ?? "No book loaded"}</p>
           {manifest && <p className="mt-1 text-xs text-slate-500">{manifest.chapters.length} chapters · {manifest.totalWordCount.toLocaleString()} words</p>}
           <p className="mt-3 text-xs text-slate-500">Pipeline: <span className="text-slate-300">{pipelineSnapshot?.stage ?? "not started"}</span></p>
-          <p className="mt-1 text-xs text-slate-500">Sources: <span className="text-slate-300">{transcripts.length} transcript{transcripts.length === 1 ? "" : "s"}</span></p>
+          <p className="mt-3 text-xs text-slate-500">Manuscript: <span className="text-slate-300">{manifest ? `${manifest.chapters.length} written chapter${manifest.chapters.length === 1 ? "" : "s"}` : "not loaded"}</span></p>
+          <p className="mt-1 text-xs text-slate-500">Transcript sources: <span className="text-slate-300">{transcripts.length}</span></p>
         </div>
 
         <div className="mt-6 border-t border-slate-800 pt-5">
@@ -482,7 +484,7 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
         <div className="border-t border-slate-800 pt-5">
           <p className="text-xs font-semibold uppercase tracking-widest text-slate-500">Sources consulted</p>
           {sources.length === 0 ? (
-            <p className="mt-2 text-xs leading-5 text-slate-600">Ask a question to see the transcript excerpts NexusLM used.</p>
+            <p className="mt-2 text-xs leading-5 text-slate-600">Ask a question to see the manuscript and transcript excerpts NexusLM used.</p>
           ) : (
             <div className="mt-3 space-y-3">
               {sources.map((source) => (
