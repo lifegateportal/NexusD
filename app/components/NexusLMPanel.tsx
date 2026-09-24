@@ -46,6 +46,26 @@ const MODES: Record<Mode, { label: string; prompt: string }> = {
   edit: { label: "Edit / Enrich", prompt: "Propose precise manuscript improvements and apply only the requested changes." },
 };
 
+function inferMode(instruction: string, selectedMode: Mode): Mode {
+  const text = instruction.toLowerCase();
+  if (/\b(write|draft|compose|create)\b.*\bchapter\b|\bchapter\b.*\b(write|draft|compose|create)\b/.test(text)) return "draft";
+  if (/\b(vet|challenge|question|assumption|contradiction|weak|gap|skeptic|critique)\b/.test(text)) return "socratic";
+  if (/\b(edit|rewrite|revise|enrich|expand|shorten|tighten|change|improve|fix)\b/.test(text)) return "edit";
+  return selectedMode === "ask" ? "ask" : selectedMode;
+}
+
+function compactHistory(history: Message[]): Array<{ role: "user" | "assistant"; content: string }> {
+  return history
+    .filter((message): message is Message & { role: "user" | "assistant" } => message.role !== "system")
+    .slice(-14)
+    .map((message) => ({
+      role: message.role,
+      content: message.content.length > 6000
+        ? `${message.content.slice(0, 5600)}\n\n[Earlier response truncated from conversation history.]\n\n${message.content.slice(-300)}`
+        : message.content,
+    }));
+}
+
 function initialMessage(manifest: EbookManifest | null): Message {
   return manifest
     ? { role: "system", content: `NexusLM is connected to “${manifest.bookTitle}”. Ask about the manuscript, challenge its thinking, or request a focused edit.` }
@@ -112,26 +132,27 @@ export function NexusLMPanel({ manifest, pipelineSnapshot, transcripts, onManife
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
   }, [messages, loading]);
 
-  async function send(requestText?: string, requestMode: Mode = mode) {
+  async function send(requestText?: string, requestMode?: Mode) {
     const instruction = (requestText ?? input).trim();
     if (!instruction || loading) return;
+    const activeMode = requestMode ?? inferMode(instruction, mode);
     if (!manifest && transcripts.length === 0) {
       setMessages((current) => [...current, { role: "assistant", content: "Upload at least one transcript before starting a NexusLM conversation." }]);
       return;
     }
-    if (requestMode === "edit" && !manifest) {
+    if (activeMode === "edit" && !manifest) {
       setMessages((current) => [...current, { role: "assistant", content: "Load or finish a manuscript before requesting an edit." }]);
       return;
     }
 
-    const userMessage = `${instruction}\n\n[Mode: ${MODES[requestMode].label}] [Persona: ${PERSONAS[persona].label}]`;
+    const userMessage = `${instruction}\n\n[Mode: ${MODES[activeMode].label}] [Persona: ${PERSONAS[persona].label}]`;
     const nextMessages = [...messages, { role: "user" as const, content: instruction }];
     setMessages(nextMessages);
     setInput("");
     setLoading(true);
 
     try {
-      if (requestMode === "draft") {
+      if (activeMode === "draft") {
         const chapterMatch = instruction.match(/\bchapter\s+(\d+)\b/i);
         const chapterNumber = chapterMatch ? Number(chapterMatch[1]) : 0;
         if (!chapterNumber) {
@@ -162,17 +183,17 @@ export function NexusLMPanel({ manifest, pipelineSnapshot, transcripts, onManife
         return;
       }
 
-      if (requestMode !== "edit") {
+      if (activeMode !== "edit") {
         const res = await fetch("/api/ebook/nexuslm/chat", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             query: instruction,
-            mode: requestMode,
+            mode: activeMode,
             persona: PERSONAS[persona].label,
             book: { title: manifest?.bookTitle ?? pipelineSnapshot?.bookTitle ?? "Untitled book", chapters: manifest?.chapters.map((chapter) => ({ number: chapter.number, title: chapter.title })) ?? [] },
             transcripts,
-            history: nextMessages.filter((message) => message.role !== "system").slice(-14),
+            history: compactHistory(nextMessages),
           }),
         });
         const json = await res.json() as { answer?: string; sources?: Source[]; error?: string };
@@ -187,8 +208,8 @@ export function NexusLMPanel({ manifest, pipelineSnapshot, transcripts, onManife
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           manifest,
-          instruction: `${MODES[requestMode].prompt}\nPersona: ${PERSONAS[persona].description}\n\nUser request:\n${userMessage}`,
-          history: nextMessages.filter((message) => message.role !== "system").slice(-14),
+          instruction: `${MODES[activeMode].prompt}\nPersona: ${PERSONAS[persona].description}\n\nUser request:\n${userMessage}`,
+          history: compactHistory(nextMessages),
           pipeline: pipelineSnapshot ?? undefined,
           manifestVersion: (manifest as Record<string, unknown>).__version as string | undefined,
           transcriptSources: transcripts,
@@ -202,7 +223,7 @@ export function NexusLMPanel({ manifest, pipelineSnapshot, transcripts, onManife
         return;
       }
 
-      if (requestMode === "edit") {
+      if (activeMode === "edit") {
         if (!json.patch || !json.summary) throw new Error("NexusLM returned no editable proposal.");
         setPendingEdit({ instruction, summary: json.summary, confidence: json.confidence });
         setMessages((current) => [...current, { role: "assistant", content: `Proposal ready for review: ${json.summary}` }]);
@@ -241,7 +262,7 @@ export function NexusLMPanel({ manifest, pipelineSnapshot, transcripts, onManife
         body: JSON.stringify({
           manifest,
           instruction: pendingEdit.instruction,
-          history: messages.filter((message) => message.role !== "system").slice(-14),
+          history: compactHistory(messages),
           pipeline: pipelineSnapshot ?? undefined,
           manifestVersion: (manifest as Record<string, unknown>).__version as string | undefined,
           transcriptSources: transcripts,
