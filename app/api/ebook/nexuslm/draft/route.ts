@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { generateObject } from "ai";
 import { z } from "zod";
-import { deepSeekModel } from "@/lib/ai-providers";
+import { deepSeekReasonerModel } from "@/lib/ai-providers";
 import { ChapterDraftSchema } from "@/lib/schemas/ebook";
 import { SOURCE_LOCK_RULES, PROSE_MASTERY_RULES, READER_NORMALIZATION_RULES, PREMIUM_BOOK_STYLE_RULES } from "@/lib/editorial-style-bible";
 import { SCRIPTURE_FORMATTING_RULES } from "@/lib/scripture-formatter";
@@ -43,7 +43,7 @@ export async function POST(request: NextRequest) {
 
   try {
     const { object } = await generateObject({
-      model: deepSeekModel,
+      model: deepSeekReasonerModel,
       schema: ChapterDraftSchema,
       mode: "json",
       maxTokens: 12000,
