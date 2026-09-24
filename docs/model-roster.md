@@ -25,9 +25,9 @@ Used where the task requires structural thinking, multi-step planning, or editor
 
 ---
 
-## `deepseek-v4-pro` — V3 (Fast Generation)
+## `deepseek-chat` — Standard Generation
 
-Used for all creative writing, formatting, and editorial tasks. These are content-generation jobs — they don't need deep reasoning, they need high-quality prose output.
+Used for creative writing, formatting, editorial tasks, and other standard DeepSeek operations.
 
 | Route | What it does |
 |---|---|
@@ -47,7 +47,7 @@ Used for all creative writing, formatting, and editorial tasks. These are conten
 
 ---
 
-## `deepseek-v4-flash` — V3 Fast (Lightweight Extraction)
+## `deepseek-chat` — Lightweight Extraction
 
 Used for fast, high-volume extraction tasks that don't need the full V3 model.
 
@@ -73,5 +73,5 @@ Used for fast, high-volume extraction tasks that don't need the full V3 model.
 | Task type | Model to use |
 |---|---|
 | Planning, architecture, audit, reasoning | `deepseek-reasoner` (R1) |
-| Writing, formatting, editing, generating | `deepseek-v4-pro` (V3) |
-| Fast extraction, filtering, classification | `deepseek-v4-flash` (V3 Flash) |
+| Writing, formatting, editing, generating | `deepseek-chat` |
+| Fast extraction, filtering, classification | `deepseek-chat` |

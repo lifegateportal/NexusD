@@ -1,1 +1,1 @@
-- [DeepSeek API model names](deepseek-api-model-names.md) — `deepseek-chat` is dead; use `deepseek-v4-pro` (V3) or `deepseek-reasoner` (R1); V3 requires `mode: "json"` not `mode: "tool"`
+- [DeepSeek API model names](deepseek-api-model-names.md) — use `deepseek-chat` for non-reasoning work and `deepseek-reasoner` for R1; use `mode: "json"` for structured output
