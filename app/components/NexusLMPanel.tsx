@@ -55,32 +55,40 @@ export function NexusLMPanel({ manifest, pipelineSnapshot, transcripts, onManife
   const [sources, setSources] = useState<Source[]>([]);
   const [pendingEdit, setPendingEdit] = useState<PendingEdit | null>(null);
   const [pendingDraft, setPendingDraft] = useState<ChapterDraft | null>(null);
+  const [selectedTranscriptLabel, setSelectedTranscriptLabel] = useState("");
   const scrollRef = useRef<HTMLDivElement>(null);
+
+  const selectedTranscript = transcripts.find((transcript) => transcript.label === selectedTranscriptLabel) ?? transcripts[0] ?? null;
 
   useEffect(() => {
     setMessages([initialMessage(manifest)]);
   }, [manifest?.jobId]);
 
   useEffect(() => {
+    if (selectedTranscriptLabel && transcripts.some((transcript) => transcript.label === selectedTranscriptLabel)) return;
+    setSelectedTranscriptLabel(transcripts[0]?.label ?? "");
+  }, [selectedTranscriptLabel, transcripts]);
+
+  useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
   }, [messages, loading]);
 
-  async function send() {
-    const instruction = input.trim();
+  async function send(requestText?: string, requestMode: Mode = mode) {
+    const instruction = (requestText ?? input).trim();
     if (!instruction || loading) return;
     if (!manifest) {
       setMessages((current) => [...current, { role: "assistant", content: "Load a book project before starting a NexusLM conversation." }]);
       return;
     }
 
-    const userMessage = `${instruction}\n\n[Mode: ${MODES[mode].label}] [Persona: ${PERSONAS[persona].label}]`;
+    const userMessage = `${instruction}\n\n[Mode: ${MODES[requestMode].label}] [Persona: ${PERSONAS[persona].label}]`;
     const nextMessages = [...messages, { role: "user" as const, content: instruction }];
     setMessages(nextMessages);
     setInput("");
     setLoading(true);
 
     try {
-      if (mode === "draft") {
+      if (requestMode === "draft") {
         const chapterMatch = instruction.match(/\bchapter\s+(\d+)\b/i);
         const chapterNumber = chapterMatch ? Number(chapterMatch[1]) : 0;
         if (!chapterNumber) {
@@ -111,13 +119,13 @@ export function NexusLMPanel({ manifest, pipelineSnapshot, transcripts, onManife
         return;
       }
 
-      if (mode !== "edit") {
+      if (requestMode !== "edit") {
         const res = await fetch("/api/ebook/nexuslm/chat", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             query: instruction,
-            mode,
+            mode: requestMode,
             persona: PERSONAS[persona].label,
             book: { title: manifest.bookTitle, chapters: manifest.chapters.map((chapter) => ({ number: chapter.number, title: chapter.title })) },
             transcripts,
@@ -136,11 +144,11 @@ export function NexusLMPanel({ manifest, pipelineSnapshot, transcripts, onManife
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           manifest,
-          instruction: `${MODES[mode].prompt}\nPersona: ${PERSONAS[persona].description}\n\nUser request:\n${userMessage}`,
+          instruction: `${MODES[requestMode].prompt}\nPersona: ${PERSONAS[persona].description}\n\nUser request:\n${userMessage}`,
           history: nextMessages.filter((message) => message.role !== "system").slice(-14),
           pipeline: pipelineSnapshot ?? undefined,
           manifestVersion: (manifest as Record<string, unknown>).__version as string | undefined,
-          dryRun: mode !== "edit",
+          dryRun: requestMode !== "edit",
         }),
       });
       const json = await res.json() as { manifest?: unknown; patch?: unknown; summary?: string; confidence?: "high" | "medium" | "low"; error?: string; clarificationNeeded?: string; needsClarification?: boolean; noChanges?: boolean; manifestVersion?: string };
@@ -150,7 +158,7 @@ export function NexusLMPanel({ manifest, pipelineSnapshot, transcripts, onManife
         return;
       }
 
-      if (mode === "edit") {
+      if (requestMode === "edit") {
         if (!json.patch || !json.summary) throw new Error("NexusLM returned no editable proposal.");
         setPendingEdit({ instruction, summary: json.summary, confidence: json.confidence });
         setMessages((current) => [...current, { role: "assistant", content: `Proposal ready for review: ${json.summary}` }]);
@@ -290,6 +298,42 @@ export function NexusLMPanel({ manifest, pipelineSnapshot, transcripts, onManife
           {manifest && <p className="mt-1 text-xs text-slate-500">{manifest.chapters.length} chapters · {manifest.totalWordCount.toLocaleString()} words</p>}
           <p className="mt-3 text-xs text-slate-500">Pipeline: <span className="text-slate-300">{pipelineSnapshot?.stage ?? "not started"}</span></p>
           <p className="mt-1 text-xs text-slate-500">Sources: <span className="text-slate-300">{transcripts.length} transcript{transcripts.length === 1 ? "" : "s"}</span></p>
+        </div>
+
+        <div className="mt-6 border-t border-slate-800 pt-5">
+          <p className="text-xs font-semibold uppercase tracking-widest text-slate-500">Transcript slots</p>
+          {transcripts.length === 0 ? (
+            <p className="mt-2 text-xs leading-5 text-slate-600">No uploaded transcripts are available yet.</p>
+          ) : (
+            <>
+              <div className="mt-3 grid grid-cols-2 gap-2">
+                {transcripts.map((transcript) => (
+                  <button
+                    key={transcript.label}
+                    type="button"
+                    onClick={() => setSelectedTranscriptLabel(transcript.label)}
+                    className={`min-h-12 rounded-xl border px-3 text-left text-xs font-semibold ${selectedTranscript?.label === transcript.label ? "border-cyan-400/60 bg-cyan-400/10 text-cyan-300" : "border-slate-700 text-slate-400"}`}
+                  >
+                    {transcript.label}
+                    <span className="mt-1 block font-normal text-slate-500">{transcript.text.trim().split(/\s+/).filter(Boolean).length.toLocaleString()} words</span>
+                  </button>
+                ))}
+              </div>
+              {selectedTranscript && (
+                <>
+                  <textarea readOnly value={selectedTranscript.text} aria-label={`${selectedTranscript.label} transcript`} className="mt-3 h-48 w-full resize-y rounded-xl border border-slate-800 bg-slate-900 p-3 text-base leading-5 text-slate-400" />
+                  <button
+                    type="button"
+                    onClick={() => { setMode("draft"); void send(`Write a complete chapter from ${selectedTranscript.label}. Use only this slot's transcript and the existing manuscript context.`, "draft"); }}
+                    disabled={!manifest || loading}
+                    className="mt-3 min-h-12 w-full rounded-xl border border-amber-400/40 bg-amber-400/10 px-3 text-sm font-semibold text-amber-200 disabled:cursor-not-allowed disabled:opacity-40"
+                  >
+                    Draft chapter from {selectedTranscript.label}
+                  </button>
+                </>
+              )}
+            </>
+          )}
         </div>
 
         <div className="border-t border-slate-800 pt-5">
