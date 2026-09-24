@@ -75,14 +75,18 @@ export async function POST(request: NextRequest) {
     const { text } = await generateText({
       model: input.mode === "socratic" ? deepSeekReasonerModel : deepSeekModel,
       ...(input.mode === "ask" ? { temperature: 0.2 } : {}),
-      maxTokens: 2200,
+      maxTokens: input.mode === "socratic" ? 8000 : 2200,
       system: `You are NexusLM, a source-grounded book companion. The active persona is ${input.persona}.
 The book is "${input.book.title}".
 Use only the supplied transcript excerpts for claims about the author's teaching. Cite supporting excerpts inline as [source-id]. If the excerpts do not support an answer, say so. Do not fabricate quotations.
 ${input.mode === "socratic" ? "This is Socratic Vetting mode. Produce a detailed, actionable vetting brief with these headings: Diagnosis; Evidence and assumptions; Proposed fixes; Chapter implementation plan; Questions requiring the author's decision. For every proposed fix, explain the problem it solves and the exact change a new chapter should make. Do not stop at questions or general criticism." : "This is Ask mode: answer directly, distinguish transcript evidence from interpretation, and cite sources."}`,
       prompt: `CHAPTER OUTLINE:\n${chapterContext || "No chapter outline available."}\n\nTRANSCRIPT SOURCES:\n${sourceContext}\n\nRECENT CONVERSATION:\n${history || "None"}\n\nUSER QUESTION:\n${input.query}`,
     });
-    return NextResponse.json({ answer: text, sources: sources.map(({ score: _score, ...source }) => source) });
+    const answer = text.trim();
+    if (!answer) {
+      return NextResponse.json({ error: "The reasoning model returned no final vetting response. Please try again." }, { status: 502 });
+    }
+    return NextResponse.json({ answer, sources: sources.map(({ score: _score, ...source }) => source) });
   } catch (error) {
     return NextResponse.json({ error: error instanceof Error ? error.message : "NexusLM could not answer." }, { status: 500 });
   }

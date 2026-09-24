@@ -44,7 +44,7 @@ export async function POST(request: NextRequest) {
   try {
     const { text } = await generateText({
       model: deepSeekReasonerModel,
-      maxTokens: 12000,
+      maxTokens: 24000,
       system: `Return only one valid JSON object matching the ChapterDraft schema. Do not wrap it in markdown fences and do not include reasoning outside the JSON object.
 You are NexusLM, a professional book ghostwriter. Persona: ${input.persona}.
 Write only from the supplied manuscript context and transcript sources. Do not invent teachings, stories, quotations, facts, or theological claims. Preserve the author's voice and remove live-audience language.
@@ -77,7 +77,39 @@ Return JSON only.`,
     if (jsonStart < 0 || jsonEnd <= jsonStart) {
       throw new Error("The reasoner returned no JSON chapter draft.");
     }
-    const parsed = ChapterDraftSchema.safeParse(JSON.parse(text.slice(jsonStart, jsonEnd + 1)));
+    const raw = JSON.parse(text.slice(jsonStart, jsonEnd + 1)) as Record<string, unknown>;
+    const candidate = (raw.chapter ?? raw.draft ?? raw) as Record<string, unknown>;
+    const rawSections = Array.isArray(candidate.sections) ? candidate.sections : [];
+    const sections = rawSections.map((section, index) => {
+      const item = (section ?? {}) as Record<string, unknown>;
+      return {
+        chapterNumber: input.chapterNumber,
+        sectionNumber: typeof item.sectionNumber === "number" ? item.sectionNumber : index + 1,
+        heading: String(item.heading ?? item.title ?? `Section ${index + 1}`),
+        body: String(item.body ?? item.content ?? item.text ?? ""),
+        wordCount: typeof item.wordCount === "number" ? item.wordCount : String(item.body ?? item.content ?? item.text ?? "").trim().split(/\s+/).filter(Boolean).length,
+        status: "complete" as const,
+      };
+    });
+    if (sections.length === 0 || sections.every((section) => !section.body.trim())) {
+      throw new Error("The reasoner returned no usable chapter sections. Please try again.");
+    }
+    const normalizedCandidate = {
+      ...candidate,
+      number: input.chapterNumber,
+      title: String(candidate.title ?? candidate.chapterTitle ?? `Chapter ${input.chapterNumber}`),
+      intro: String(candidate.intro ?? candidate.introduction ?? ""),
+      epigraph: String(candidate.epigraph ?? ""),
+      sections,
+      forwardQuestion: String(candidate.forwardQuestion ?? ""),
+      keyTakeaways: Array.isArray(candidate.keyTakeaways) ? candidate.keyTakeaways.map(String) : [],
+      reflectionQuestions: Array.isArray(candidate.reflectionQuestions) ? candidate.reflectionQuestions.map(String) : [],
+      totalWordCount: typeof candidate.totalWordCount === "number"
+        ? candidate.totalWordCount
+        : sections.reduce((sum, section) => sum + section.wordCount, 0),
+      status: "complete" as const,
+    };
+    const parsed = ChapterDraftSchema.safeParse(normalizedCandidate);
     if (!parsed.success) {
       throw new Error("The reasoner returned a chapter that did not match the manuscript schema.");
     }
