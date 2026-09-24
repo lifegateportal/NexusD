@@ -69,6 +69,7 @@ export function NexusLMPanel({ manifest, pipelineSnapshot, transcripts, onManife
   const [pendingEdit, setPendingEdit] = useState<PendingEdit | null>(null);
   const [pendingDraft, setPendingDraft] = useState<ChapterDraft | null>(null);
   const [selectedTranscriptLabel, setSelectedTranscriptLabel] = useState("");
+  const [showMobileContext, setShowMobileContext] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
 
   const selectedTranscript = transcripts.find((transcript) => transcript.label === selectedTranscriptLabel) ?? transcripts[0] ?? null;
@@ -240,6 +241,12 @@ export function NexusLMPanel({ manifest, pipelineSnapshot, transcripts, onManife
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-hidden bg-shell-950 lg:flex-row">
       <section className="flex min-h-0 min-w-0 flex-1 flex-col border-b border-slate-800 lg:border-b-0 lg:border-r" aria-label="NexusLM conversation">
+        <div className="flex min-h-12 shrink-0 items-center justify-between border-b border-slate-800 px-4 lg:hidden">
+          <p className="text-xs font-semibold uppercase tracking-widest text-slate-500">NexusLM conversation</p>
+          <button type="button" onClick={() => setShowMobileContext((current) => !current)} className="min-h-12 px-3 text-xs font-semibold text-cyan-300">
+            {showMobileContext ? "Hide sources" : `Sources (${transcripts.length})`}
+          </button>
+        </div>
         <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto px-4 py-5 lg:px-8 lg:py-7" style={{ WebkitOverflowScrolling: "touch" }}>
           <div className="mx-auto flex max-w-3xl flex-col gap-4">
             {messages.map((message, index) => (
@@ -279,7 +286,7 @@ export function NexusLMPanel({ manifest, pipelineSnapshot, transcripts, onManife
               value={input}
               onChange={(event) => setInput(event.target.value)}
               onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void send(); } }}
-              placeholder={manifest ? "Ask NexusLM about your book..." : "Load a book project to begin..."}
+              placeholder={manifest || transcripts.length > 0 ? "Ask NexusLM about your book..." : "Upload a transcript to begin..."}
               disabled={(!manifest && transcripts.length === 0) || loading}
               rows={3}
               className="w-full resize-none rounded-2xl border border-slate-700 bg-slate-900 px-4 py-3 text-base text-slate-100 outline-none placeholder:text-slate-600 focus:border-cyan-400/60"
@@ -292,7 +299,7 @@ export function NexusLMPanel({ manifest, pipelineSnapshot, transcripts, onManife
         </div>
       </section>
 
-      <aside className="max-h-[42dvh] w-full shrink-0 overflow-y-auto border-t border-slate-800 bg-slate-950/70 p-4 lg:max-h-none lg:w-80 lg:border-t-0 lg:p-6">
+      <aside className={`${showMobileContext ? "block" : "hidden"} max-h-[70dvh] w-full shrink-0 overflow-y-auto border-t border-slate-800 bg-slate-950/70 p-4 lg:block lg:max-h-none lg:w-80 lg:border-t-0 lg:p-6`}>
         <div className="mb-6">
           <p className="text-xs font-bold uppercase tracking-[0.2em] text-cyan-300">NexusLM</p>
           <h2 className="mt-2 text-lg font-semibold text-slate-100">Your book, in conversation</h2>

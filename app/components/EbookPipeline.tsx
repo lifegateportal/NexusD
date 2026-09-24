@@ -2008,9 +2008,32 @@ export function EbookPipeline({
       }
     })();
 
-    if (!base) return;
+    const checkpointBase = base ?? sanitizeJobStateForPersistence({
+      jobId: jobIdRef.current,
+      simpleDirect: useSimpleDirectBookMode,
+      status: "idle",
+      audioFileNames: audioFiles.filter(Boolean).map((file) => file!.name),
+      transcripts: [],
+      masterTranscript: "",
+      filteredTranscript: "",
+      filterRemovedCount: 0,
+      voiceDNA: null,
+      contentMap: null,
+      architecture: null,
+      sectionAssignments: [],
+      sections: [],
+      chapters: [],
+      frontMatter: null,
+      backMatter: null,
+      exportUrls: null,
+      currentStage: "idle",
+      progress: { total: 0, completed: 0 },
+      errorLog: [],
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    });
     const updated: EbookJobState = {
-      ...base,
+      ...checkpointBase,
       sectionAssignments: assignments,
       transcripts: nextTranscripts,
       updatedAt: new Date().toISOString(),
@@ -2028,7 +2051,7 @@ export function EbookPipeline({
     } catch (err) {
       addLog(`⚠ IndexedDB save failed: ${err instanceof Error ? err.message : 'unknown error'}`);
     }
-  }, [onJobStateChange, sourceTranscripts]);
+  }, [addLog, audioFiles, onJobStateChange, sectionAssignments, sourceTranscripts, useSimpleDirectBookMode]);
 
   const downloadSourceMap = useCallback(() => {
     if (sectionAssignments.length === 0) {
