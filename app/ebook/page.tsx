@@ -6,6 +6,7 @@ import { EbookPipeline } from "@/app/components/EbookPipeline";
 import { EbookProjectsPanel } from "@/app/components/EbookProjectsPanel";
 import { AssistantPanel } from "@/app/components/AssistantPanel";
 import { ManuscriptEditor } from "@/app/components/ManuscriptEditor";
+import { NexusLMPanel } from "@/app/components/NexusLMPanel";
 import { NexusNav } from "@/app/components/NexusNav";
 import { StatusBar } from "@/app/components/StatusBar";
 import { SiteConfigSchema } from "@/lib/schemas/site-config";
@@ -97,7 +98,7 @@ function buildManifestFromCompletedJob(
   };
 }
 
-type Tab = "pipeline" | "projects" | "manuscript";
+type Tab = "pipeline" | "projects" | "manuscript" | "nexuslm";
 
 export default function EbookPage() {
   return (
@@ -117,6 +118,7 @@ function EbookPageClient() {
   const [activeTab, setActiveTab] = useState<Tab>("pipeline");
   const [ebookManifest, setEbookManifest] = useState<EbookManifest | null>(null);
   const [ebookPipelineSnapshot, setEbookPipelineSnapshot] = useState<EbookPipelineSnapshot | null>(null);
+  const [ebookJobState, setEbookJobState] = useState<EbookJobState | null>(null);
   const liveJobStateRef = useRef<EbookJobState | null>(null);
   const [assistantOpen, setAssistantOpen] = useState(false);
   const [statusMsg, setStatusMsg] = useState<{ type: "success" | "error"; text: string } | null>(null);
@@ -236,7 +238,7 @@ function EbookPageClient() {
   const requestedTab = searchParams.get("tab");
   const requestedLoad = searchParams.get("load");
   useEffect(() => {
-    if (requestedTab === "projects" || requestedTab === "pipeline" || requestedTab === "manuscript") {
+    if (requestedTab === "projects" || requestedTab === "pipeline" || requestedTab === "manuscript" || requestedTab === "nexuslm") {
       setActiveTab(requestedTab as Tab);
       return;
     }
@@ -481,6 +483,7 @@ function EbookPageClient() {
       localStorage.setItem(JOB_STATE_KEY, JSON.stringify(project.jobState));
       localStorage.setItem(JOB_STORAGE_KEY, project.jobState.jobId);
       liveJobStateRef.current = project.jobState;
+      setEbookJobState(project.jobState);
       setCurrentProjectId(id);
       setProjects(await listEbookProjects());
       setStatusMsg({ type: "success", text: `"${name}" saved.` });
@@ -520,6 +523,7 @@ function EbookPageClient() {
       localStorage.setItem(JOB_STATE_KEY, JSON.stringify(p.jobState));
       localStorage.setItem(JOB_STORAGE_KEY, p.jobState.jobId);
       liveJobStateRef.current = p.jobState;
+      setEbookJobState(p.jobState);
       setCurrentProjectId(p.id);
       const job = p.jobState;
       if (canBuildCompletedManifest(job)) {
@@ -597,6 +601,7 @@ function EbookPageClient() {
     localStorage.setItem(JOB_STATE_KEY, JSON.stringify(project.jobState));
     localStorage.setItem(JOB_STORAGE_KEY, project.jobState.jobId);
     liveJobStateRef.current = project.jobState;
+    setEbookJobState(project.jobState);
     setPipelineKey((k) => k + 1);
     // Mirror imported project to cloud snapshot store (best-effort)
     fetch("/api/projects", {
@@ -774,6 +779,7 @@ function EbookPageClient() {
 
     hydratedLoadRef.current = null;
     liveJobStateRef.current = null;
+    setEbookJobState(null);
     setCurrentProjectId("");
     setEbookManifest(null);
     setEbookPipelineSnapshot(null);
@@ -796,6 +802,7 @@ function EbookPageClient() {
     localStorage.setItem(JOB_STATE_KEY, JSON.stringify(job));
     localStorage.setItem(JOB_STORAGE_KEY, job.jobId);
     liveJobStateRef.current = job;
+    setEbookJobState(job);
     setCurrentProjectId((prev) => prev || job.jobId);
 
     const manifest = buildManifestFromJob(job);
@@ -926,6 +933,18 @@ function EbookPageClient() {
                 </button>
                 <button
                   type="button"
+                  onClick={() => setActiveTab("nexuslm")}
+                  disabled={!ebookManifest}
+                  className={`flex items-center gap-2 border-b-2 px-4 py-2.5 text-sm font-semibold transition-colors ${activeTab === "nexuslm" ? "border-cyan-400 text-cyan-300" : ebookManifest ? "border-transparent text-slate-400 hover:text-slate-200" : "border-transparent text-slate-600 cursor-not-allowed"}`}
+                >
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} className="h-4 w-4">
+                    <path d="M5 5h14v10H8l-3 3V5z" strokeLinecap="round" strokeLinejoin="round" />
+                    <path d="M8 9h8M8 12h5" strokeLinecap="round" />
+                  </svg>
+                  NexusLM
+                </button>
+                <button
+                  type="button"
                   onClick={() => setActiveTab("projects")}
                   className={`flex items-center gap-2 border-b-2 px-4 py-2.5 text-sm font-semibold transition-colors ${activeTab === "projects" ? "border-cyan-400 text-cyan-300" : "border-transparent text-slate-400 hover:text-slate-200"}`}
                 >
@@ -962,6 +981,7 @@ function EbookPageClient() {
                   onPipelineSnapshotChange={handlePipelineSnapshotChange}
                   onJobStateChange={(job) => {
                     liveJobStateRef.current = job;
+                    setEbookJobState(job);
                     setHasContinueState(hasResumableProgress(job));
                   }}
                   onSaveProject={(name) => void handleSaveProject(name)}
@@ -1009,6 +1029,19 @@ function EbookPageClient() {
                   }}
                 />
               </div>
+            </div>
+
+            <div className={activeTab === "nexuslm" ? "flex min-h-0 flex-1 overflow-hidden" : "hidden"}>
+              <NexusLMPanel
+                manifest={ebookManifest}
+                pipelineSnapshot={ebookPipelineSnapshot}
+                transcripts={ebookJobState?.transcripts ?? []}
+                onManifestChange={(updated, summary) => {
+                  setEbookManifest(updated);
+                  handleEbookUpdate(updated);
+                  setStatusMsg({ type: "success", text: summary });
+                }}
+              />
             </div>
 
           </div>
