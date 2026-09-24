@@ -59,6 +59,31 @@ function formatChapterDraft(chapter: ChapterDraft): string {
   return `CHAPTER ${chapter.number}: ${chapter.title}\n\n${chapter.intro ? `${chapter.intro}\n\n` : ""}${sections}${chapter.forwardQuestion ? `\n\nForward question: ${chapter.forwardQuestion}` : ""}`;
 }
 
+function renderAssistantContent(content: string) {
+  return content.split("\n").map((line, index) => {
+    const trimmed = line.trim();
+    if (!trimmed) return <div key={`space-${index}`} className="h-3" aria-hidden="true" />;
+
+    const heading = trimmed.match(/^#{1,3}\s+(.+)$/);
+    if (heading) {
+      return <h3 key={`heading-${index}`} className="mt-5 text-base font-semibold tracking-tight text-slate-100 first:mt-0">{heading[1]}</h3>;
+    }
+
+    if (trimmed.startsWith("> ")) {
+      return <blockquote key={`quote-${index}`} className="my-3 border-l-2 border-cyan-400/60 pl-4 text-slate-300">{trimmed.slice(2)}</blockquote>;
+    }
+
+    const parts = line.split(/(\[Slot-[^\]]+\])/g);
+    return (
+      <p key={`paragraph-${index}`} className="leading-7 text-slate-300">
+        {parts.map((part, partIndex) => part.match(/^\[Slot-[^\]]+\]$/)
+          ? <span key={`citation-${partIndex}`} className="mx-1 inline-flex rounded-md border border-cyan-400/30 bg-cyan-400/10 px-1.5 py-0.5 align-baseline text-[11px] font-semibold text-cyan-300">{part}</span>
+          : part)}
+      </p>
+    );
+  });
+}
+
 export function NexusLMPanel({ manifest, pipelineSnapshot, transcripts, onManifestChange }: NexusLMPanelProps) {
   const [messages, setMessages] = useState<Message[]>([initialMessage(manifest)]);
   const [input, setInput] = useState("");
@@ -248,10 +273,14 @@ export function NexusLMPanel({ manifest, pipelineSnapshot, transcripts, onManife
           </button>
         </div>
         <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto px-4 py-5 lg:px-8 lg:py-7" style={{ WebkitOverflowScrolling: "touch" }}>
-          <div className="mx-auto flex max-w-3xl flex-col gap-4">
+          <div className="mx-auto flex max-w-4xl flex-col gap-5">
             {messages.map((message, index) => (
-              <div key={`${message.role}-${index}`} className={`max-w-[92%] whitespace-pre-wrap rounded-2xl border px-4 py-3 text-sm leading-6 ${message.role === "user" ? "self-end border-cyan-500/30 bg-cyan-500/10 text-cyan-50" : "border-slate-800 bg-slate-900/70 text-slate-300"}`}>
-                {message.content}
+              <div key={`${message.role}-${index}`} className={message.role === "user"
+                ? "max-w-[88%] self-end rounded-2xl border border-cyan-500/30 bg-cyan-500/10 px-4 py-3 text-sm leading-6 text-cyan-50"
+                : message.role === "system"
+                  ? "rounded-xl border border-slate-800 bg-slate-900/50 px-4 py-3 text-sm leading-6 text-slate-400"
+                  : "rounded-xl border border-slate-800 bg-slate-950/50 px-5 py-5 text-sm leading-7 shadow-[0_12px_40px_rgba(0,0,0,0.14)]"}>
+                {message.role === "assistant" ? renderAssistantContent(message.content) : message.content}
               </div>
             ))}
             {loading && <div className="text-sm text-slate-500">NexusLM is thinking...</div>}
@@ -259,7 +288,7 @@ export function NexusLMPanel({ manifest, pipelineSnapshot, transcripts, onManife
         </div>
 
         <div className="border-t border-slate-800 bg-slate-950/80 p-3 pb-[max(env(safe-area-inset-bottom),0.75rem)] lg:p-5">
-          <div className="mx-auto max-w-3xl">
+          <div className="mx-auto max-w-4xl">
             {pendingDraft && (
               <div className="mb-3 rounded-2xl border border-cyan-500/30 bg-cyan-500/10 p-4">
                 <p className="text-xs font-bold uppercase tracking-widest text-cyan-300">Chapter draft ready</p>
@@ -299,7 +328,7 @@ export function NexusLMPanel({ manifest, pipelineSnapshot, transcripts, onManife
         </div>
       </section>
 
-      <aside className={`${showMobileContext ? "block" : "hidden"} max-h-[70dvh] w-full shrink-0 overflow-y-auto border-t border-slate-800 bg-slate-950/70 p-4 lg:block lg:max-h-none lg:w-80 lg:border-t-0 lg:p-6`}>
+      <aside className={`${showMobileContext ? "block" : "hidden"} max-h-[70dvh] w-full shrink-0 overflow-y-auto border-t border-slate-800 bg-slate-950/70 p-4 lg:block lg:max-h-none lg:w-[22rem] lg:border-t-0 lg:p-6`}>
         <div className="mb-6">
           <p className="text-xs font-bold uppercase tracking-[0.2em] text-cyan-300">NexusLM</p>
           <h2 className="mt-2 text-lg font-semibold text-slate-100">Your book, in conversation</h2>
