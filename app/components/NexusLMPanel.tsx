@@ -264,7 +264,7 @@ export function NexusLMPanel({ manifest, pipelineSnapshot, transcripts, onManife
   }
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col overflow-hidden bg-shell-950 lg:flex-row">
+    <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden bg-shell-950 lg:flex-row">
       <section className="flex min-h-0 min-w-0 flex-1 flex-col border-b border-slate-800 lg:border-b-0 lg:border-r" aria-label="NexusLM conversation">
         <div className="flex min-h-12 shrink-0 items-center justify-between border-b border-slate-800 px-4 lg:hidden">
           <p className="text-xs font-semibold uppercase tracking-widest text-slate-500">NexusLM conversation</p>
@@ -287,7 +287,7 @@ export function NexusLMPanel({ manifest, pipelineSnapshot, transcripts, onManife
           </div>
         </div>
 
-        <div className="border-t border-slate-800 bg-slate-950/80 p-3 pb-[max(env(safe-area-inset-bottom),0.75rem)] lg:p-5">
+        <div className="shrink-0 bg-shell-950 px-3 pb-[max(env(safe-area-inset-bottom),0.75rem)] pt-2 lg:px-8 lg:pb-5 lg:pt-3">
           <div className="mx-auto max-w-4xl">
             {pendingDraft && (
               <div className="mb-3 rounded-2xl border border-cyan-500/30 bg-cyan-500/10 p-4">
@@ -311,24 +311,26 @@ export function NexusLMPanel({ manifest, pipelineSnapshot, transcripts, onManife
                 </div>
               </div>
             )}
-            <textarea
-              value={input}
-              onChange={(event) => setInput(event.target.value)}
-              onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void send(); } }}
-              placeholder={manifest || transcripts.length > 0 ? "Ask NexusLM about your book..." : "Upload a transcript to begin..."}
-              disabled={(!manifest && transcripts.length === 0) || loading}
-              rows={3}
-              className="w-full resize-none rounded-2xl border border-slate-700 bg-slate-900 px-4 py-3 text-base text-slate-100 outline-none placeholder:text-slate-600 focus:border-cyan-400/60"
-            />
-            <div className="mt-3 flex items-center justify-between gap-3">
-              <p className="text-[11px] text-slate-500">Enter to send · Shift+Enter for a new line</p>
-              <button type="button" onClick={() => void send()} disabled={(!manifest && transcripts.length === 0) || !input.trim() || loading} className="min-h-12 rounded-xl bg-cyan-400 px-5 text-sm font-bold text-slate-950 disabled:cursor-not-allowed disabled:opacity-40">Send</button>
+            <div className="rounded-2xl border border-slate-700 bg-slate-900 shadow-[0_8px_30px_rgba(0,0,0,0.22)] focus-within:border-cyan-400/60">
+              <textarea
+                value={input}
+                onChange={(event) => setInput(event.target.value)}
+                onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void send(); } }}
+                placeholder={manifest || transcripts.length > 0 ? "Ask NexusLM about your book..." : "Upload a transcript to begin..."}
+                disabled={(!manifest && transcripts.length === 0) || loading}
+                rows={2}
+                className="block w-full resize-none rounded-t-2xl border-0 bg-transparent px-4 py-3 text-base leading-6 text-slate-100 outline-none placeholder:text-slate-600 focus:ring-0"
+              />
+              <div className="flex items-center justify-between gap-3 px-3 pb-2">
+                <p className="text-[11px] text-slate-500">Enter to send · Shift+Enter for a new line</p>
+                <button type="button" onClick={() => void send()} disabled={(!manifest && transcripts.length === 0) || !input.trim() || loading} className="min-h-10 rounded-xl bg-cyan-400 px-4 text-sm font-bold text-slate-950 disabled:cursor-not-allowed disabled:opacity-40">Send</button>
+              </div>
             </div>
           </div>
         </div>
       </section>
 
-      <aside className={`${showMobileContext ? "block" : "hidden"} max-h-[70dvh] w-full shrink-0 overflow-y-auto border-t border-slate-800 bg-slate-950/70 p-4 lg:block lg:max-h-none lg:w-[22rem] lg:border-t-0 lg:p-6`}>
+      <aside className={`${showMobileContext ? "absolute inset-x-0 bottom-0 top-12 z-20 block" : "hidden"} max-h-[70dvh] w-full shrink-0 overflow-y-auto border-t border-slate-800 bg-shell-950 p-4 shadow-2xl lg:static lg:inset-auto lg:z-auto lg:block lg:max-h-none lg:w-[22rem] lg:border-t-0 lg:p-6 lg:shadow-none`}>
         <div className="mb-6">
           <p className="text-xs font-bold uppercase tracking-[0.2em] text-cyan-300">NexusLM</p>
           <h2 className="mt-2 text-lg font-semibold text-slate-100">Your book, in conversation</h2>
