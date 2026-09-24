@@ -75,6 +75,7 @@ export async function POST(request: NextRequest) {
     const { text } = await generateText({
       model: input.mode === "socratic" ? deepSeekReasonerModel : deepSeekModel,
       ...(input.mode === "ask" ? { temperature: 0.2 } : {}),
+      maxRetries: 2,
       maxTokens: input.mode === "socratic" ? 8000 : 2200,
       system: `You are NexusLM, a source-grounded book companion. The active persona is ${input.persona}.
 The book is "${input.book.title}".

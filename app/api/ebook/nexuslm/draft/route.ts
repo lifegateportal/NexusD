@@ -44,6 +44,7 @@ export async function POST(request: NextRequest) {
   try {
     const { text } = await generateText({
       model: deepSeekReasonerModel,
+      maxRetries: 2,
       maxTokens: 24000,
       system: `Return only one valid JSON object matching the ChapterDraft schema. Do not wrap it in markdown fences and do not include reasoning outside the JSON object.
 You are NexusLM, a professional book ghostwriter. Persona: ${input.persona}.
