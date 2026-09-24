@@ -3266,6 +3266,7 @@ export function EbookPipeline({
           const simple = await postJson<SimpleBookResponse>("/api/ebook/simple-book", {
             rawTranscript: slot.text,
             slotTranscripts: [slot],
+            slotNumber: chapterNumber,
             targetAudience,
             coreThesis: "",
             voiceTone: simpleVoiceDNA.toneProfile,
@@ -4342,6 +4343,7 @@ export function EbookPipeline({
         ? ` [at: ${err.stack.split("\n").slice(1, 3).join(" → ").replace(/\s+/g, " ").slice(0, 120)}]`
         : "";
       setError(msg + stackHint);
+      addLog(`✗ Error: ${msg}`);
       acc.status = "failed";
       acc.currentStage = "failed";
       acc.errorLog = logRef.current;
@@ -4357,7 +4359,6 @@ export function EbookPipeline({
       savedJobRef.current = { ...persistableFailure };
       onJobStateChange?.({ ...persistableFailure });
       setStage("failed");
-      addLog(`✗ Error: ${msg}`);
     }
   }
 

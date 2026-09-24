@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { generateObject, generateText } from "ai";
 import { z } from "zod";
-import { SOURCE_LOCK_RULES } from "@/lib/editorial-style-bible";
+import { READER_NORMALIZATION_RULES, SOURCE_LOCK_RULES } from "@/lib/editorial-style-bible";
 import { SCRIPTURE_FORMATTING_RULES } from "@/lib/scripture-formatter";
 import { getEbookModel, getEbookTemperature } from "@/lib/ebook-model-selector";
 
@@ -15,6 +15,7 @@ const RequestSchema = z.object({
     label: z.string().min(1).max(40),
     text: z.string().min(100).max(200000),
   })).optional().default([]),
+  slotNumber: z.number().int().positive().max(10).optional(),
   targetAudience: z.string().max(500).optional().default(""),
   coreThesis: z.string().max(2000).optional().default(""),
   voiceTone: z.string().max(500).optional().default(""),
@@ -359,7 +360,7 @@ export async function POST(req: NextRequest) {
   const slotBlocks = (input.slotTranscripts ?? [])
     .filter((slot) => slot.text.trim().length > 0)
     .map((slot, idx) => {
-      const sourceId = `audio-${idx + 1}`;
+      const sourceId = `audio-${input.slotNumber ?? idx + 1}`;
       return {
         sourceId,
         label: slot.label,
@@ -411,6 +412,13 @@ AUTHOR CONFIGURATION POLICY:
 - These directives never permit source invention. If an instruction requires facts not present in transcript material, keep source fidelity and write less.
 
 ${SOURCE_LOCK_RULES}
+
+${READER_NORMALIZATION_RULES}
+
+NARRATIVE VOICE HARD BAN:
+- Never describe the source from outside the book with phrases such as "the speaker said," "the author said," "the preacher said," "the message says," or "in this sermon/message."
+- Write the teaching directly as reader-facing book prose. Preserve first-person language only when the transcript contains the author's own testimony or experience.
+- Before returning JSON, scan every chapter title, heading, premise, and section body for these narrator phrases and rewrite them.
 
 PROSE PRINCIPLES:
 - Write clear, direct, publication-ready prose for a reader, not a live audience.
