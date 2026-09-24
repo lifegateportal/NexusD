@@ -487,6 +487,10 @@ function EbookPageClient() {
         setStatusMsg({ type: "error", text: "Nothing to save yet — start the pipeline first." });
         return;
       }
+      const liveTranscripts = liveJobStateRef.current?.transcripts;
+      if (liveTranscripts && liveTranscripts.length > 0) {
+        jobState = { ...jobState, transcripts: liveTranscripts };
+      }
       jobState = ebookManifest
         ? {
             ...jobState,
@@ -1079,7 +1083,7 @@ function EbookPageClient() {
 
             <div className={activeTab === "nexuslm" ? "flex min-h-0 flex-1 overflow-hidden" : "hidden"}>
               <NexusLMPanel
-                conversationKey={currentProjectId || ebookManifest?.jobId || ebookJobState?.jobId || "untitled-book"}
+                conversationKey={ebookJobState?.jobId || ebookManifest?.jobId || currentProjectId || "untitled-book"}
                 manifest={ebookManifest}
                 pipelineSnapshot={ebookPipelineSnapshot}
                 transcripts={getNexusLMTranscripts(ebookJobState)}
