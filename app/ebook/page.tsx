@@ -133,6 +133,19 @@ function EbookPageClient() {
   const hydratedLoadRef = useRef<string | null>(null);
 
   useEffect(() => {
+    try {
+      const raw = localStorage.getItem(JOB_STATE_KEY);
+      if (!raw) return;
+      const parsed = EbookJobStateSchema.safeParse(JSON.parse(raw));
+      if (!parsed.success) return;
+      liveJobStateRef.current = parsed.data;
+      setEbookJobState(parsed.data);
+    } catch {
+      // The pipeline will report a fresh state when it mounts.
+    }
+  }, []);
+
+  useEffect(() => {
     void (async () => {
       const localProjects = await listEbookProjects().catch(() => []);
       setProjects(localProjects);
@@ -934,8 +947,7 @@ function EbookPageClient() {
                 <button
                   type="button"
                   onClick={() => setActiveTab("nexuslm")}
-                  disabled={!ebookManifest}
-                  className={`flex items-center gap-2 border-b-2 px-4 py-2.5 text-sm font-semibold transition-colors ${activeTab === "nexuslm" ? "border-cyan-400 text-cyan-300" : ebookManifest ? "border-transparent text-slate-400 hover:text-slate-200" : "border-transparent text-slate-600 cursor-not-allowed"}`}
+                  className={`flex items-center gap-2 border-b-2 px-4 py-2.5 text-sm font-semibold transition-colors ${activeTab === "nexuslm" ? "border-cyan-400 text-cyan-300" : "border-transparent text-slate-400 hover:text-slate-200"}`}
                 >
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} className="h-4 w-4">
                     <path d="M5 5h14v10H8l-3 3V5z" strokeLinecap="round" strokeLinejoin="round" />

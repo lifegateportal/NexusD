@@ -11,7 +11,7 @@ const RequestSchema = z.object({
   mode: z.enum(["ask", "socratic"]),
   persona: z.string().min(1).max(80),
   book: z.object({
-    title: z.string().max(300),
+    title: z.string().max(2000),
     chapters: z.array(z.object({ number: z.number().int().positive(), title: z.string().max(300) })).max(100),
   }),
   transcripts: z.array(z.object({ label: z.string().min(1).max(200), text: z.string().max(250000) })).max(20),

@@ -12,7 +12,7 @@ const RequestSchema = z.object({
   instruction: z.string().min(1).max(4000),
   chapterNumber: z.number().int().positive(),
   book: z.object({
-    title: z.string().max(300),
+    title: z.string().max(2000),
     chapters: z.array(z.object({ number: z.number().int().positive(), title: z.string().max(300) })).max(100),
     manuscriptChapter: ChapterDraftSchema.nullable(),
   }),
