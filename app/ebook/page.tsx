@@ -53,6 +53,23 @@ function canBuildCompletedManifest(job: EbookJobState | null): job is EbookJobSt
   return Boolean(job.frontMatter && (job.chapters?.length ?? 0) > 0);
 }
 
+function getNexusLMTranscripts(job: EbookJobState | null): Array<{ label: string; text: string }> {
+  if (!job) return [];
+  if (job.transcripts.length > 0) return job.transcripts;
+  if (!job.masterTranscript.trim()) return [];
+
+  const chunks = job.masterTranscript.split(/\n\n\u2550{5,}\n\n/);
+  const parsed = chunks.map((chunk, index) => {
+    const match = chunk.match(/^\[([^\]]+)\]\n([\s\S]*)$/);
+    return {
+      label: match?.[1] ?? `Master transcript ${index + 1}`,
+      text: (match?.[2] ?? chunk).trim(),
+    };
+  }).filter((transcript) => transcript.text.length > 0);
+
+  return parsed.length > 0 ? parsed : [{ label: "Master transcript", text: job.masterTranscript }];
+}
+
 function deriveManifestIdentity(job: EbookJobState, fallbackTitle?: string): {
   bookTitle: string;
   subtitle: string;
@@ -1057,7 +1074,7 @@ function EbookPageClient() {
                 conversationKey={currentProjectId || ebookManifest?.jobId || ebookJobState?.jobId || "untitled-book"}
                 manifest={ebookManifest}
                 pipelineSnapshot={ebookPipelineSnapshot}
-                transcripts={ebookJobState?.transcripts ?? []}
+                transcripts={getNexusLMTranscripts(ebookJobState)}
                 onManifestChange={(updated, summary) => {
                   setEbookManifest(updated);
                   handleEbookUpdate(updated);
