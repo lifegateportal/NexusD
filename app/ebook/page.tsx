@@ -133,16 +133,25 @@ function EbookPageClient() {
   const hydratedLoadRef = useRef<string | null>(null);
 
   useEffect(() => {
-    try {
-      const raw = localStorage.getItem(JOB_STATE_KEY);
-      if (!raw) return;
-      const parsed = EbookJobStateSchema.safeParse(JSON.parse(raw));
-      if (!parsed.success) return;
-      liveJobStateRef.current = parsed.data;
-      setEbookJobState(parsed.data);
-    } catch {
-      // The pipeline will report a fresh state when it mounts.
-    }
+    void (async () => {
+      try {
+        const raw = localStorage.getItem(JOB_STATE_KEY);
+        const parsed = raw ? EbookJobStateSchema.safeParse(JSON.parse(raw)) : null;
+        if (parsed?.success) {
+          liveJobStateRef.current = parsed.data;
+          setEbookJobState(parsed.data);
+          return;
+        }
+        const jobId = localStorage.getItem(JOB_STORAGE_KEY);
+        if (!jobId) return;
+        const storedJob = await getEbookJob(jobId);
+        if (!storedJob) return;
+        liveJobStateRef.current = storedJob;
+        setEbookJobState(storedJob);
+      } catch {
+        // The pipeline will report a fresh state when it mounts.
+      }
+    })();
   }, []);
 
   useEffect(() => {

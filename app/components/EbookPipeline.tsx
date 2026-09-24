@@ -2553,7 +2553,21 @@ export function EbookPipeline({
 
   const setTranscript = useCallback((i: number, f: File | null) => {
     setTranscriptFiles((prev) => { const next = [...prev]; next[i] = f; return next; });
-  }, []);
+    if (!f) return;
+    const label = `Slot-${i + 1}`;
+    void (async () => {
+      try {
+        const text = await readTextFile(f);
+        const nextTranscripts = sourceTranscripts.filter((transcript) => transcript.label !== label);
+        nextTranscripts.push({ label, text });
+        setSourceTranscripts(nextTranscripts);
+        await persistSourceMapState(sectionAssignments, nextTranscripts);
+        addLog(`✓ ${label} transcript available to NexusLM — ${countWords(text).toLocaleString()} words`);
+      } catch (err) {
+        addLog(`✗ ${label} transcript could not be loaded: ${err instanceof Error ? err.message : "Unknown error"}`);
+      }
+    })();
+  }, [addLog, persistSourceMapState, sectionAssignments, sourceTranscripts]);
 
   // A slot is active if it has audio OR a pre-existing transcript
   const activeSlotCount = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9].filter(
