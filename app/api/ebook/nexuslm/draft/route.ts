@@ -4,6 +4,7 @@ import { z } from "zod";
 import { deepSeekModel } from "@/lib/ai-providers";
 import { ChapterDraftSchema } from "@/lib/schemas/ebook";
 import { SOURCE_LOCK_RULES, PROSE_MASTERY_RULES, READER_NORMALIZATION_RULES, PREMIUM_BOOK_STYLE_RULES } from "@/lib/editorial-style-bible";
+import { SCRIPTURE_FORMATTING_RULES } from "@/lib/scripture-formatter";
 
 export const runtime = "nodejs";
 export const maxDuration = 180;
@@ -52,6 +53,7 @@ ${SOURCE_LOCK_RULES}
 ${READER_NORMALIZATION_RULES}
 ${PROSE_MASTERY_RULES}
 ${PREMIUM_BOOK_STYLE_RULES}
+${SCRIPTURE_FORMATTING_RULES}
 Return a complete ChapterDraft object. The sections must contain readable prose in the body field, not planning notes.`,
       prompt: `BOOK: ${input.book.title}
 EXISTING CHAPTER OUTLINE:

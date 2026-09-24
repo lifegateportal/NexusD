@@ -1054,6 +1054,7 @@ function EbookPageClient() {
 
             <div className={activeTab === "nexuslm" ? "flex min-h-0 flex-1 overflow-hidden" : "hidden"}>
               <NexusLMPanel
+                conversationKey={currentProjectId || ebookManifest?.jobId || ebookJobState?.jobId || "untitled-book"}
                 manifest={ebookManifest}
                 pipelineSnapshot={ebookPipelineSnapshot}
                 transcripts={ebookJobState?.transcripts ?? []}

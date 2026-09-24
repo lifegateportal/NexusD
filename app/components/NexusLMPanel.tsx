@@ -5,8 +5,10 @@ import { ChapterDraftSchema, EbookManifestSchema } from "@/lib/schemas/ebook";
 import type { EbookManifest } from "@/lib/schemas/ebook";
 import type { ChapterDraft } from "@/lib/schemas/ebook";
 import type { EbookPipelineSnapshot } from "@/app/components/EbookPipeline";
+import { deleteNexusLMChat, getNexusLMChat, saveNexusLMChat } from "@/lib/nexuslm-chat-store";
 
 type NexusLMPanelProps = {
+  conversationKey: string;
   manifest: EbookManifest | null;
   pipelineSnapshot: EbookPipelineSnapshot | null;
   transcripts: Array<{ label: string; text: string }>;
@@ -104,7 +106,7 @@ function renderAssistantContent(content: string) {
   });
 }
 
-export function NexusLMPanel({ manifest, pipelineSnapshot, transcripts, onManifestChange }: NexusLMPanelProps) {
+export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, transcripts, onManifestChange }: NexusLMPanelProps) {
   const [messages, setMessages] = useState<Message[]>([initialMessage(manifest)]);
   const [input, setInput] = useState("");
   const [mode, setMode] = useState<Mode>("ask");
@@ -116,12 +118,25 @@ export function NexusLMPanel({ manifest, pipelineSnapshot, transcripts, onManife
   const [selectedTranscriptLabel, setSelectedTranscriptLabel] = useState("");
   const [showMobileContext, setShowMobileContext] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const historyLoadedRef = useRef(false);
 
   const selectedTranscript = transcripts.find((transcript) => transcript.label === selectedTranscriptLabel) ?? transcripts[0] ?? null;
 
   useEffect(() => {
-    setMessages([initialMessage(manifest)]);
-  }, [manifest?.jobId]);
+    let cancelled = false;
+    historyLoadedRef.current = false;
+    void getNexusLMChat(conversationKey).then((archive) => {
+      if (cancelled) return;
+      setMessages(archive?.messages?.length ? archive.messages : [initialMessage(manifest)]);
+      historyLoadedRef.current = true;
+    });
+    return () => { cancelled = true; };
+  }, [conversationKey]);
+
+  useEffect(() => {
+    if (!historyLoadedRef.current || !conversationKey) return;
+    void saveNexusLMChat(conversationKey, messages);
+  }, [conversationKey, messages]);
 
   useEffect(() => {
     if (selectedTranscriptLabel && transcripts.some((transcript) => transcript.label === selectedTranscriptLabel)) return;
@@ -131,6 +146,11 @@ export function NexusLMPanel({ manifest, pipelineSnapshot, transcripts, onManife
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
   }, [messages, loading]);
+
+  async function clearConversation() {
+    await deleteNexusLMChat(conversationKey);
+    setMessages([initialMessage(manifest)]);
+  }
 
   async function send(requestText?: string, requestMode?: Mode) {
     const instruction = (requestText ?? input).trim();
@@ -289,9 +309,12 @@ export function NexusLMPanel({ manifest, pipelineSnapshot, transcripts, onManife
       <section className="flex min-h-0 min-w-0 flex-1 flex-col border-b border-slate-800 lg:border-b-0 lg:border-r" aria-label="NexusLM conversation">
         <div className="flex min-h-12 shrink-0 items-center justify-between border-b border-slate-800 px-4 lg:hidden">
           <p className="text-xs font-semibold uppercase tracking-widest text-slate-500">NexusLM conversation</p>
-          <button type="button" onClick={() => setShowMobileContext((current) => !current)} className="min-h-12 px-3 text-xs font-semibold text-cyan-300">
-            {showMobileContext ? "Hide sources" : `Sources (${transcripts.length})`}
-          </button>
+          <div className="flex items-center gap-2">
+            <button type="button" onClick={() => void clearConversation()} className="min-h-12 px-2 text-xs font-semibold text-slate-500">Clear</button>
+            <button type="button" onClick={() => setShowMobileContext((current) => !current)} className="min-h-12 px-2 text-xs font-semibold text-cyan-300">
+              {showMobileContext ? "Hide sources" : `Sources (${transcripts.length})`}
+            </button>
+          </div>
         </div>
         <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto px-4 py-5 lg:px-8 lg:py-7" style={{ WebkitOverflowScrolling: "touch" }}>
           <div className="mx-auto flex max-w-4xl flex-col gap-5">
@@ -353,9 +376,14 @@ export function NexusLMPanel({ manifest, pipelineSnapshot, transcripts, onManife
 
       <aside className={`${showMobileContext ? "absolute inset-x-0 bottom-0 top-12 z-20 block" : "hidden"} max-h-[70dvh] w-full shrink-0 overflow-y-auto border-t border-slate-800 bg-shell-950 p-4 shadow-2xl lg:static lg:inset-auto lg:z-auto lg:block lg:max-h-none lg:w-[22rem] lg:border-t-0 lg:p-6 lg:shadow-none`}>
         <div className="mb-6">
-          <p className="text-xs font-bold uppercase tracking-[0.2em] text-cyan-300">NexusLM</p>
-          <h2 className="mt-2 text-lg font-semibold text-slate-100">Your book, in conversation</h2>
-          <p className="mt-2 text-xs leading-5 text-slate-500">Ask questions, test the thinking, or make a focused edit.</p>
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <p className="text-xs font-bold uppercase tracking-[0.2em] text-cyan-300">NexusLM</p>
+              <h2 className="mt-2 text-lg font-semibold text-slate-100">Your book, in conversation</h2>
+              <p className="mt-2 text-xs leading-5 text-slate-500">Ask questions, test the thinking, or make a focused edit.</p>
+            </div>
+            <button type="button" onClick={() => void clearConversation()} className="min-h-12 shrink-0 rounded-xl border border-slate-700 px-3 text-xs font-semibold text-slate-400">Clear history</button>
+          </div>
         </div>
 
         <label className="block text-xs font-semibold uppercase tracking-widest text-slate-500" htmlFor="nexuslm-persona">Persona</label>
