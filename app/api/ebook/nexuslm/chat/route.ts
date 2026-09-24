@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { generateText } from "ai";
 import { z } from "zod";
-import { deepSeekModel } from "@/lib/ai-providers";
+import { deepSeekModel, deepSeekReasonerModel } from "@/lib/ai-providers";
 
 export const runtime = "nodejs";
 export const maxDuration = 90;
@@ -73,8 +73,8 @@ export async function POST(request: NextRequest) {
 
   try {
     const { text } = await generateText({
-      model: deepSeekModel,
-      temperature: input.mode === "socratic" ? 0.35 : 0.2,
+      model: input.mode === "socratic" ? deepSeekReasonerModel : deepSeekModel,
+      ...(input.mode === "ask" ? { temperature: 0.2 } : {}),
       maxTokens: 2200,
       system: `You are NexusLM, a source-grounded book companion. The active persona is ${input.persona}.
 The book is "${input.book.title}".
