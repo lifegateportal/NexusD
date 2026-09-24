@@ -55,10 +55,12 @@ function canBuildCompletedManifest(job: EbookJobState | null): job is EbookJobSt
 
 function getNexusLMTranscripts(job: EbookJobState | null): Array<{ label: string; text: string }> {
   if (!job) return [];
-  if (job.transcripts.length > 0) return job.transcripts;
-  if (!job.masterTranscript.trim()) return [];
+  const transcripts = Array.isArray(job.transcripts) ? job.transcripts : [];
+  const masterTranscript = typeof job.masterTranscript === "string" ? job.masterTranscript : "";
+  if (transcripts.length > 0) return transcripts;
+  if (!masterTranscript.trim()) return [];
 
-  const chunks = job.masterTranscript.split(/\n\n\u2550{5,}\n\n/);
+  const chunks = masterTranscript.split(/\n\n\u2550{5,}\n\n/);
   const parsed = chunks.map((chunk, index) => {
     const match = chunk.match(/^\[([^\]]+)\]\n([\s\S]*)$/);
     return {
@@ -67,7 +69,7 @@ function getNexusLMTranscripts(job: EbookJobState | null): Array<{ label: string
     };
   }).filter((transcript) => transcript.text.length > 0);
 
-  return parsed.length > 0 ? parsed : [{ label: "Master transcript", text: job.masterTranscript }];
+  return parsed.length > 0 ? parsed : [{ label: "Master transcript", text: masterTranscript }];
 }
 
 function deriveManifestIdentity(job: EbookJobState, fallbackTitle?: string): {
