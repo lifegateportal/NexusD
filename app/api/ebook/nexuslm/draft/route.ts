@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { generateObject } from "ai";
+import { generateText } from "ai";
 import { z } from "zod";
 import { deepSeekReasonerModel } from "@/lib/ai-providers";
 import { ChapterDraftSchema } from "@/lib/schemas/ebook";
@@ -42,13 +42,11 @@ export async function POST(request: NextRequest) {
     .join("\n\n---\n\n");
 
   try {
-    const { object } = await generateObject({
+    const { text } = await generateText({
       model: deepSeekReasonerModel,
-      schema: ChapterDraftSchema,
-      mode: "json",
       maxTokens: 12000,
-      temperature: 0.35,
-      system: `You are NexusLM, a professional book ghostwriter. Persona: ${input.persona}.
+      system: `Return only one valid JSON object matching the ChapterDraft schema. Do not wrap it in markdown fences and do not include reasoning outside the JSON object.
+You are NexusLM, a professional book ghostwriter. Persona: ${input.persona}.
 Write only from the supplied manuscript context and transcript sources. Do not invent teachings, stories, quotations, facts, or theological claims. Preserve the author's voice and remove live-audience language.
 ${SOURCE_LOCK_RULES}
 ${READER_NORMALIZATION_RULES}
@@ -70,9 +68,20 @@ TRANSCRIPT SOURCES:
 ${transcriptContext || "No transcript sources were uploaded. State that source material is insufficient in the chapter draft."}
 
 VETTING GUIDANCE TO IMPLEMENT:
-${input.vettingGuidance || "No prior vetting guidance was provided."}`,
+${input.vettingGuidance || "No prior vetting guidance was provided."}
+
+Return JSON only.`,
     });
-    return NextResponse.json({ chapter: { ...object, number: input.chapterNumber, status: "complete" } });
+    const jsonStart = text.indexOf("{");
+    const jsonEnd = text.lastIndexOf("}");
+    if (jsonStart < 0 || jsonEnd <= jsonStart) {
+      throw new Error("The reasoner returned no JSON chapter draft.");
+    }
+    const parsed = ChapterDraftSchema.safeParse(JSON.parse(text.slice(jsonStart, jsonEnd + 1)));
+    if (!parsed.success) {
+      throw new Error("The reasoner returned a chapter that did not match the manuscript schema.");
+    }
+    return NextResponse.json({ chapter: { ...parsed.data, number: input.chapterNumber, status: "complete" } });
   } catch (error) {
     return NextResponse.json({ error: error instanceof Error ? error.message : "NexusLM could not draft the chapter." }, { status: 500 });
   }
