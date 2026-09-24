@@ -192,6 +192,10 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
               manuscriptChapter: manifest?.chapters.find((chapter) => chapter.number === chapterNumber) ?? null,
             },
             transcripts,
+            vettingGuidance: messages
+              .slice()
+              .reverse()
+              .find((message) => message.role === "assistant")?.content,
           }),
         });
         const json = await res.json() as { chapter?: unknown; error?: string };
@@ -219,7 +223,8 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
         const json = await res.json() as { answer?: string; sources?: Source[]; error?: string };
         if (!res.ok || json.error) throw new Error(json.error ?? `Request failed (${res.status})`);
         setSources(json.sources ?? []);
-        setMessages((current) => [...current, { role: "assistant", content: json.answer ?? "NexusLM returned no answer." }]);
+        const answer = json.answer ?? "NexusLM returned no answer.";
+        setMessages((current) => [...current, { role: "assistant", content: answer }]);
         return;
       }
 
@@ -262,12 +267,44 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
   }
 
   function addPendingDraft() {
-    if (!manifest || !pendingDraft) return;
-    const chapters = manifest.chapters.some((chapter) => chapter.number === pendingDraft.number)
-      ? manifest.chapters.map((chapter) => chapter.number === pendingDraft.number ? pendingDraft : chapter)
-      : [...manifest.chapters, pendingDraft].sort((a, b) => a.number - b.number);
+    if (!pendingDraft) return;
+    const baseManifest: EbookManifest = manifest ?? {
+      jobId: conversationKey,
+      bookTitle: pipelineSnapshot?.bookTitle ?? "Untitled book",
+      subtitle: "",
+      authorName: "the Author",
+      frontMatter: {
+        preface: "",
+        introduction: "",
+        conclusion: "",
+        aboutAuthor: null,
+        resourcesList: [],
+        scriptureIndex: [],
+      },
+      chapters: [],
+      totalWordCount: 0,
+      allQuotes: [],
+      generatedAt: new Date().toISOString(),
+      selectedTemplate: "devotional",
+      printSpec: {
+        trimSize: "6x9",
+        runningHeaders: true,
+        bleed: false,
+        cropMarks: false,
+        editableProof: false,
+        folioStyle: "center",
+        frontMatterNumbering: "arabic",
+        sectionOrnament: "rule",
+        bodyTextAlign: "template",
+        bodyFontFamily: "template",
+        fontSizeScale: 1,
+      },
+    };
+    const chapters: EbookManifest["chapters"] = baseManifest.chapters.some((chapter) => chapter.number === pendingDraft.number)
+      ? baseManifest.chapters.map((chapter) => chapter.number === pendingDraft.number ? pendingDraft : chapter)
+      : [...baseManifest.chapters, pendingDraft].sort((a, b) => a.number - b.number);
     const totalWordCount = chapters.reduce((sum, chapter) => sum + (chapter.totalWordCount ?? 0), 0);
-    onManifestChange({ ...manifest, chapters, totalWordCount }, `Chapter ${pendingDraft.number} added to the manuscript.`);
+    onManifestChange({ ...baseManifest, chapters, totalWordCount }, `Chapter ${pendingDraft.number} added to the manuscript.`);
     setMessages((current) => [...current, { role: "assistant", content: `Chapter ${pendingDraft.number} added to the manuscript.` }]);
     setPendingDraft(null);
   }
@@ -339,7 +376,7 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
                 <p className="mt-2 text-sm leading-6 text-cyan-50">Chapter {pendingDraft.number}: {pendingDraft.title}</p>
                 <p className="mt-1 text-xs text-cyan-200/70">Review the complete draft in the conversation, then choose whether to add this exact version.</p>
                 <div className="mt-3 flex gap-2">
-                  <button type="button" onClick={addPendingDraft} disabled={loading || !manifest} className="min-h-12 rounded-xl bg-cyan-300 px-4 text-sm font-bold text-slate-950 disabled:opacity-40">{manifest ? "Add to manuscript" : "Load manuscript to add"}</button>
+                  <button type="button" onClick={addPendingDraft} disabled={loading} className="min-h-12 rounded-xl bg-cyan-300 px-4 text-sm font-bold text-slate-950 disabled:opacity-40">Add to manuscript</button>
                   <button type="button" onClick={() => setPendingDraft(null)} disabled={loading} className="min-h-12 rounded-xl border border-slate-700 px-4 text-sm font-semibold text-slate-300 disabled:opacity-40">Discard draft</button>
                 </div>
               </div>

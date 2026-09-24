@@ -19,6 +19,7 @@ const RequestSchema = z.object({
   }),
   transcripts: z.array(z.object({ label: z.string().min(1).max(200), text: z.string().max(250000) })).max(20),
   persona: z.string().min(1).max(80),
+  vettingGuidance: z.string().max(20000).optional(),
 }).superRefine((value, context) => {
   const totalCharacters = value.transcripts.reduce((sum, transcript) => sum + transcript.text.length, 0);
   if (totalCharacters > 1000000) context.addIssue({ code: z.ZodIssueCode.custom, message: "Transcript context is too large." });
@@ -66,7 +67,10 @@ CURRENT MANUSCRIPT CHAPTER:
 ${manuscriptChapter}
 
 TRANSCRIPT SOURCES:
-${transcriptContext || "No transcript sources were uploaded. State that source material is insufficient in the chapter draft."}`,
+${transcriptContext || "No transcript sources were uploaded. State that source material is insufficient in the chapter draft."}
+
+VETTING GUIDANCE TO IMPLEMENT:
+${input.vettingGuidance || "No prior vetting guidance was provided."}`,
     });
     return NextResponse.json({ chapter: { ...object, number: input.chapterNumber, status: "complete" } });
   } catch (error) {
