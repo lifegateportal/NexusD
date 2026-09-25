@@ -492,10 +492,44 @@ function slugifyFileName(input: string): string {
   return normalized || "sermon-notes";
 }
 
+function buildDocxTextRuns(text: string, forcedItalics = false): TextRun[] {
+  const runs: TextRun[] = [];
+  const pattern = /(\*\*\*(.+?)\*\*\*|\*\*(.+?)\*\*|(?<!\*)\*([^*\n]+?)\*(?!\*)|__(.+?)__|(?<!_)_([^_\n]+?)_(?!_)|`([^`\n]+?)`)/g;
+  let lastIndex = 0;
+  let match: RegExpExecArray | null;
+
+  while ((match = pattern.exec(text)) !== null) {
+    if (match.index > lastIndex) {
+      runs.push(new TextRun({ text: text.slice(lastIndex, match.index), italics: forcedItalics }));
+    }
+
+    if (match[2]) {
+      runs.push(new TextRun({ text: match[2], bold: true, italics: true }));
+    } else if (match[3]) {
+      runs.push(new TextRun({ text: match[3], bold: true, italics: forcedItalics }));
+    } else if (match[4]) {
+      runs.push(new TextRun({ text: match[4], italics: true }));
+    } else if (match[5]) {
+      runs.push(new TextRun({ text: match[5], bold: true, italics: forcedItalics }));
+    } else if (match[6]) {
+      runs.push(new TextRun({ text: match[6], italics: true }));
+    } else if (match[7]) {
+      runs.push(new TextRun({ text: match[7], italics: forcedItalics }));
+    }
+
+    lastIndex = match.index + match[0].length;
+  }
+
+  if (lastIndex < text.length) {
+    runs.push(new TextRun({ text: text.slice(lastIndex), italics: forcedItalics }));
+  }
+
+  return runs.length > 0 ? runs : [new TextRun({ text, italics: forcedItalics })];
+}
+
 function buildDocxParagraphs(markdown: string): Paragraph[] {
   const lines = markdown.split(/\r?\n/);
   const paragraphs: Paragraph[] = [];
-  let skipNextSectionTitle = false;
 
   for (const rawLine of lines) {
     const line = rawLine.trim();
@@ -506,28 +540,23 @@ function buildDocxParagraphs(markdown: string): Paragraph[] {
     }
 
     if (line.startsWith("### ")) {
-      paragraphs.push(new Paragraph({ text: line.slice(4), heading: HeadingLevel.HEADING_3 }));
+      paragraphs.push(new Paragraph({ children: buildDocxTextRuns(line.slice(4)), heading: HeadingLevel.HEADING_3 }));
       continue;
     }
 
     if (line.startsWith("## ")) {
-      if (skipNextSectionTitle) {
-        skipNextSectionTitle = false;
-        continue;
-      }
-      paragraphs.push(new Paragraph({ text: line.slice(3), heading: HeadingLevel.HEADING_2 }));
+      paragraphs.push(new Paragraph({ children: buildDocxTextRuns(line.slice(3)), heading: HeadingLevel.HEADING_2 }));
       continue;
     }
 
     if (line.startsWith("# ")) {
-      paragraphs.push(new Paragraph({ text: line.slice(2), heading: HeadingLevel.HEADING_1 }));
-      skipNextSectionTitle = true;
+      paragraphs.push(new Paragraph({ children: buildDocxTextRuns(line.slice(2)), heading: HeadingLevel.HEADING_1 }));
       continue;
     }
 
     if (/^[-*]\s+/.test(line)) {
       paragraphs.push(new Paragraph({
-        text: line.replace(/^[-*]\s+/, ""),
+        children: buildDocxTextRuns(line.replace(/^[-*]\s+/, "")),
         bullet: { level: 0 },
       }));
       continue;
@@ -535,12 +564,12 @@ function buildDocxParagraphs(markdown: string): Paragraph[] {
 
     if (line.startsWith("> ")) {
       paragraphs.push(new Paragraph({
-        children: [new TextRun({ text: line.slice(2), italics: true })],
+        children: buildDocxTextRuns(line.slice(2), true),
       }));
       continue;
     }
 
-    paragraphs.push(new Paragraph({ text: line }));
+    paragraphs.push(new Paragraph({ children: buildDocxTextRuns(line) }));
   }
 
   return paragraphs;
