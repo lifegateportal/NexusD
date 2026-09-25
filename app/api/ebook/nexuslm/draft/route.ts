@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { generateText } from "ai";
+import { generateObject } from "ai";
 import { z } from "zod";
 import { deepSeekReasonerModel } from "@/lib/ai-providers";
 import { ChapterDraftSchema } from "@/lib/schemas/ebook";
@@ -42,8 +42,10 @@ export async function POST(request: NextRequest) {
     .join("\n\n---\n\n");
 
   try {
-    const { text } = await generateText({
+    const { object } = await generateObject({
       model: deepSeekReasonerModel,
+      schema: ChapterDraftSchema,
+      mode: "json",
       maxRetries: 2,
       maxTokens: 24000,
       system: `Return only one valid JSON object matching the ChapterDraft schema. Do not wrap it in markdown fences and do not include reasoning outside the JSON object.
@@ -74,22 +76,14 @@ ${input.vettingGuidance || "No prior vetting guidance was provided."}
 
 Return JSON only.`,
     });
-    const jsonStart = text.indexOf("{");
-    const jsonEnd = text.lastIndexOf("}");
-    if (jsonStart < 0 || jsonEnd <= jsonStart) {
-      throw new Error("The reasoner returned no JSON chapter draft.");
-    }
-    const raw = JSON.parse(text.slice(jsonStart, jsonEnd + 1)) as Record<string, unknown>;
-    const candidate = (raw.chapter ?? raw.draft ?? raw) as Record<string, unknown>;
-    const rawSections = Array.isArray(candidate.sections) ? candidate.sections : [];
-    const sections = rawSections.map((section, index) => {
-      const item = (section ?? {}) as Record<string, unknown>;
+    const sections = object.sections.map((section, index) => {
+      const body = section.body.trim();
       return {
         chapterNumber: input.chapterNumber,
-        sectionNumber: typeof item.sectionNumber === "number" ? item.sectionNumber : index + 1,
-        heading: String(item.heading ?? item.title ?? `Section ${index + 1}`),
-        body: String(item.body ?? item.content ?? item.text ?? ""),
-        wordCount: typeof item.wordCount === "number" ? item.wordCount : String(item.body ?? item.content ?? item.text ?? "").trim().split(/\s+/).filter(Boolean).length,
+        sectionNumber: section.sectionNumber || index + 1,
+        heading: section.heading.trim() || `Section ${index + 1}`,
+        body,
+        wordCount: section.wordCount > 0 ? section.wordCount : body.split(/\s+/).filter(Boolean).length,
         status: "complete" as const,
       };
     });
@@ -97,18 +91,16 @@ Return JSON only.`,
       throw new Error("The reasoner returned no usable chapter sections. Please try again.");
     }
     const normalizedCandidate = {
-      ...candidate,
+      ...object,
       number: input.chapterNumber,
-      title: String(candidate.title ?? candidate.chapterTitle ?? `Chapter ${input.chapterNumber}`),
-      intro: String(candidate.intro ?? candidate.introduction ?? ""),
-      epigraph: String(candidate.epigraph ?? ""),
+      title: object.title.trim() || `Chapter ${input.chapterNumber}`,
+      intro: object.intro.trim(),
+      epigraph: object.epigraph.trim(),
       sections,
-      forwardQuestion: String(candidate.forwardQuestion ?? ""),
-      keyTakeaways: Array.isArray(candidate.keyTakeaways) ? candidate.keyTakeaways.map(String) : [],
-      reflectionQuestions: Array.isArray(candidate.reflectionQuestions) ? candidate.reflectionQuestions.map(String) : [],
-      totalWordCount: typeof candidate.totalWordCount === "number"
-        ? candidate.totalWordCount
-        : sections.reduce((sum, section) => sum + section.wordCount, 0),
+      forwardQuestion: object.forwardQuestion.trim(),
+      keyTakeaways: object.keyTakeaways.map(String),
+      reflectionQuestions: object.reflectionQuestions.map(String),
+      totalWordCount: sections.reduce((sum, section) => sum + section.wordCount, 0),
       status: "complete" as const,
     };
     const parsed = ChapterDraftSchema.safeParse(normalizedCandidate);
