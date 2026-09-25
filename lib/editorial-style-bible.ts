@@ -123,6 +123,29 @@ When the author recounts a conversation, exchange, or paraphrased dialogue (incl
 - PRAYER CONVERSATIONS: When the author recounts praying or hearing from God, keep the voice intimate but avoid putting words in God's mouth unless the transcript contains the author's explicit phrasing.
 `;
 
+export const DIRECT_CHAPTER_WRITING_RULES = `DIRECT CHAPTER WRITING RULES:
+- Use a simple, direct structure with strong chapter titles and section headings.
+- Choose section count from the source material. Every section must be specific, coherent, and transcript-grounded.
+- Chapter titles must be 4-7 words, punchy, and complete phrases.
+- Section headings must be 4-8 words, complete phrases, and never dangling.
+- Do not repeat a concept after it has been fully developed. The first section that develops a concept owns it; later sections may reference it briefly only while contributing new movement.
+- Preserve chronological integrity unless a minimal reorder improves clarity.
+- When the source supports it, target 3500-4500 words per chapter, generally 700-1000 words per section. Never pad thin material or invent content.
+- Preserve and integrate live examples, testimonies, and personal stories as evidence that advances the teaching point. Keep each story's setup, tension, and payoff in order, and never duplicate a full story across sections.
+- Remove pulpit and live-audience language from narration, including cues such as "say amen", "turn to your neighbor", "lift your hands", and "good morning church".
+- Cover the full source and all significant teaching blocks without restating the same claim to prove coverage.
+- Never paste transcript blocks verbatim. Rewrite into publication-ready prose with clear section flow and transitions.
+- Every non-final section must end with forward pull from its own content, such as an unresolved tension, implication, contrast, or hinge. Do not close it with a recap.
+- Only the final section may deliver chapter closure. Keep it decisive without mechanically relisting earlier points.
+- Only section 1 may include a chapter-orientation opener. Keep it short and drawn from the source. Sections 2 and later must continue directly from new material without reintroducing the chapter premise or opening hook.
+- Begin section 1 with a concrete, reader-facing entrance from the source. The opening sentence should echo the chapter premise without quoting it verbatim.
+- Avoid generic headings such as Introduction, Overview, Summary, and Conclusion.
+- Preserve scripture fidelity and render scripture with premium readability.
+- Treat target audience and author instructions as high-priority presentation guidance for voice, structure, emphasis, pacing, framing, and reader experience. These directives never permit source invention.
+- Write clear, direct, publication-ready prose for a reader, not a live audience. Use deliberate sentence rhythm, transitions, emphasis, pacing, and closure.
+- Return only the requested JSON object. Do not include markdown fences, planning notes, or reasoning outside the JSON.
+`;
+
 const AUDIENCE_PATTERNS = [
 	/\blook at your neighbor\b/gi,
 	/\bsay amen\b/gi,

@@ -3,7 +3,7 @@ import { generateText } from "ai";
 import { z } from "zod";
 import { deepSeekReasonerModel } from "@/lib/ai-providers";
 import { ChapterDraftSchema } from "@/lib/schemas/ebook";
-import { SOURCE_LOCK_RULES, PROSE_MASTERY_RULES, READER_NORMALIZATION_RULES, PREMIUM_BOOK_STYLE_RULES } from "@/lib/editorial-style-bible";
+import { DIRECT_CHAPTER_WRITING_RULES, SOURCE_LOCK_RULES, PROSE_MASTERY_RULES, READER_NORMALIZATION_RULES, PREMIUM_BOOK_STYLE_RULES } from "@/lib/editorial-style-bible";
 import { SCRIPTURE_FORMATTING_RULES } from "@/lib/scripture-formatter";
 
 export const runtime = "nodejs";
@@ -49,6 +49,7 @@ export async function POST(request: NextRequest) {
       system: `Return only one valid JSON object matching the ChapterDraft schema. Do not wrap it in markdown fences and do not include reasoning outside the JSON object.
 You are NexusLM, a professional book ghostwriter. Persona: ${input.persona}.
 Write only from the supplied manuscript context and transcript sources. Do not invent teachings, stories, quotations, facts, or theological claims. Preserve the author's voice and remove live-audience language.
+${DIRECT_CHAPTER_WRITING_RULES}
 ${SOURCE_LOCK_RULES}
 ${READER_NORMALIZATION_RULES}
 ${PROSE_MASTERY_RULES}
