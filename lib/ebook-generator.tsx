@@ -13,6 +13,7 @@ import type { BookTemplateConfig } from "@/lib/book-templates";
 import { parseMarkdownBlockquote, formatScriptureReference } from "@/lib/scripture-formatter";
 import type { ScriptureQuote } from "@/lib/scripture-formatter";
 import { existsSync } from "node:fs";
+import JSZip from "jszip";
 import {
   Document as DocxDocument,
   Packer,
@@ -2402,6 +2403,7 @@ export async function generateDocxBuffer(manifest: EbookManifest, templateId?: s
     new TableOfContents("Table of Contents", {
       hyperlink: true,
       headingStyleRange: "1-2",
+      beginDirty: true,
       stylesWithLevels: [
         { styleName: "Heading 1", level: 1 },
         { styleName: "Heading 2", level: 2 },
@@ -2643,12 +2645,13 @@ export async function generateDocxBuffer(manifest: EbookManifest, templateId?: s
     backMatterSections.push({ title: "Study Guide", children });
   }
 
-  if ((manifest.backMatter?.scriptureIndex ?? []).length > 0) {
+  const scriptureIndex = manifest.backMatter?.scriptureIndex ?? [];
+  if (scriptureIndex.length > 0) {
     const children: Paragraph[] = [
       new Paragraph({ text: "Scripture Index", heading: HeadingLevel.HEADING_1, spacing: { before: 400, after: 240 } }),
       makeDocxDivider(),
     ];
-    for (const entry of manifest.backMatter.scriptureIndex) {
+    for (const entry of scriptureIndex) {
       children.push(
         new Paragraph({
           style: "NxBodyText",
@@ -2717,6 +2720,7 @@ export async function generateDocxBuffer(manifest: EbookManifest, templateId?: s
 
   const doc = new DocxDocument({
     evenAndOddHeaderAndFooters: showRunningHeaders,
+    features: { updateFields: true },
     sections: docSections,
     numbering: {
       config: [
@@ -2824,5 +2828,14 @@ export async function generateDocxBuffer(manifest: EbookManifest, templateId?: s
     },
   });
 
-  return Packer.toBuffer(doc);
+  const docxBuffer = await Packer.toBuffer(doc);
+  const zip = await JSZip.loadAsync(docxBuffer);
+  const settingsFile = zip.file("word/settings.xml");
+  if (settingsFile) {
+    const settingsXml = await settingsFile.async("string");
+    if (!settingsXml.includes("<w:mirrorMargins")) {
+      zip.file("word/settings.xml", settingsXml.replace("</w:settings>", "<w:mirrorMargins/></w:settings>"));
+    }
+  }
+  return zip.generateAsync({ type: "nodebuffer" });
 }
