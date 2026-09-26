@@ -2131,27 +2131,71 @@ export async function generateEpubBuffer(manifest: EbookManifest, templateId?: s
 
 // ─── DOCX generation ─────────────────────────────────────────────────────────
 
-export async function generateDocxBuffer(manifest: EbookManifest, templateId?: string): Promise<Buffer> {
+export async function generateDocxBuffer(manifest: EbookManifest, templateId?: string, printSpec?: PrintSpec): Promise<Buffer> {
   const { bookTitle, subtitle, authorName, frontMatter, chapters } = manifest;
   const tpl = getTemplate(templateId ?? manifest.selectedTemplate);
 
-  // DOCX body always uses full justification — matches typeset book standard.
-  // (tpl.bodyAlign controls PDF; DOCX is always JUSTIFIED for clean Word output.)
-  const bodyAlign = AlignmentType.JUSTIFIED;
+  const resolvedPrintSpec = printSpec ?? manifest.printSpec ?? { trimSize: "6x9" as const, runningHeaders: true };
+  const trimSpec = TRIM_SIZE_SPECS[resolvedPrintSpec.trimSize ?? "6x9"];
+  const fontSizeScale = resolvedPrintSpec.fontSizeScale ?? 1;
+  const bodyTextAlign = resolvedPrintSpec.bodyTextAlign ?? "template";
+  const bodyAlign = bodyTextAlign === "template"
+    ? (tpl.bodyAlign === "justify" ? AlignmentType.JUSTIFIED : AlignmentType.LEFT)
+    : bodyTextAlign === "justify" ? AlignmentType.JUSTIFIED
+      : bodyTextAlign === "center" ? AlignmentType.CENTER
+        : bodyTextAlign === "right" ? AlignmentType.RIGHT : AlignmentType.LEFT;
+  const scaledTpl = {
+    ...tpl,
+    bodyFontSize: (tpl.bodyFontSize + trimSpec.bodyFontSizeAdjust) * fontSizeScale,
+    bodyLineGap: tpl.bodyLineGap * fontSizeScale,
+    paragraphGap: tpl.paragraphGap * fontSizeScale,
+    paragraphIndent: tpl.paragraphIndent * fontSizeScale,
+    chapterLabelSize: tpl.chapterLabelSize * fontSizeScale,
+    chapterTitleSize: tpl.chapterTitleSize * fontSizeScale,
+    sectionSize: tpl.sectionSize * fontSizeScale,
+    matterTitleSize: tpl.matterTitleSize * fontSizeScale,
+    titlePageTitleSize: tpl.titlePageTitleSize * fontSizeScale,
+    titlePageSubtitleSize: tpl.titlePageSubtitleSize * fontSizeScale,
+    titlePageAuthorSize: tpl.titlePageAuthorSize * fontSizeScale,
+    scriptureIndent: tpl.scriptureIndent * fontSizeScale,
+    scriptureFontSize: tpl.scriptureFontSize * fontSizeScale,
+  };
+  const docxSerifFont = resolvedPrintSpec.bodyFontFamily === "times" ? "Times New Roman"
+    : resolvedPrintSpec.bodyFontFamily === "palatino" ? "Palatino Linotype"
+      : resolvedPrintSpec.bodyFontFamily === "helvetica" ? "Arial" : "Georgia";
+  const docxSansFont = "Arial";
+  const docxFontFor = (font: BookTemplateConfig["chapterTitleFont"]): string =>
+    font.includes("sans") ? docxSansFont : docxSerifFont;
+  const bodyLineSpacing = Math.round(((scaledTpl.bodyFontSize + scaledTpl.bodyLineGap) / scaledTpl.bodyFontSize) * 240);
+  const pageSizeTwips = {
+    width: Math.round(trimSpec.pageSize[0] * 20),
+    height: Math.round(trimSpec.pageSize[1] * 20),
+  };
+  const pageMarginsTwips = {
+    top: Math.round(trimSpec.margins.top * 20),
+    right: Math.round(trimSpec.outsideMargin * 20),
+    bottom: Math.round(trimSpec.margins.bottom * 20),
+    left: Math.round(trimSpec.gutterMargin * 20),
+    header: 360,
+    footer: 360,
+  };
+  const showRunningHeaders = resolvedPrintSpec.runningHeaders !== false && tpl.runningHeaders;
+  const frontMatterNumbering = resolvedPrintSpec.frontMatterNumbering ?? "arabic";
+
   const titleAlign = tpl.titlePageAlign === "center" ? AlignmentType.CENTER
     : tpl.titlePageAlign === "right" ? AlignmentType.RIGHT : AlignmentType.LEFT;
   // Body font size in half-points (docx unit): bodyFontSize pt × 2
-  const bodyHalfPt = Math.round(tpl.bodyFontSize * 2);
+  const bodyHalfPt = Math.round(scaledTpl.bodyFontSize * 2);
   // Paragraph spacing after (twips): paragraphGap pt × 20
-  const paraSpacingAfter = Math.round(tpl.paragraphGap * 20);
+  const paraSpacingAfter = Math.round(scaledTpl.paragraphGap * 20);
   // Paragraph indent (twips): paragraphIndent pt × 20
-  const paraIndentTwips = Math.round(tpl.paragraphIndent * 20);
+  const paraIndentTwips = Math.round(scaledTpl.paragraphIndent * 20);
 
   // Half-point size for scripture (typically 1pt smaller)
-  const scriptureHalfPt = Math.round((tpl.bodyFontSize - 0.5) * 2);
-  const scriptureRefHalfPt = Math.round((tpl.bodyFontSize - 2) * 2);
+  const scriptureHalfPt = Math.round((scaledTpl.bodyFontSize - 0.5) * 2);
+  const scriptureRefHalfPt = Math.round((scaledTpl.bodyFontSize - 2) * 2);
   const accentRgb = tpl.accentColor.replace("#", "");
-  const scriptureIndentTwips = Math.round(tpl.scriptureIndent * 20);
+  const scriptureIndentTwips = Math.round(scaledTpl.scriptureIndent * 20);
 
   function docxScriptureBlock(quote: ScriptureQuote): Paragraph[] {
     // Clean the text: strip all markdown blockquote markers and artifacts
@@ -2166,7 +2210,7 @@ export async function generateDocxBuffer(manifest: EbookManifest, templateId?: s
       new Paragraph({
         // Amendment 4: named style for publisher editorial workflows
         style: "NxBlockQuote",
-        children: [new TextRun({ text: line.trim(), italics: true, size: scriptureHalfPt })],
+        children: [new TextRun({ text: line.trim(), italics: true, size: scriptureHalfPt, font: docxSerifFont })],
         alignment: AlignmentType.LEFT,
         spacing: { before: 40, after: 40 },
         indent: { left: scriptureIndentTwips, right: scriptureIndentTwips },
@@ -2177,7 +2221,7 @@ export async function generateDocxBuffer(manifest: EbookManifest, templateId?: s
     if (refText) {
       refParagraphs.push(
         new Paragraph({
-          children: [new TextRun({ text: refText, bold: true, size: scriptureRefHalfPt, color: accentRgb })],
+          children: [new TextRun({ text: refText, bold: true, size: scriptureRefHalfPt, color: accentRgb, font: docxSerifFont })],
           alignment: AlignmentType.RIGHT,
           spacing: { before: 60, after: 200 },
         })
@@ -2198,19 +2242,19 @@ export async function generateDocxBuffer(manifest: EbookManifest, templateId?: s
     let match: RegExpExecArray | null;
     while ((match = pattern.exec(text)) !== null) {
       if (match.index > lastIndex) {
-        runs.push(new TextRun({ text: text.slice(lastIndex, match.index), size: baseSize, italics: allItalic }));
+        runs.push(new TextRun({ text: text.slice(lastIndex, match.index), size: baseSize, italics: allItalic, font: docxSerifFont }));
       }
-      if (match[2])      runs.push(new TextRun({ text: match[2], bold: true, italics: true, size: baseSize }));
-      else if (match[3]) runs.push(new TextRun({ text: match[3], bold: true, italics: allItalic, size: baseSize }));
-      else if (match[4]) runs.push(new TextRun({ text: match[4], italics: true, size: baseSize }));
-      else if (match[5]) runs.push(new TextRun({ text: match[5], bold: true, italics: allItalic, size: baseSize }));
-      else if (match[6]) runs.push(new TextRun({ text: match[6], italics: true, size: baseSize }));
+      if (match[2])      runs.push(new TextRun({ text: match[2], bold: true, italics: true, size: baseSize, font: docxSerifFont }));
+      else if (match[3]) runs.push(new TextRun({ text: match[3], bold: true, italics: allItalic, size: baseSize, font: docxSerifFont }));
+      else if (match[4]) runs.push(new TextRun({ text: match[4], italics: true, size: baseSize, font: docxSerifFont }));
+      else if (match[5]) runs.push(new TextRun({ text: match[5], bold: true, italics: allItalic, size: baseSize, font: docxSerifFont }));
+      else if (match[6]) runs.push(new TextRun({ text: match[6], italics: true, size: baseSize, font: docxSerifFont }));
       lastIndex = match.index + match[0].length;
     }
     if (lastIndex < text.length) {
-      runs.push(new TextRun({ text: text.slice(lastIndex), size: baseSize, italics: allItalic }));
+      runs.push(new TextRun({ text: text.slice(lastIndex), size: baseSize, italics: allItalic, font: docxSerifFont }));
     }
-    return runs.length > 0 ? runs : [new TextRun({ text, size: baseSize, italics: allItalic })];
+    return runs.length > 0 ? runs : [new TextRun({ text, size: baseSize, italics: allItalic, font: docxSerifFont })];
   }
 
   function textToStyledParagraphs(text: string, noIndentFirst = false): Paragraph[] {
@@ -2235,7 +2279,7 @@ export async function generateDocxBuffer(manifest: EbookManifest, templateId?: s
             style: "NxBodyText",
             children: parseRunsForDocx(processedPara, bodyHalfPt),
             alignment: bodyAlign,
-            spacing: { after: paraSpacingAfter },
+            spacing: { after: paraSpacingAfter, line: bodyLineSpacing },
             indent: noIndentFirst && i === 0 ? undefined : { firstLine: paraIndentTwips },
           }),
         ];
@@ -2248,17 +2292,16 @@ export async function generateDocxBuffer(manifest: EbookManifest, templateId?: s
   // enabled via evenAndOddHeaderAndFooters on the document.
   const accentRgbClean = accentRgb; // already stripped of "#"
 
-  function makeDocxHeader(bookTitleText: string, chapterTitleText: string): Header {
+  function makeDocxHeader(
+    text: string,
+    alignment: typeof AlignmentType.LEFT | typeof AlignmentType.CENTER | typeof AlignmentType.RIGHT,
+  ): Header {
     const headerSize = 14; // 7pt — matches PDF running head
     return new Header({
       children: [
         new Paragraph({
-          children: [
-            new TextRun({ text: bookTitleText.toUpperCase(), size: headerSize, color: "aaaaaa" }),
-            new TextRun({ text: "\t", size: headerSize }),
-            new TextRun({ text: chapterTitleText.toUpperCase(), size: headerSize, color: "aaaaaa" }),
-          ],
-          tabStops: [{ type: TabStopType.RIGHT, position: TabStopPosition.MAX }],
+          children: [new TextRun({ text: text.toUpperCase(), size: headerSize, color: "555555", font: docxSansFont })],
+          alignment,
           spacing: { after: 60 },
           border: { bottom: { style: "single", size: 2, color: "dddddd", space: 4 } },
         }),
@@ -2270,12 +2313,31 @@ export async function generateDocxBuffer(manifest: EbookManifest, templateId?: s
     return new Footer({
       children: [
         new Paragraph({
-          children: [
-            new TextRun({ children: [PageNumber.CURRENT], size: 16, color: "aaaaaa" }),
+            children: [
+              new TextRun({ children: [PageNumber.CURRENT], size: 16, color: "555555", font: docxSerifFont }),
           ],
           alignment: AlignmentType.CENTER,
         }),
       ],
+    });
+  }
+
+  function makeDocxDivider(): Paragraph {
+    if (resolvedPrintSpec.sectionOrnament === "none") {
+      return new Paragraph({ spacing: { before: 120, after: 120 } });
+    }
+    if (resolvedPrintSpec.sectionOrnament === "rule") {
+      return new Paragraph({
+        border: { bottom: { style: "single", size: 4, color: tpl.dividerColor.replace("#", ""), space: 1 } },
+        spacing: { before: 120, after: 240 },
+      });
+    }
+    const ornament = resolvedPrintSpec.sectionOrnament === "fleuron" ? "❦"
+      : resolvedPrintSpec.sectionOrnament === "asterism" ? "⁂" : "*   *   *";
+    return new Paragraph({
+      children: [new TextRun({ text: ornament, size: 18, color: tpl.dividerColor.replace("#", ""), font: docxSerifFont })],
+      alignment: AlignmentType.CENTER,
+      spacing: { before: 120, after: 240 },
     });
   }
 
@@ -2286,18 +2348,25 @@ export async function generateDocxBuffer(manifest: EbookManifest, templateId?: s
   // Title page
   frontChildren.push(
     new Paragraph({
-      children: [new TextRun({ text: bookTitle, bold: true, size: Math.round(tpl.titlePageTitleSize * 2) })],
+      children: [new TextRun({ text: bookTitle, bold: true, size: Math.round(scaledTpl.chapterTitleSize * 2), font: docxFontFor(tpl.chapterTitleFont) })],
+      alignment: AlignmentType.CENTER,
+      spacing: { before: Math.round(scaledTpl.titlePageTopGap * 20), after: 200 },
+    }),
+    new Paragraph({ children: [new PageBreak()] }),
+    new Paragraph({ children: [new PageBreak()] }),
+    new Paragraph({
+      children: [new TextRun({ text: bookTitle, bold: true, size: Math.round(scaledTpl.titlePageTitleSize * 2), font: docxFontFor(tpl.chapterTitleFont) })],
       heading: HeadingLevel.TITLE,
       alignment: titleAlign,
       spacing: { after: 200 },
     }),
     new Paragraph({
-      children: [new TextRun({ text: subtitle, size: Math.round(tpl.titlePageSubtitleSize * 2), italics: true })],
+      children: [new TextRun({ text: subtitle, size: Math.round(scaledTpl.titlePageSubtitleSize * 2), italics: true, font: docxSerifFont })],
       alignment: titleAlign,
       spacing: { after: 200 },
     }),
     new Paragraph({
-      children: [new TextRun({ text: authorName, size: Math.round(tpl.titlePageAuthorSize * 2) })],
+      children: [new TextRun({ text: authorName, size: Math.round(scaledTpl.titlePageAuthorSize * 2), font: docxSerifFont })],
       alignment: titleAlign,
       spacing: { after: 600 },
     }),
@@ -2307,23 +2376,23 @@ export async function generateDocxBuffer(manifest: EbookManifest, templateId?: s
   // Copyright page
   frontChildren.push(
     new Paragraph({
-      children: [new TextRun({ text: `${bookTitle}${subtitle ? `: ${subtitle}` : ""}`, bold: true, size: 18 })],
+      children: [new TextRun({ text: `${bookTitle}${subtitle ? `: ${subtitle}` : ""}`, bold: true, size: 18, font: docxSerifFont })],
       spacing: { after: 120 },
     }),
     new Paragraph({
-      children: [new TextRun({ text: `Copyright \u00A9 ${year} by ${authorName}`, size: 18 })],
+      children: [new TextRun({ text: `Copyright \u00A9 ${year} by ${authorName}`, size: 18, font: docxSerifFont })],
       spacing: { after: 120 },
     }),
     new Paragraph({
-      children: [new TextRun({ text: "All rights reserved. No part of this publication may be reproduced, distributed, or transmitted in any form or by any means, including photocopying, recording, or other electronic or mechanical methods, without the prior written permission of the publisher, except in the case of brief quotations embodied in critical reviews and certain other noncommercial uses permitted by copyright law.", size: 16 })],
+      children: [new TextRun({ text: "All rights reserved. No part of this publication may be reproduced, distributed, or transmitted in any form or by any means, including photocopying, recording, or other electronic or mechanical methods, without the prior written permission of the publisher, except in the case of brief quotations embodied in critical reviews and certain other noncommercial uses permitted by copyright law.", size: 16, font: docxSerifFont })],
       spacing: { after: 120 },
     }),
     new Paragraph({
-      children: [new TextRun({ text: "Scripture quotations, unless otherwise indicated, are from the Holy Bible.", italics: true, size: 14 })],
+      children: [new TextRun({ text: "Scripture quotations, unless otherwise indicated, are from the Holy Bible.", italics: true, size: 14, font: docxSerifFont })],
       spacing: { after: 80 },
     }),
-    new Paragraph({ children: [new TextRun({ text: "First Edition", size: 14 })], spacing: { after: 40 } }),
-    new Paragraph({ children: [new TextRun({ text: "Printed in the United States of America", size: 14 })], spacing: { after: 40 } }),
+    new Paragraph({ children: [new TextRun({ text: "First Edition", size: 14, font: docxSerifFont })], spacing: { after: 40 } }),
+    new Paragraph({ children: [new TextRun({ text: "Printed in the United States of America", size: 14, font: docxSerifFont })], spacing: { after: 40 } }),
     new Paragraph({ children: [new PageBreak()] })
   );
 
@@ -2343,17 +2412,20 @@ export async function generateDocxBuffer(manifest: EbookManifest, templateId?: s
     new Paragraph({ children: [new PageBreak()] })
   );
 
-  // Preface + Introduction
+  const frontMatterSections: Array<{ title: string; children: Paragraph[] }> = [];
   for (const { title, text } of [
     { title: "Preface", text: frontMatter.preface },
     { title: "Introduction", text: frontMatter.introduction },
   ]) {
     if (!text?.trim()) continue;
-    frontChildren.push(
-      new Paragraph({ text: title, heading: HeadingLevel.HEADING_1, spacing: { before: 400, after: 240 } }),
-      ...textToStyledParagraphs(text, true),
-      new Paragraph({ children: [new PageBreak()] })
-    );
+    frontMatterSections.push({
+      title,
+      children: [
+        new Paragraph({ text: title, heading: HeadingLevel.HEADING_1, spacing: { before: 400, after: 240 } }),
+        makeDocxDivider(),
+        ...textToStyledParagraphs(text, true),
+      ],
+    });
   }
 
   // ── Per-chapter children ──────────────────────────────────────────────────
@@ -2366,16 +2438,17 @@ export async function generateDocxBuffer(manifest: EbookManifest, templateId?: s
       new Paragraph({
         // Amendment 4: named style for chapter label
         style: "NxChapterLabel",
-        children: [new TextRun({ text: tpl.chapterLabel(chapter.number), size: Math.round(tpl.chapterLabelSize * 2), color: tpl.chapterLabelColor.replace("#", "") })],
-        alignment: titleAlign,
-        spacing: { before: 400, after: 80 },
+        children: [new TextRun({ text: scaledTpl.chapterLabel(chapter.number), size: Math.round(scaledTpl.chapterLabelSize * 2), color: scaledTpl.chapterLabelColor.replace("#", ""), font: docxFontFor(scaledTpl.chapterLabelFont) })],
+        alignment: scaledTpl.chapterLabelAlign === "center" ? AlignmentType.CENTER : scaledTpl.chapterLabelAlign === "right" ? AlignmentType.RIGHT : AlignmentType.LEFT,
+        spacing: { before: Math.round(scaledTpl.chapterPreGap * 20), after: 80 },
       }),
       new Paragraph({
-        children: [new TextRun({ text: chapter.title, bold: true, size: Math.round(tpl.chapterTitleSize * 2), color: tpl.chapterTitleColor.replace("#", "") })],
+        children: [new TextRun({ text: chapter.title, bold: true, size: Math.round(scaledTpl.chapterTitleSize * 2), color: scaledTpl.chapterTitleColor.replace("#", ""), font: docxFontFor(scaledTpl.chapterTitleFont) })],
         heading: HeadingLevel.HEADING_1,
-        alignment: titleAlign,
+        alignment: scaledTpl.chapterTitleAlign === "center" ? AlignmentType.CENTER : scaledTpl.chapterTitleAlign === "right" ? AlignmentType.RIGHT : AlignmentType.LEFT,
         spacing: { before: 0, after: 300 },
-      })
+      }),
+      makeDocxDivider()
     );
 
     // Epigraph (scripture quote) - lighter italic, centered
@@ -2383,7 +2456,7 @@ export async function generateDocxBuffer(manifest: EbookManifest, templateId?: s
       const cleanEpigraph = stripMarkdownForPdf(applySmartTypography(chapter.epigraph));
       cc.push(
         new Paragraph({
-          children: [new TextRun({ text: cleanEpigraph, italics: true, size: bodyHalfPt - 1, color: "666666" })],
+          children: [new TextRun({ text: cleanEpigraph, italics: true, size: bodyHalfPt - 1, color: "666666", font: docxSerifFont })],
           alignment: AlignmentType.CENTER,
           spacing: { before: 120, after: 200 },
         })
@@ -2400,7 +2473,7 @@ export async function generateDocxBuffer(manifest: EbookManifest, templateId?: s
         .forEach((introPara) => {
           cc.push(
             new Paragraph({
-              children: [new TextRun({ text: introPara, bold: true, size: bodyHalfPt })],
+              children: [new TextRun({ text: introPara, bold: true, size: bodyHalfPt, font: docxSerifFont })],
               alignment: AlignmentType.CENTER,
               spacing: { before: 120, after: 240 },
             })
@@ -2408,21 +2481,31 @@ export async function generateDocxBuffer(manifest: EbookManifest, templateId?: s
         });
     }
 
-    // NO SECTION HEADINGS - skip section.heading rendering entirely
-    for (const section of chapter.sections) {
+    for (const [sectionIndex, section] of chapter.sections.entries()) {
+      if (sectionIndex > 0 && section.heading?.trim()) {
+        cc.push(
+          new Paragraph({
+            children: [new TextRun({ text: applySmartTypography(section.heading.trim()), bold: true, size: Math.round(scaledTpl.sectionSize * 2), color: scaledTpl.sectionColor.replace("#", ""), font: docxFontFor(scaledTpl.sectionFont) })],
+            heading: HeadingLevel.HEADING_2,
+            alignment: scaledTpl.sectionAlign === "center" ? AlignmentType.CENTER : scaledTpl.sectionAlign === "right" ? AlignmentType.RIGHT : AlignmentType.LEFT,
+            spacing: { before: 320, after: 160 },
+          })
+        );
+      }
       cc.push(...textToStyledParagraphs(section.body, true));
     }
 
     if (chapter.forwardQuestion?.trim()) {
-      cc.push(...textToStyledParagraphs(chapter.forwardQuestion, true).map((p) =>
+      cc.push(makeDocxDivider(), ...textToStyledParagraphs(chapter.forwardQuestion, true).map((p) =>
         Object.assign(p, { alignment: AlignmentType.CENTER })
       ));
     }
 
     if ((chapter.keyTakeaways ?? []).length > 0) {
       cc.push(
+        makeDocxDivider(),
         new Paragraph({
-          children: [new TextRun({ text: "KEY TAKEAWAYS", bold: true, size: Math.round(tpl.bodyFontSize * 1.6), color: tpl.labelColor.replace("#", "") })],
+          children: [new TextRun({ text: "KEY TAKEAWAYS", bold: true, size: Math.round(scaledTpl.bodyFontSize * 1.6), color: scaledTpl.labelColor.replace("#", ""), font: docxFontFor(scaledTpl.sectionFont) })],
           spacing: { before: 280, after: 120 },
         })
       );
@@ -2430,7 +2513,7 @@ export async function generateDocxBuffer(manifest: EbookManifest, templateId?: s
         cc.push(
           new Paragraph({
             style: "NxBodyText",
-            children: [new TextRun({ text: t, size: bodyHalfPt })],
+            children: [new TextRun({ text: t, size: bodyHalfPt, font: docxSerifFont })],
             alignment: bodyAlign,
             spacing: { after: Math.round(paraSpacingAfter * 0.6) },
             numbering: { reference: "nxBullet", level: 0 },
@@ -2441,8 +2524,9 @@ export async function generateDocxBuffer(manifest: EbookManifest, templateId?: s
 
     if ((chapter.reflectionQuestions ?? []).length > 0) {
       cc.push(
+        makeDocxDivider(),
         new Paragraph({
-          children: [new TextRun({ text: "REFLECTION QUESTIONS", bold: true, size: Math.round(tpl.bodyFontSize * 1.6), color: tpl.labelColor.replace("#", "") })],
+          children: [new TextRun({ text: "REFLECTION QUESTIONS", bold: true, size: Math.round(scaledTpl.bodyFontSize * 1.6), color: scaledTpl.labelColor.replace("#", ""), font: docxFontFor(scaledTpl.sectionFont) })],
           spacing: { before: 280, after: 120 },
         })
       );
@@ -2450,7 +2534,7 @@ export async function generateDocxBuffer(manifest: EbookManifest, templateId?: s
         cc.push(
           new Paragraph({
             style: "NxBodyText",
-            children: [new TextRun({ text: q, size: bodyHalfPt })],
+            children: [new TextRun({ text: q, size: bodyHalfPt, font: docxSerifFont })],
             alignment: bodyAlign,
             spacing: { after: Math.round(paraSpacingAfter * 0.6) },
             numbering: { reference: "nxNumbered", level: 0 },
@@ -2462,80 +2546,93 @@ export async function generateDocxBuffer(manifest: EbookManifest, templateId?: s
     chapterChildrenMap.set(chapter.number, cc);
   }
 
-  // ── Back-matter children ──────────────────────────────────────────────────
-  const backChildren: (Paragraph | TableOfContents)[] = [];
+  // ── Back-matter sections ──────────────────────────────────────────────────
+  const backMatterSections: Array<{ title: string; children: Paragraph[] }> = [];
 
   if (frontMatter.conclusion?.trim()) {
-    backChildren.push(
-      new Paragraph({ text: "Conclusion", heading: HeadingLevel.HEADING_1, spacing: { before: 400, after: 240 } }),
-      ...textToStyledParagraphs(frontMatter.conclusion, true),
-    );
+    backMatterSections.push({
+      title: "Conclusion",
+      children: [
+        new Paragraph({ text: "Conclusion", heading: HeadingLevel.HEADING_1, spacing: { before: 400, after: 240 } }),
+        makeDocxDivider(),
+        ...textToStyledParagraphs(frontMatter.conclusion, true),
+      ],
+    });
   }
 
   if (frontMatter.aboutAuthor?.trim()) {
-    backChildren.push(
-      new Paragraph({ children: [new PageBreak()] }),
-      new Paragraph({ text: "About the Author", heading: HeadingLevel.HEADING_1, spacing: { before: 400, after: 240 } }),
-      ...textToStyledParagraphs(frontMatter.aboutAuthor, true),
-    );
+    backMatterSections.push({
+      title: "About the Author",
+      children: [
+        new Paragraph({ text: "About the Author", heading: HeadingLevel.HEADING_1, spacing: { before: 400, after: 240 } }),
+        makeDocxDivider(),
+        ...textToStyledParagraphs(frontMatter.aboutAuthor, true),
+      ],
+    });
   }
 
   if ((frontMatter.resourcesList ?? []).length > 0) {
-    backChildren.push(
-      new Paragraph({ children: [new PageBreak()] }),
-      new Paragraph({ text: "Resources", heading: HeadingLevel.HEADING_1, spacing: { before: 400, after: 240 } })
-    );
+    const children: Paragraph[] = [
+      new Paragraph({ text: "Resources", heading: HeadingLevel.HEADING_1, spacing: { before: 400, after: 240 } }),
+      makeDocxDivider(),
+    ];
     for (const r of (frontMatter.resourcesList ?? [])) {
-      backChildren.push(
+      children.push(
         new Paragraph({
           style: "NxBodyText",
-          children: [new TextRun({ text: r, size: bodyHalfPt })],
+          children: [new TextRun({ text: r, size: bodyHalfPt, font: docxSerifFont })],
           alignment: bodyAlign,
           spacing: { after: Math.round(paraSpacingAfter * 0.6) },
           numbering: { reference: "nxBullet", level: 0 },
         })
       );
     }
+    backMatterSections.push({ title: "Resources", children });
   }
 
   if ((manifest.backMatter?.glossary ?? []).length > 0) {
-    backChildren.push(
-      new Paragraph({ children: [new PageBreak()] }),
-      new Paragraph({ text: "Glossary", heading: HeadingLevel.HEADING_1, spacing: { before: 400, after: 240 } })
-    );
+    const children: Paragraph[] = [
+      new Paragraph({ text: "Glossary", heading: HeadingLevel.HEADING_1, spacing: { before: 400, after: 240 } }),
+      makeDocxDivider(),
+    ];
     for (const entry of (manifest.backMatter?.glossary ?? [])) {
-      backChildren.push(
+      children.push(
         new Paragraph({
-          children: [new TextRun({ text: entry.term, bold: true, size: bodyHalfPt })],
+          children: [new TextRun({ text: entry.term, bold: true, size: bodyHalfPt, font: docxSerifFont })],
           spacing: { after: Math.round(paraSpacingAfter * 0.3) },
         }),
         new Paragraph({
           style: "NxBodyText",
-          children: [new TextRun({ text: entry.definition, size: bodyHalfPt })],
+          children: [new TextRun({ text: entry.definition, size: bodyHalfPt, font: docxSerifFont })],
           alignment: bodyAlign,
+          spacing: { after: Math.round(paraSpacingAfter * 0.6) },
+        }),
+        new Paragraph({
+          children: [new TextRun({ text: entry.firstAppearance, italics: true, size: Math.round((scaledTpl.bodyFontSize - 2) * 2), color: "666666", font: docxSerifFont })],
           spacing: { after: Math.round(paraSpacingAfter * 0.6) },
         }),
       );
     }
+    backMatterSections.push({ title: "Glossary", children });
   }
 
   if ((manifest.backMatter?.readingGroupGuide ?? []).length > 0) {
-    backChildren.push(
-      new Paragraph({ children: [new PageBreak()] }),
-      new Paragraph({ text: "Study Guide", heading: HeadingLevel.HEADING_1, spacing: { before: 400, after: 240 } })
-    );
+    const children: Paragraph[] = [
+      new Paragraph({ text: "Study Guide", heading: HeadingLevel.HEADING_1, spacing: { before: 400, after: 240 } }),
+      makeDocxDivider(),
+    ];
     for (const chapterGuide of (manifest.backMatter?.readingGroupGuide ?? [])) {
-      backChildren.push(
+      children.push(
         new Paragraph({
-          children: [new TextRun({ text: `Chapter ${chapterGuide.chapterNumber}: ${chapterGuide.chapterTitle}`, bold: true, size: bodyHalfPt })],
+          children: [new TextRun({ text: `Chapter ${chapterGuide.chapterNumber}: ${chapterGuide.chapterTitle}`, bold: true, size: bodyHalfPt, font: docxSerifFont })],
           spacing: { after: Math.round(paraSpacingAfter * 0.3) },
         }),
       );
       chapterGuide.questions.forEach((q) => {
-        backChildren.push(
+        children.push(
           new Paragraph({
             style: "NxBodyText",
-            children: [new TextRun({ text: q, size: bodyHalfPt })],
+            children: [new TextRun({ text: q, size: bodyHalfPt, font: docxSerifFont })],
             alignment: bodyAlign,
             spacing: { after: Math.round(paraSpacingAfter * 0.4) },
             numbering: { reference: "nxNumbered", level: 0 },
@@ -2543,54 +2640,83 @@ export async function generateDocxBuffer(manifest: EbookManifest, templateId?: s
         );
       });
     }
+    backMatterSections.push({ title: "Study Guide", children });
+  }
+
+  if ((manifest.backMatter?.scriptureIndex ?? []).length > 0) {
+    const children: Paragraph[] = [
+      new Paragraph({ text: "Scripture Index", heading: HeadingLevel.HEADING_1, spacing: { before: 400, after: 240 } }),
+      makeDocxDivider(),
+    ];
+    for (const entry of manifest.backMatter.scriptureIndex) {
+      children.push(
+        new Paragraph({
+          style: "NxBodyText",
+          children: [new TextRun({
+            text: `${entry.reference} (${entry.translation}) - Ch. ${entry.chapters.join(", ")}`,
+            size: bodyHalfPt,
+            font: docxSerifFont,
+          })],
+          alignment: bodyAlign,
+          spacing: { after: Math.round(paraSpacingAfter * 0.6) },
+          numbering: { reference: "nxBullet", level: 0 },
+        })
+      );
+    }
+    backMatterSections.push({ title: "Scripture Index", children });
   }
 
   // ── Build sections array ──────────────────────────────────────────────────
-  // Amendment 5/9: each chapter is an isolated Word section (SectionType.ODD_PAGE)
-  // so per-chapter headers work and editors can toggle header/footer per chapter.
-  const docSections = [
-    // Front matter section (no chapter-specific header)
-    {
-      headers: { default: makeDocxHeader(bookTitle, "Contents") },
-      footers: { default: makeDocxFooter() },
-      properties: {
-        page: {
-          margin: { top: 1134, right: 1080, bottom: 1440, left: 1260 }, // 6×9 trim margins in twips
-          pageNumbers: { start: 1, formatType: NumberFormat.DECIMAL },
+  const frontPageFormat = frontMatterNumbering === "roman" ? NumberFormat.LOWER_ROMAN : NumberFormat.DECIMAL;
+  const pageProperties = (
+    formatType: typeof NumberFormat.DECIMAL | typeof NumberFormat.LOWER_ROMAN,
+    start?: number,
+    type?: typeof SectionType.ODD_PAGE,
+  ) => ({
+    ...(type ? { type } : {}),
+    page: {
+      size: pageSizeTwips,
+      margin: pageMarginsTwips,
+      pageNumbers: { formatType, ...(start ? { start } : {}) },
+    },
+  });
+  const frontHeaderFooter = showRunningHeaders && frontMatterNumbering !== "none"
+    ? { footers: { default: makeDocxFooter() } }
+    : {};
+  const chapterHeaderFooter = (chapterTitle: string) => showRunningHeaders
+    ? {
+        headers: {
+          default: makeDocxHeader(chapterTitle, AlignmentType.RIGHT),
+          even: makeDocxHeader(bookTitle, AlignmentType.LEFT),
         },
-      },
+        footers: { default: makeDocxFooter() },
+      }
+    : {};
+  const docSections = [
+    {
+      ...frontHeaderFooter,
+      properties: { page: pageProperties(frontPageFormat, 1).page },
       children: frontChildren,
     },
-    // Per-chapter sections
-    ...chapters.map((chapter) => ({
-      headers: { default: makeDocxHeader(bookTitle, chapter.title) },
-      footers: { default: makeDocxFooter() },
-      properties: {
-        type: SectionType.ODD_PAGE,
-        page: {
-          margin: { top: 1134, right: 1080, bottom: 1440, left: 1260 },
-          pageNumbers: { formatType: NumberFormat.DECIMAL },
-        },
-      },
+    ...frontMatterSections.map(({ title, children }) => ({
+      ...frontHeaderFooter,
+      properties: pageProperties(frontPageFormat, undefined, SectionType.ODD_PAGE),
+      children,
+    })),
+    ...chapters.map((chapter, chapterIndex) => ({
+      ...chapterHeaderFooter(chapter.title),
+      properties: pageProperties(NumberFormat.DECIMAL, chapterIndex === 0 ? 1 : undefined, SectionType.ODD_PAGE),
       children: chapterChildrenMap.get(chapter.number) ?? [],
     })),
-    // Back matter section
-    ...(backChildren.length > 0 ? [{
-      headers: { default: makeDocxHeader(bookTitle, "Notes") },
-      footers: { default: makeDocxFooter() },
-      properties: {
-        type: SectionType.ODD_PAGE,
-        page: {
-          margin: { top: 1134, right: 1080, bottom: 1440, left: 1260 },
-          pageNumbers: { formatType: NumberFormat.DECIMAL },
-        },
-      },
-      children: backChildren,
-    }] : []),
+    ...backMatterSections.map(({ title, children }) => ({
+      ...chapterHeaderFooter(title),
+      properties: pageProperties(NumberFormat.DECIMAL, undefined, SectionType.ODD_PAGE),
+      children,
+    })),
   ];
 
   const doc = new DocxDocument({
-    evenAndOddHeaderAndFooters: true,
+    evenAndOddHeaderAndFooters: showRunningHeaders,
     sections: docSections,
     numbering: {
       config: [
@@ -2625,15 +2751,15 @@ export async function generateDocxBuffer(manifest: EbookManifest, templateId?: s
     styles: {
       default: {
         document: {
-          run: { size: bodyHalfPt },
-          paragraph: { alignment: AlignmentType.JUSTIFIED },
+          run: { size: bodyHalfPt, font: docxSerifFont },
+          paragraph: { alignment: bodyAlign, spacing: { line: bodyLineSpacing } },
         },
         heading1: {
-          run: { size: Math.round(tpl.chapterTitleSize * 2), bold: true, color: tpl.chapterTitleColor.replace("#", "") },
+          run: { size: Math.round(scaledTpl.chapterTitleSize * 2), bold: true, color: scaledTpl.chapterTitleColor.replace("#", ""), font: docxFontFor(scaledTpl.chapterTitleFont) },
           paragraph: { spacing: { before: 480, after: 240 } },
         },
         heading2: {
-          run: { size: Math.round(tpl.sectionSize * 2), bold: true, color: tpl.sectionColor.replace("#", "") },
+          run: { size: Math.round(scaledTpl.sectionSize * 2), bold: true, color: scaledTpl.sectionColor.replace("#", ""), font: docxFontFor(scaledTpl.sectionFont) },
           paragraph: { spacing: { before: 320, after: 160 } },
         },
       },
@@ -2643,10 +2769,10 @@ export async function generateDocxBuffer(manifest: EbookManifest, templateId?: s
           id: "NxBodyText",
           name: "Nx Body Text",
           basedOn: "Normal",
-          run: { size: bodyHalfPt, font: "Georgia" },
+          run: { size: bodyHalfPt, font: docxSerifFont },
           paragraph: {
-            alignment: AlignmentType.JUSTIFIED,
-            spacing: { after: paraSpacingAfter, line: Math.round((tpl.bodyFontSize + tpl.bodyLineGap) * 20 * 0.55) },
+            alignment: bodyAlign,
+            spacing: { after: paraSpacingAfter, line: bodyLineSpacing },
             indent: { firstLine: paraIndentTwips },
           },
         },
@@ -2655,7 +2781,7 @@ export async function generateDocxBuffer(manifest: EbookManifest, templateId?: s
           id: "NxBlockQuote",
           name: "Nx Block Quotation",
           basedOn: "Normal",
-          run: { size: scriptureHalfPt, italics: true, font: "Georgia" },
+          run: { size: scriptureHalfPt, italics: true, font: docxSerifFont },
           paragraph: {
             alignment: AlignmentType.LEFT,
             spacing: { before: 160, after: 200 },
@@ -2667,7 +2793,7 @@ export async function generateDocxBuffer(manifest: EbookManifest, templateId?: s
           id: "NxChapterLabel",
           name: "Nx Chapter Label",
           basedOn: "Normal",
-          run: { size: Math.round(tpl.chapterLabelSize * 2), color: accentRgbClean },
+          run: { size: Math.round(scaledTpl.chapterLabelSize * 2), color: accentRgbClean, font: docxFontFor(scaledTpl.chapterLabelFont) },
           paragraph: {
             alignment: tpl.chapterLabelAlign === "center" ? AlignmentType.CENTER
               : tpl.chapterLabelAlign === "right" ? AlignmentType.RIGHT : AlignmentType.LEFT,
@@ -2680,34 +2806,18 @@ export async function generateDocxBuffer(manifest: EbookManifest, templateId?: s
           id: "toc 1",
           name: "toc 1",
           basedOn: "Normal",
-          run: { size: bodyHalfPt, font: "Georgia" },
-          paragraph: {
-            spacing: { after: 120 },
-            tabStops: [
-              {
-                type: TabStopType.RIGHT,
-                position: TabStopPosition.MAX,
-                leader: LeaderType.DOT,
-              },
-            ],
-          },
+          run: { size: bodyHalfPt, font: docxSerifFont },
+          paragraph: { spacing: { after: 120 } },
         },
         // TOC 2 — section-level TOC entries (same treatment, slightly smaller)
         {
           id: "toc 2",
           name: "toc 2",
           basedOn: "Normal",
-          run: { size: Math.round(tpl.bodyFontSize * 1.8), font: "Georgia" },
+          run: { size: Math.round(scaledTpl.bodyFontSize * 1.8), font: docxSerifFont },
           paragraph: {
             spacing: { after: 80 },
             indent: { left: 360 },
-            tabStops: [
-              {
-                type: TabStopType.RIGHT,
-                position: TabStopPosition.MAX,
-                leader: LeaderType.DOT,
-              },
-            ],
           },
         },
       ],
