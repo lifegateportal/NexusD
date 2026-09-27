@@ -7,6 +7,7 @@ import type { ChapterDraft } from "@/lib/schemas/ebook";
 import type { EbookPipelineSnapshot } from "@/app/components/EbookPipeline";
 import { deleteNexusLMChat, getNexusLMChat, saveNexusLMChat } from "@/lib/nexuslm-chat-store";
 import { NEXUSLM_WRITING_STYLES, type NexusLMWritingStyle } from "@/lib/nexuslm-writing-styles";
+import { NEXUSLM_AGENTS, type NexusLMAgent } from "@/lib/nexuslm-agents";
 
 type NexusLMPanelProps = {
   conversationKey: string;
@@ -21,6 +22,19 @@ type Persona = "editorial-coach" | "skeptical-reviewer" | "socratic-teacher" | "
 type Message = { role: "user" | "assistant" | "system"; content: string };
 type Source = { id: string; label: string; excerpt: string };
 type PendingEdit = { instruction: string; summary: string; confidence?: "high" | "medium" | "low" };
+
+const SOURCE_CITATION_PATTERN = /\[(?:[A-Z]+-Slot-[^\]]+|[MT]-\d+(?:-\d+)*|[MT]\d+(?:\s*\|[^\]]+)?)\]/g;
+
+function cleanAssistantLine(line: string): string {
+  return line
+    .replace(SOURCE_CITATION_PATTERN, "")
+    .replace(/\*\*(.*?)\*\*/g, "$1")
+    .replace(/__(.*?)__/g, "$1")
+    .replace(/~~(.*?)~~/g, "$1")
+    .replace(/`{1,3}/g, "")
+    .replace(/[ \t]{2,}/g, " ")
+    .trim();
+}
 
 function readableError(error: unknown): string {
   const message = error instanceof Error ? error.message : "NexusLM could not complete the request.";
@@ -84,24 +98,25 @@ function formatChapterDraft(chapter: ChapterDraft): string {
 
 function renderAssistantContent(content: string) {
   return content.split("\n").map((line, index) => {
-    const trimmed = line.trim();
-    if (!trimmed) return <div key={`space-${index}`} className="h-3" aria-hidden="true" />;
+    const raw = line.trim();
+    if (!raw) return <div key={`space-${index}`} className="h-3" aria-hidden="true" />;
 
-    const heading = trimmed.match(/^#{1,3}\s+(.+)$/);
+    const heading = raw.match(/^#{1,3}\s+(.+)$/);
     if (heading) {
-      return <h3 key={`heading-${index}`} className="mt-5 text-base font-semibold tracking-tight text-slate-100 first:mt-0">{heading[1]}</h3>;
+      const text = cleanAssistantLine(heading[1]);
+      return text ? <h3 key={`heading-${index}`} className="mt-5 text-base font-semibold tracking-tight text-slate-100 first:mt-0">{text}</h3> : null;
     }
 
-    if (trimmed.startsWith("> ")) {
-      return <blockquote key={`quote-${index}`} className="my-3 border-l-2 border-cyan-400/60 pl-4 text-slate-300">{trimmed.slice(2)}</blockquote>;
+    const cleaned = cleanAssistantLine(raw.replace(/^>\s?/, ""));
+    if (!cleaned) return null;
+    if (raw.startsWith("> ")) {
+      return <blockquote key={`quote-${index}`} className="my-3 border-l-2 border-cyan-400/60 pl-4 text-slate-300">{cleaned}</blockquote>;
     }
 
-    const parts = line.split(/(\[Slot-[^\]]+\])/g);
+    const listItem = cleaned.match(/^(?:[-*+]\s+|\d+[.)]\s+)(.+)$/);
     return (
-      <p key={`paragraph-${index}`} className="leading-7 text-slate-300">
-        {parts.map((part, partIndex) => part.match(/^\[Slot-[^\]]+\]$/)
-          ? <span key={`citation-${partIndex}`} className="mx-1 inline-flex rounded-md border border-cyan-400/30 bg-cyan-400/10 px-1.5 py-0.5 align-baseline text-[11px] font-semibold text-cyan-300">{part}</span>
-          : part)}
+      <p key={`paragraph-${index}`} className={`leading-7 text-slate-300 ${listItem ? "pl-4" : ""}`}>
+        {listItem ? `• ${listItem[1]}` : cleaned}
       </p>
     );
   });
@@ -112,6 +127,7 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
   const [input, setInput] = useState("");
   const [mode, setMode] = useState<Mode>("ask");
   const [persona, setPersona] = useState<Persona>("editorial-coach");
+  const [agent, setAgent] = useState<NexusLMAgent>("NexusChat");
   const [writingStyle, setWritingStyle] = useState<NexusLMWritingStyle>("book-prose");
   const [loading, setLoading] = useState(false);
   const [sources, setSources] = useState<Source[]>([]);
@@ -223,6 +239,7 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
             instruction,
             chapterNumber,
             persona: PERSONAS[persona].label,
+            agent,
             writingStyle,
             book: {
               title: manifest?.bookTitle ?? pipelineSnapshot?.bookTitle ?? "Untitled book",
@@ -253,6 +270,7 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
             query: instruction,
             mode: activeMode,
             persona: PERSONAS[persona].label,
+            agent,
             writingStyle,
             book: { title: manifest?.bookTitle ?? pipelineSnapshot?.bookTitle ?? "Untitled book", chapters: manifest?.chapters.map((chapter) => ({ number: chapter.number, title: chapter.title })) ?? [] },
             manuscript: manifest ? { frontMatter: manifest.frontMatter, chapters: manifest.chapters } : null,
@@ -467,6 +485,12 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
         <select id="nexuslm-persona" value={persona} onChange={(event) => setPersona(event.target.value as Persona)} className="mt-2 min-h-12 w-full rounded-xl border border-slate-700 bg-slate-900 px-3 text-base text-slate-200">
           {Object.entries(PERSONAS).map(([value, item]) => <option key={value} value={value}>{item.label}</option>)}
         </select>
+
+        <label className="mt-6 block text-xs font-semibold uppercase tracking-widest text-slate-500" htmlFor="nexuslm-agent">Agent</label>
+        <select id="nexuslm-agent" value={agent} onChange={(event) => setAgent(event.target.value as NexusLMAgent)} className="mt-2 min-h-12 w-full rounded-xl border border-slate-700 bg-slate-900 px-3 text-base text-slate-200">
+          {Object.entries(NEXUSLM_AGENTS).map(([value, item]) => <option key={value} value={value}>{item.label}</option>)}
+        </select>
+        <p className="mt-2 text-xs leading-5 text-slate-500">{NEXUSLM_AGENTS[agent].description}</p>
 
         <label className="mt-6 block text-xs font-semibold uppercase tracking-widest text-slate-500" htmlFor="nexuslm-writing-style">Writing form</label>
         <select id="nexuslm-writing-style" value={writingStyle} onChange={(event) => setWritingStyle(event.target.value as NexusLMWritingStyle)} className="mt-2 min-h-12 w-full rounded-xl border border-slate-700 bg-slate-900 px-3 text-base text-slate-200">

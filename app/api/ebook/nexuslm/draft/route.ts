@@ -1,11 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import { generateObject } from "ai";
 import { z } from "zod";
-import { deepSeekReasonerModel } from "@/lib/ai-providers";
+import { deepSeekModel, deepSeekReasonerModel } from "@/lib/ai-providers";
 import { ChapterDraftSchema } from "@/lib/schemas/ebook";
 import { DIRECT_CHAPTER_WRITING_RULES, SOURCE_LOCK_RULES, PROSE_MASTERY_RULES, READER_NORMALIZATION_RULES, PREMIUM_BOOK_STYLE_RULES } from "@/lib/editorial-style-bible";
 import { SCRIPTURE_FORMATTING_RULES } from "@/lib/scripture-formatter";
 import { NexusLMWritingStyleSchema, NEXUSLM_WRITING_STYLES } from "@/lib/nexuslm-writing-styles";
+import { NexusLMAgentSchema } from "@/lib/nexuslm-agents";
 
 export const runtime = "nodejs";
 export const maxDuration = 180;
@@ -20,6 +21,7 @@ const RequestSchema = z.object({
   }),
   transcripts: z.array(z.object({ label: z.string().min(1).max(200), text: z.string().max(250000) })).max(20),
   persona: z.string().min(1).max(80),
+  agent: NexusLMAgentSchema.default("nexusR1"),
   writingStyle: NexusLMWritingStyleSchema.default("book-prose"),
   vettingGuidance: z.string().max(20000).optional(),
 }).superRefine((value, context) => {
@@ -40,19 +42,19 @@ export async function POST(request: NextRequest) {
     ? JSON.stringify(input.book.manuscriptChapter).slice(0, 120000)
     : "No existing chapter text is available.";
   const transcriptContext = input.transcripts
-    .map((transcript) => `[SOURCE: ${transcript.label}]\n${transcript.text.slice(0, 50000)}`)
+    .map((transcript) => `[SOURCE: ${transcript.label}]\n${transcript.text}`)
     .join("\n\n---\n\n");
   const writingStyle = NEXUSLM_WRITING_STYLES[input.writingStyle];
 
   try {
     const { object } = await generateObject({
-      model: deepSeekReasonerModel,
+      model: input.agent === "nexusR1" ? deepSeekReasonerModel : deepSeekModel,
       schema: ChapterDraftSchema,
       mode: "json",
       maxRetries: 2,
       maxTokens: 24000,
       system: `Return only one valid JSON object matching the ChapterDraft schema. Do not wrap it in markdown fences and do not include reasoning outside the JSON object.
-You are NexusLM, a professional book ghostwriter. Persona: ${input.persona}.
+You are NexusLM, a professional book ghostwriter. Selected agent: ${input.agent}. Persona: ${input.persona}.
 Presentation form: ${writingStyle.label}. ${writingStyle.instruction}
 Write only from the supplied manuscript context and transcript sources. Do not invent teachings, stories, quotations, facts, or theological claims. Preserve the author's voice and remove live-audience language.
 ${DIRECT_CHAPTER_WRITING_RULES}

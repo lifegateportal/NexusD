@@ -4,6 +4,7 @@ import { z } from "zod";
 import { deepSeekModel, deepSeekReasonerModel } from "@/lib/ai-providers";
 import { ChapterDraftSchema, FrontBackMatterSchema } from "@/lib/schemas/ebook";
 import { NexusLMWritingStyleSchema, NEXUSLM_WRITING_STYLES } from "@/lib/nexuslm-writing-styles";
+import { NexusLMAgentSchema } from "@/lib/nexuslm-agents";
 
 export const runtime = "nodejs";
 export const maxDuration = 90;
@@ -12,6 +13,7 @@ const RequestSchema = z.object({
   query: z.string().min(1).max(4000),
   mode: z.enum(["ask", "socratic"]),
   persona: z.string().min(1).max(80),
+  agent: NexusLMAgentSchema.default("NexusChat"),
   writingStyle: NexusLMWritingStyleSchema.default("book-prose"),
   book: z.object({
     title: z.string().max(2000),
@@ -144,11 +146,11 @@ export async function POST(request: NextRequest) {
 
   try {
     const { text } = await generateText({
-      model: input.mode === "socratic" ? deepSeekReasonerModel : deepSeekModel,
+      model: input.agent === "nexusR1" ? deepSeekReasonerModel : deepSeekModel,
       ...(input.mode === "ask" ? { temperature: 0.2 } : {}),
       maxRetries: 2,
       maxTokens: input.mode === "socratic" ? 8000 : 2200,
-      system: `You are NexusLM, a source-grounded book companion. The active persona is ${input.persona}.
+      system: `You are NexusLM, a source-grounded book companion. The selected agent is ${input.agent}. The active persona is ${input.persona}.
 The book is "${input.book.title}".
 The requested presentation form is ${writingStyle.label}: ${writingStyle.instruction}
     The written manuscript is the primary audit target. Use the supplied WRITTEN MANUSCRIPT EXCERPTS to assess what the book actually says, demonstrates, defines, and sequences. Use transcript excerpts only as supporting provenance for the author's underlying teaching. Cite supporting excerpts inline as [source-id], distinguish manuscript evidence from transcript evidence, and do not claim you cannot see the manuscript when manuscript excerpts are supplied. If the supplied excerpts do not support an answer, say so. Do not fabricate quotations.
