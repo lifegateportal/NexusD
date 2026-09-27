@@ -3,6 +3,7 @@ import { generateText } from "ai";
 import { z } from "zod";
 import { deepSeekModel, deepSeekReasonerModel } from "@/lib/ai-providers";
 import { ChapterDraftSchema, FrontBackMatterSchema } from "@/lib/schemas/ebook";
+import { NexusLMWritingStyleSchema, NEXUSLM_WRITING_STYLES } from "@/lib/nexuslm-writing-styles";
 
 export const runtime = "nodejs";
 export const maxDuration = 90;
@@ -11,6 +12,7 @@ const RequestSchema = z.object({
   query: z.string().min(1).max(4000),
   mode: z.enum(["ask", "socratic"]),
   persona: z.string().min(1).max(80),
+  writingStyle: NexusLMWritingStyleSchema.default("book-prose"),
   book: z.object({
     title: z.string().max(2000),
     chapters: z.array(z.object({ number: z.number().int().positive(), title: z.string().max(300) })).max(100),
@@ -138,6 +140,7 @@ export async function POST(request: NextRequest) {
   ].join("\n\n==========\n\n");
   const chapterContext = input.book.chapters.map((chapter) => `${chapter.number}. ${chapter.title}`).join("\n");
   const history = (input.history ?? []).map((message) => `${message.role.toUpperCase()}: ${message.content}`).join("\n");
+  const writingStyle = NEXUSLM_WRITING_STYLES[input.writingStyle];
 
   try {
     const { text } = await generateText({
@@ -147,6 +150,7 @@ export async function POST(request: NextRequest) {
       maxTokens: input.mode === "socratic" ? 8000 : 2200,
       system: `You are NexusLM, a source-grounded book companion. The active persona is ${input.persona}.
 The book is "${input.book.title}".
+The requested presentation form is ${writingStyle.label}: ${writingStyle.instruction}
     The written manuscript is the primary audit target. Use the supplied WRITTEN MANUSCRIPT EXCERPTS to assess what the book actually says, demonstrates, defines, and sequences. Use transcript excerpts only as supporting provenance for the author's underlying teaching. Cite supporting excerpts inline as [source-id], distinguish manuscript evidence from transcript evidence, and do not claim you cannot see the manuscript when manuscript excerpts are supplied. If the supplied excerpts do not support an answer, say so. Do not fabricate quotations.
 ${input.mode === "socratic" ? "This is Socratic Vetting mode. Produce a detailed, actionable vetting brief with these headings: Diagnosis; Evidence and assumptions; Proposed fixes; Chapter implementation plan; Questions requiring the author's decision. For every proposed fix, explain the problem it solves and the exact change a new chapter should make. Do not stop at questions or general criticism." : "This is Ask mode: answer directly, distinguish transcript evidence from interpretation, and cite sources."}`,
       prompt: `CHAPTER OUTLINE:\n${chapterContext || "No chapter outline available."}\n\nTRANSCRIPT SOURCES:\n${sourceContext}\n\nRECENT CONVERSATION:\n${history || "None"}\n\nUSER QUESTION:\n${input.query}`,

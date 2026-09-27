@@ -6,6 +6,7 @@ import type { EbookManifest } from "@/lib/schemas/ebook";
 import type { ChapterDraft } from "@/lib/schemas/ebook";
 import type { EbookPipelineSnapshot } from "@/app/components/EbookPipeline";
 import { deleteNexusLMChat, getNexusLMChat, saveNexusLMChat } from "@/lib/nexuslm-chat-store";
+import { NEXUSLM_WRITING_STYLES, type NexusLMWritingStyle } from "@/lib/nexuslm-writing-styles";
 
 type NexusLMPanelProps = {
   conversationKey: string;
@@ -111,6 +112,7 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
   const [input, setInput] = useState("");
   const [mode, setMode] = useState<Mode>("ask");
   const [persona, setPersona] = useState<Persona>("editorial-coach");
+  const [writingStyle, setWritingStyle] = useState<NexusLMWritingStyle>("book-prose");
   const [loading, setLoading] = useState(false);
   const [sources, setSources] = useState<Source[]>([]);
   const [pendingEdit, setPendingEdit] = useState<PendingEdit | null>(null);
@@ -152,6 +154,41 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
     setMessages([initialMessage(manifest)]);
   }
 
+  function downloadLatestResponse(extension: "md" | "txt" | "html") {
+    const answer = messages.slice().reverse().find((message) => message.role === "assistant")?.content;
+    if (!answer) return;
+    const title = (manifest?.bookTitle ?? pipelineSnapshot?.bookTitle ?? "nexuslm-response")
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-|-$/g, "") || "nexuslm-response";
+    const escapeHtml = (value: string) => value
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/\"/g, "&quot;")
+      .replace(/'/g, "&#039;");
+    const html = answer.split(/\n\s*\n/).map((block) => {
+      const escaped = escapeHtml(block).replace(/\n/g, "<br>");
+      if (escaped.startsWith("### ")) return `<h3>${escaped.slice(4)}</h3>`;
+      if (escaped.startsWith("## ")) return `<h2>${escaped.slice(3)}</h2>`;
+      if (escaped.startsWith("# ")) return `<h1>${escaped.slice(2)}</h1>`;
+      if (escaped.startsWith("&gt; ")) return `<blockquote>${escaped.slice(5)}</blockquote>`;
+      return `<p>${escaped}</p>`;
+    }).join("\n");
+    const content = extension === "html"
+      ? `<!doctype html><html><head><meta charset="utf-8"><title>${escapeHtml(manifest?.bookTitle ?? "NexusLM response")}</title><style>body{max-width:760px;margin:48px auto;padding:0 24px;font:18px/1.7 Georgia,serif;color:#172033}h1,h2,h3{line-height:1.2}blockquote{border-left:3px solid #0891b2;padding-left:16px;color:#475569}</style></head><body>${html}</body></html>`
+      : answer;
+    const blob = new Blob([content], { type: extension === "html" ? "text/html" : extension === "md" ? "text/markdown" : "text/plain" });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = `${title}-nexuslm.${extension}`;
+    document.body.appendChild(anchor);
+    anchor.click();
+    document.body.removeChild(anchor);
+    URL.revokeObjectURL(url);
+  }
+
   async function send(requestText?: string, requestMode?: Mode) {
     const instruction = (requestText ?? input).trim();
     if (!instruction || loading) return;
@@ -186,6 +223,7 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
             instruction,
             chapterNumber,
             persona: PERSONAS[persona].label,
+            writingStyle,
             book: {
               title: manifest?.bookTitle ?? pipelineSnapshot?.bookTitle ?? "Untitled book",
               chapters: manifest?.chapters.map((chapter) => ({ number: chapter.number, title: chapter.title })) ?? [],
@@ -215,6 +253,7 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
             query: instruction,
             mode: activeMode,
             persona: PERSONAS[persona].label,
+            writingStyle,
             book: { title: manifest?.bookTitle ?? pipelineSnapshot?.bookTitle ?? "Untitled book", chapters: manifest?.chapters.map((chapter) => ({ number: chapter.number, title: chapter.title })) ?? [] },
             manuscript: manifest ? { frontMatter: manifest.frontMatter, chapters: manifest.chapters } : null,
             transcripts,
@@ -428,6 +467,24 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
         <select id="nexuslm-persona" value={persona} onChange={(event) => setPersona(event.target.value as Persona)} className="mt-2 min-h-12 w-full rounded-xl border border-slate-700 bg-slate-900 px-3 text-base text-slate-200">
           {Object.entries(PERSONAS).map(([value, item]) => <option key={value} value={value}>{item.label}</option>)}
         </select>
+
+        <label className="mt-6 block text-xs font-semibold uppercase tracking-widest text-slate-500" htmlFor="nexuslm-writing-style">Writing form</label>
+        <select id="nexuslm-writing-style" value={writingStyle} onChange={(event) => setWritingStyle(event.target.value as NexusLMWritingStyle)} className="mt-2 min-h-12 w-full rounded-xl border border-slate-700 bg-slate-900 px-3 text-base text-slate-200">
+          {Object.entries(NEXUSLM_WRITING_STYLES).map(([value, item]) => <option key={value} value={value}>{item.label}</option>)}
+        </select>
+        <p className="mt-2 text-xs leading-5 text-slate-500">{NEXUSLM_WRITING_STYLES[writingStyle].description}</p>
+
+        <div className="mt-6 border-t border-slate-800 pt-5">
+          <p className="text-xs font-semibold uppercase tracking-widest text-slate-500">Download latest response</p>
+          <p className="mt-2 text-xs leading-5 text-slate-500">Save the most recent NexusLM answer without opening Book Studio.</p>
+          <div className="mt-3 grid grid-cols-3 gap-2">
+            {(["md", "txt", "html"] as const).map((extension) => (
+              <button key={extension} type="button" onClick={() => downloadLatestResponse(extension)} disabled={!messages.some((message) => message.role === "assistant")} className="min-h-12 rounded-xl border border-slate-700 px-2 text-xs font-semibold text-slate-300 disabled:cursor-not-allowed disabled:opacity-40">
+                {extension === "md" ? "Markdown" : extension.toUpperCase()}
+              </button>
+            ))}
+          </div>
+        </div>
 
         <p className="mt-6 text-xs font-semibold uppercase tracking-widest text-slate-500">Mode</p>
         <div className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-4">
