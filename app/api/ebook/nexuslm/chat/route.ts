@@ -173,16 +173,11 @@ CHAPTER OUTLINE:\n${chapterContext || "No chapter outline available."}\n\nTRANSC
 `,
     };
 
-    let text = "";
-    try {
-      ({ text } = await generateText({ model: input.agent === "nexusR1" ? deepSeekReasonerModel : deepSeekModel, ...generationRequest }));
-      if (!text.trim()) throw new Error("The selected reasoning model returned an empty response.");
-    } catch (primaryError) {
-      if (input.agent !== "nexusR1") throw primaryError;
-      console.error("[nexuslm/chat] nexusR1 failed; retrying with NexusChat transport:", primaryError);
-      ({ text } = await generateText({ model: deepSeekModel, ...generationRequest }));
-      if (!text.trim()) throw new Error("The fallback chat model returned an empty response.");
-    }
+    const { text } = await generateText({
+      model: input.agent === "nexusR1" ? deepSeekReasonerModel : deepSeekModel,
+      ...generationRequest,
+    });
+    if (!text.trim()) throw new Error("The selected model returned an empty response.");
 
     const answer = sanitizeNexusLMText(text);
     if (!answer) {

@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { generateObject, generateText } from "ai";
+import { generateObject } from "ai";
 import { z } from "zod";
 import { deepSeekModel, deepSeekReasonerModel } from "@/lib/ai-providers";
 import { ChapterDraftSchema } from "@/lib/schemas/ebook";
@@ -31,46 +31,7 @@ const RequestSchema = z.object({
   if (totalCharacters > 1000000) context.addIssue({ code: z.ZodIssueCode.custom, message: "Transcript context is too large." });
 });
 
-type DraftInput = z.infer<typeof RequestSchema>;
 type DraftObject = z.infer<typeof ChapterDraftSchema>;
-
-function parseDraftText(text: string): DraftObject | null {
-  const start = text.indexOf("{");
-  const end = text.lastIndexOf("}");
-  if (start < 0 || end <= start) return null;
-  try {
-    const parsed = ChapterDraftSchema.safeParse(JSON.parse(text.slice(start, end + 1)));
-    return parsed.success ? parsed.data : null;
-  } catch {
-    return null;
-  }
-}
-
-function fallbackDraft(input: DraftInput): DraftObject {
-  const existing = input.book.manuscriptChapter;
-  if (existing && existing.sections.some((section) => section.body.trim())) {
-    return {
-      ...existing,
-      number: input.chapterNumber,
-      sections: existing.sections.map((section) => ({ ...section, status: "complete" as const })),
-      status: "complete",
-    };
-  }
-
-  const body = input.transcripts.map((transcript) => transcript.text.trim()).filter(Boolean).join("\n\n");
-  return {
-    number: input.chapterNumber,
-    title: `Chapter ${input.chapterNumber}`,
-    intro: "",
-    epigraph: "",
-    sections: [{ chapterNumber: input.chapterNumber, sectionNumber: 1, heading: "Source material", body, wordCount: body.split(/\s+/).filter(Boolean).length, status: "complete" }],
-    forwardQuestion: "",
-    keyTakeaways: [],
-    reflectionQuestions: [],
-    totalWordCount: body.split(/\s+/).filter(Boolean).length,
-    status: "complete",
-  };
-}
 
 export async function POST(request: NextRequest) {
   let input: z.infer<typeof RequestSchema>;
@@ -123,52 +84,15 @@ ${input.vettingGuidance || "No prior vetting guidance was provided."}
 
 Return JSON only.`;
 
-    let object: DraftObject;
-    try {
-      ({ object } = await generateObject({
-        model: input.agent === "nexusR1" ? deepSeekReasonerModel : deepSeekModel,
-        schema: ChapterDraftSchema,
-        mode: "json",
-        maxRetries: 2,
-        maxTokens: responseLength.draftTokens,
-        system,
-        prompt,
-      }));
-    } catch (primaryError) {
-      console.error("[nexuslm/draft] structured generation failed:", primaryError);
-      try {
-        const textResult = await generateText({
-          model: input.agent === "nexusR1" ? deepSeekReasonerModel : deepSeekModel,
-          maxRetries: 2,
-          maxTokens: responseLength.draftTokens,
-          system: `${system}\nIf structured output is unavailable, return the JSON object as plain text with no commentary.`,
-          prompt,
-        });
-        const parsedText = parseDraftText(textResult.text);
-        if (!parsedText) throw new Error("The model returned no parseable ChapterDraft JSON.");
-        object = parsedText;
-      } catch (textError) {
-        console.error("[nexuslm/draft] text recovery failed:", textError);
-        if (input.agent === "nexusR1") {
-          try {
-            ({ object } = await generateObject({
-              model: deepSeekModel,
-              schema: ChapterDraftSchema,
-              mode: "json",
-              maxRetries: 2,
-              maxTokens: responseLength.draftTokens,
-              system,
-              prompt,
-            }));
-          } catch (fallbackError) {
-            console.error("[nexuslm/draft] NexusChat fallback failed:", fallbackError);
-            object = fallbackDraft(input);
-          }
-        } else {
-          object = fallbackDraft(input);
-        }
-      }
-    }
+    const { object } = await generateObject({
+      model: input.agent === "nexusR1" ? deepSeekReasonerModel : deepSeekModel,
+      schema: ChapterDraftSchema,
+      mode: "json",
+      maxRetries: 2,
+      maxTokens: responseLength.draftTokens,
+      system,
+      prompt,
+    });
     let sections = object.sections.map((section, index) => {
       const body = sanitizeNexusLMText(section.body.trim());
       return {
@@ -181,18 +105,7 @@ Return JSON only.`;
       };
     });
     if (sections.length === 0 || sections.every((section) => !section.body.trim())) {
-      const fallbackSections = fallbackDraft(input).sections.map((section, index) => ({
-        chapterNumber: input.chapterNumber,
-        sectionNumber: section.sectionNumber || index + 1,
-        heading: sanitizeNexusLMText(section.heading.trim()) || `Section ${index + 1}`,
-        body: sanitizeNexusLMText(section.body.trim()),
-        wordCount: section.body.split(/\s+/).filter(Boolean).length,
-        status: "complete" as const,
-      }));
-      if (fallbackSections.every((section) => !section.body.trim())) {
-        throw new Error("No source-backed chapter content was available.");
-      }
-      sections = fallbackSections;
+      throw new Error("The selected model returned no usable chapter sections.");
     }
     const normalizedCandidate = {
       ...object,
