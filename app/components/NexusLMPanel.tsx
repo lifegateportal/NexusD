@@ -8,6 +8,7 @@ import type { EbookPipelineSnapshot } from "@/app/components/EbookPipeline";
 import { deleteNexusLMChat, getNexusLMChat, saveNexusLMChat } from "@/lib/nexuslm-chat-store";
 import { NEXUSLM_WRITING_STYLES, type NexusLMWritingStyle } from "@/lib/nexuslm-writing-styles";
 import { NEXUSLM_AGENTS, type NexusLMAgent } from "@/lib/nexuslm-agents";
+import { NEXUSLM_RESPONSE_LENGTHS, sanitizeNexusLMText, type NexusLMResponseLength } from "@/lib/nexuslm-response";
 
 type NexusLMPanelProps = {
   conversationKey: string;
@@ -23,17 +24,8 @@ type Message = { role: "user" | "assistant" | "system"; content: string };
 type Source = { id: string; label: string; excerpt: string };
 type PendingEdit = { instruction: string; summary: string; confidence?: "high" | "medium" | "low" };
 
-const SOURCE_CITATION_PATTERN = /\[(?:[A-Z]+-Slot-[^\]]+|[MT]-\d+(?:-\d+)*|[MT]\d+(?:\s*\|[^\]]+)?)\]/g;
-
 function cleanAssistantLine(line: string): string {
-  return line
-    .replace(SOURCE_CITATION_PATTERN, "")
-    .replace(/\*\*(.*?)\*\*/g, "$1")
-    .replace(/__(.*?)__/g, "$1")
-    .replace(/~~(.*?)~~/g, "$1")
-    .replace(/`{1,3}/g, "")
-    .replace(/[ \t]{2,}/g, " ")
-    .trim();
+  return sanitizeNexusLMText(line);
 }
 
 function readableError(error: unknown): string {
@@ -91,9 +83,9 @@ function initialMessage(manifest: EbookManifest | null): Message {
 
 function formatChapterDraft(chapter: ChapterDraft): string {
   const sections = chapter.sections
-    .map((section) => `${section.heading ? `${section.heading}\n\n` : ""}${section.body}`)
+    .map((section) => `${section.heading ? `${sanitizeNexusLMText(section.heading)}\n\n` : ""}${sanitizeNexusLMText(section.body)}`)
     .join("\n\n");
-  return `CHAPTER ${chapter.number}: ${chapter.title}\n\n${chapter.intro ? `${chapter.intro}\n\n` : ""}${sections}${chapter.forwardQuestion ? `\n\nForward question: ${chapter.forwardQuestion}` : ""}`;
+  return sanitizeNexusLMText(`CHAPTER ${chapter.number}: ${sanitizeNexusLMText(chapter.title)}\n\n${chapter.intro ? `${sanitizeNexusLMText(chapter.intro)}\n\n` : ""}${sections}${chapter.forwardQuestion ? `\n\nForward question: ${sanitizeNexusLMText(chapter.forwardQuestion)}` : ""}`);
 }
 
 function renderAssistantContent(content: string) {
@@ -129,6 +121,7 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
   const [persona, setPersona] = useState<Persona>("editorial-coach");
   const [agent, setAgent] = useState<NexusLMAgent>("NexusChat");
   const [writingStyle, setWritingStyle] = useState<NexusLMWritingStyle>("book-prose");
+  const [responseLength, setResponseLength] = useState<NexusLMResponseLength>("default");
   const [loading, setLoading] = useState(false);
   const [sources, setSources] = useState<Source[]>([]);
   const [pendingEdit, setPendingEdit] = useState<PendingEdit | null>(null);
@@ -173,6 +166,7 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
   function downloadLatestResponse(extension: "md" | "txt" | "html") {
     const answer = messages.slice().reverse().find((message) => message.role === "assistant")?.content;
     if (!answer) return;
+    const cleanAnswer = sanitizeNexusLMText(answer);
     const title = (manifest?.bookTitle ?? pipelineSnapshot?.bookTitle ?? "nexuslm-response")
       .toLowerCase()
       .replace(/[^a-z0-9]+/g, "-")
@@ -183,7 +177,7 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
       .replace(/>/g, "&gt;")
       .replace(/\"/g, "&quot;")
       .replace(/'/g, "&#039;");
-    const html = answer.split(/\n\s*\n/).map((block) => {
+    const html = cleanAnswer.split(/\n\s*\n/).map((block) => {
       const escaped = escapeHtml(block).replace(/\n/g, "<br>");
       if (escaped.startsWith("### ")) return `<h3>${escaped.slice(4)}</h3>`;
       if (escaped.startsWith("## ")) return `<h2>${escaped.slice(3)}</h2>`;
@@ -193,7 +187,7 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
     }).join("\n");
     const content = extension === "html"
       ? `<!doctype html><html><head><meta charset="utf-8"><title>${escapeHtml(manifest?.bookTitle ?? "NexusLM response")}</title><style>body{max-width:760px;margin:48px auto;padding:0 24px;font:18px/1.7 Georgia,serif;color:#172033}h1,h2,h3{line-height:1.2}blockquote{border-left:3px solid #0891b2;padding-left:16px;color:#475569}</style></head><body>${html}</body></html>`
-      : answer;
+      : cleanAnswer;
     const blob = new Blob([content], { type: extension === "html" ? "text/html" : extension === "md" ? "text/markdown" : "text/plain" });
     const url = URL.createObjectURL(blob);
     const anchor = document.createElement("a");
@@ -241,12 +235,13 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
             persona: PERSONAS[persona].label,
             agent,
             writingStyle,
+            responseLength,
             book: {
               title: manifest?.bookTitle ?? pipelineSnapshot?.bookTitle ?? "Untitled book",
               chapters: manifest?.chapters.map((chapter) => ({ number: chapter.number, title: chapter.title })) ?? [],
               manuscriptChapter: manifest?.chapters.find((chapter) => chapter.number === chapterNumber) ?? null,
             },
-            transcripts,
+            transcripts: selectedTranscript ? [selectedTranscript] : transcripts,
             vettingGuidance: messages
               .slice()
               .reverse()
@@ -272,6 +267,7 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
             persona: PERSONAS[persona].label,
             agent,
             writingStyle,
+            responseLength,
             book: { title: manifest?.bookTitle ?? pipelineSnapshot?.bookTitle ?? "Untitled book", chapters: manifest?.chapters.map((chapter) => ({ number: chapter.number, title: chapter.title })) ?? [] },
             manuscript: manifest ? { frontMatter: manifest.frontMatter, chapters: manifest.chapters } : null,
             transcripts,
@@ -281,7 +277,7 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
         const json = await res.json() as { answer?: string; sources?: Source[]; error?: string };
         if (!res.ok || json.error) throw new Error(json.error ?? `Request failed (${res.status})`);
         setSources(json.sources ?? []);
-        const answer = json.answer ?? "NexusLM returned no answer.";
+        const answer = sanitizeNexusLMText(json.answer ?? "NexusLM returned no answer.");
         setMessages((current) => [...current, { role: "assistant", content: answer }]);
         return;
       }
@@ -293,6 +289,7 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
           manifest,
           instruction: `${MODES[activeMode].prompt}\nPersona: ${PERSONAS[persona].description}\n\nUser request:\n${userMessage}`,
           history: compactHistory(nextMessages),
+          responseLength,
           pipeline: pipelineSnapshot ?? undefined,
           manifestVersion: (manifest as Record<string, unknown>).__version as string | undefined,
           transcriptSources: transcripts,
@@ -302,20 +299,20 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
       const json = await res.json() as { manifest?: unknown; patch?: unknown; summary?: string; confidence?: "high" | "medium" | "low"; error?: string; clarificationNeeded?: string; needsClarification?: boolean; noChanges?: boolean; manifestVersion?: string };
       if (!res.ok || json.error) throw new Error(json.error ?? `Request failed (${res.status})`);
       if (json.needsClarification && json.clarificationNeeded) {
-        setMessages((current) => [...current, { role: "assistant", content: json.clarificationNeeded! }]);
+      setMessages((current) => [...current, { role: "assistant", content: sanitizeNexusLMText(json.clarificationNeeded!) }]);
         return;
       }
 
       if (activeMode === "edit") {
         if (!json.patch || !json.summary) throw new Error("NexusLM returned no editable proposal.");
         setPendingEdit({ instruction, summary: json.summary, confidence: json.confidence });
-        setMessages((current) => [...current, { role: "assistant", content: `Proposal ready for review: ${json.summary}` }]);
+        setMessages((current) => [...current, { role: "assistant", content: sanitizeNexusLMText(`Proposal ready for review: ${json.summary}`) }]);
         return;
       }
 
       setMessages((current) => [...current, {
         role: "assistant",
-        content: json.summary ?? (json.noChanges ? "No manuscript changes were applied." : "NexusLM completed the request."),
+        content: sanitizeNexusLMText(json.summary ?? (json.noChanges ? "No manuscript changes were applied." : "NexusLM completed the request.")),
       }]);
     } catch (error) {
       setMessages((current) => [...current, { role: "assistant", content: readableError(error) }]);
@@ -378,6 +375,7 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
           manifest,
           instruction: pendingEdit.instruction,
           history: compactHistory(messages),
+          responseLength,
           pipeline: pipelineSnapshot ?? undefined,
           manifestVersion: (manifest as Record<string, unknown>).__version as string | undefined,
           transcriptSources: transcripts,
@@ -390,7 +388,7 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
       if (!parsed.success) throw new Error("NexusLM returned an invalid manuscript.");
       const nextManifest = json.manifestVersion ? { ...parsed.data, __version: json.manifestVersion } : parsed.data;
       onManifestChange(nextManifest as EbookManifest, json.summary ?? "Manuscript updated.");
-      setMessages((current) => [...current, { role: "assistant", content: json.summary ?? "Approved manuscript changes applied." }]);
+      setMessages((current) => [...current, { role: "assistant", content: sanitizeNexusLMText(json.summary ?? "Approved manuscript changes applied.") }]);
       setPendingEdit(null);
     } catch (error) {
       setMessages((current) => [...current, { role: "assistant", content: readableError(error) }]);
@@ -497,6 +495,12 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
           {Object.entries(NEXUSLM_WRITING_STYLES).map(([value, item]) => <option key={value} value={value}>{item.label}</option>)}
         </select>
         <p className="mt-2 text-xs leading-5 text-slate-500">{NEXUSLM_WRITING_STYLES[writingStyle].description}</p>
+
+        <label className="mt-6 block text-xs font-semibold uppercase tracking-widest text-slate-500" htmlFor="nexuslm-response-length">Response length</label>
+        <select id="nexuslm-response-length" value={responseLength} onChange={(event) => setResponseLength(event.target.value as NexusLMResponseLength)} className="mt-2 min-h-12 w-full rounded-xl border border-slate-700 bg-slate-900 px-3 text-base text-slate-200">
+          {Object.entries(NEXUSLM_RESPONSE_LENGTHS).map(([value, item]) => <option key={value} value={value}>{item.label}</option>)}
+        </select>
+        <p className="mt-2 text-xs leading-5 text-slate-500">{NEXUSLM_RESPONSE_LENGTHS[responseLength].description}</p>
 
         <div className="mt-6 border-t border-slate-800 pt-5">
           <p className="text-xs font-semibold uppercase tracking-widest text-slate-500">Download latest response</p>

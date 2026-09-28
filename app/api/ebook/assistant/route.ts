@@ -19,6 +19,7 @@ import {
   PREMIUM_BOOK_STYLE_RULES,
 } from "@/lib/editorial-style-bible";
 import { SCRIPTURE_FORMATTING_RULES } from "@/lib/scripture-formatter";
+import { NexusLMResponseLengthSchema, NEXUSLM_RESPONSE_LENGTHS } from "@/lib/nexuslm-response";
 
 export const runtime = "nodejs";
 export const maxDuration = 120;
@@ -37,6 +38,7 @@ const RequestSchema = z.object({
   manifest: EbookManifestSchema,
   instruction: z.string().min(1).max(4000),
   history: z.array(ChatMessageSchema).max(20).optional(),
+    responseLength: NexusLMResponseLengthSchema.default("default"),
   transcriptSources: z.array(TranscriptSourceSchema).max(20).optional(),
   dryRun: z.boolean().optional(),
   manifestVersion: z.string().optional(),
@@ -130,6 +132,7 @@ export async function POST(req: NextRequest) {
   }
 
   const { manifest, instruction, history, pipeline } = input;
+  const responseLength = NEXUSLM_RESPONSE_LENGTHS[input.responseLength];
   const dryRun       = input.dryRun ?? false;
 
   // ── Optimistic locking ───────────────────────────────────────────────
@@ -290,7 +293,7 @@ export async function POST(req: NextRequest) {
   }
 
   try {
-    const maxTokens = calculateMaxTokens(input.manifest);
+    const maxTokens = Math.min(calculateMaxTokens(input.manifest), responseLength.editTokens);
     
     const { object } = await generateObject({
       model: selectedModel,
@@ -299,6 +302,7 @@ export async function POST(req: NextRequest) {
       maxTokens,
       temperature: 0.15,
       system: `You are the Nexus Book Director — a precision ebook editor with MAXIMUM AUTHORITY over every part of this published teaching book. You receive the full book structure and can make any change the user requests.
+${responseLength.instruction}
 
 ════════════════════════════════════════════
 SPEAKER-FIDELITY LAW — NON-NEGOTIABLE
