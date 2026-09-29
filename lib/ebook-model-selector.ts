@@ -1,14 +1,14 @@
-import { deepSeekReasonerModel, geminiModel } from "@/lib/ai-providers";
+import { deepSeekModel, deepSeekReasonerModel } from "@/lib/ai-providers";
 
 export type EbookModelChoice = "deepseek" | "gemini";
 
 export function getEbookModel(choice: EbookModelChoice) {
-  return choice === "gemini" ? geminiModel : deepSeekReasonerModel;
+  return choice === "gemini" ? deepSeekModel : deepSeekReasonerModel;
 }
 
 export function getEbookTemperature(choice: EbookModelChoice, task: "reasoning" | "extraction") {
   if (choice === "gemini") {
-    // Gemini 2.0 Flash extended thinking temperatures
+    // Nexus-Chat uses DeepSeek Chat for fast generation.
     return task === "reasoning" ? 0.35 : 0.2;
   }
   // DeepSeek default temperatures

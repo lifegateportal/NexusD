@@ -18,7 +18,7 @@ type NexusLMPanelProps = {
   onManifestChange: (manifest: EbookManifest, summary: string) => void;
 };
 
-type Mode = "ask" | "socratic" | "draft" | "edit";
+type Mode = "ask" | "socratic" | "plan" | "draft" | "edit";
 type Persona = "editorial-coach" | "skeptical-reviewer" | "socratic-teacher" | "voice-guardian";
 type Message = { role: "user" | "assistant" | "system"; content: string };
 type Source = { id: string; label: string; excerpt: string };
@@ -51,12 +51,14 @@ const PERSONAS: Record<Persona, { label: string; description: string }> = {
 const MODES: Record<Mode, { label: string; prompt: string }> = {
   ask: { label: "Ask", prompt: "Answer using the loaded manuscript. State uncertainty clearly." },
   socratic: { label: "Socratic Vetting", prompt: "Do not rush to rewrite. Surface assumptions, gaps, contradictions, and probing questions." },
+  plan: { label: "Plan Whole Book", prompt: "Design the whole book before drafting. Use every transcript slot to build a source-grounded architecture, chapter progression, and writing plan." },
   draft: { label: "Draft Chapter", prompt: "Write a complete chapter from the manuscript and transcript sources, then show the full draft for review." },
   edit: { label: "Edit / Enrich", prompt: "Propose precise manuscript improvements and apply only the requested changes." },
 };
 
 function inferMode(instruction: string, selectedMode: Mode): Mode {
   const text = instruction.toLowerCase();
+  if (/\b(plan|outline|architect|roadmap|structure|whole book|entire book|book arc)\b/.test(text)) return "plan";
   if (/\b(write|draft|compose|create)\b.*\bchapter\b|\bchapter\b.*\b(write|draft|compose|create)\b/.test(text)) return "draft";
   if (/\b(vet|challenge|question|assumption|contradiction|weak|gap|skeptic|critique)\b/.test(text)) return "socratic";
   if (/\b(edit|rewrite|revise|enrich|expand|shorten|tighten|change|improve|fix)\b/.test(text)) return "edit";
@@ -515,7 +517,7 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
         </div>
 
         <p className="mt-6 text-xs font-semibold uppercase tracking-widest text-slate-500">Mode</p>
-        <div className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-4">
+        <div className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-3">
           {Object.entries(MODES).map(([value, item]) => (
             <button key={value} type="button" onClick={() => setMode(value as Mode)} className={`min-h-12 rounded-xl border px-2 text-xs font-semibold ${mode === value ? "border-cyan-400/60 bg-cyan-400/10 text-cyan-300" : "border-slate-700 text-slate-400"}`}>{item.label}</button>
           ))}

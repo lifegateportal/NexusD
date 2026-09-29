@@ -13,7 +13,7 @@ export const maxDuration = 90;
 
 const RequestSchema = z.object({
   query: z.string().min(1).max(4000),
-  mode: z.enum(["ask", "socratic"]),
+  mode: z.enum(["ask", "socratic", "plan"]),
   persona: z.string().min(1).max(80),
   agent: NexusLMAgentSchema.default("NexusChat"),
   writingStyle: NexusLMWritingStyleSchema.default("book-prose"),
@@ -118,13 +118,47 @@ function scoreSources(sources: Source[], query: string): Source[] {
 function retrieveSources(
   transcripts: Array<{ label: string; text: string }>,
   manuscript: z.infer<typeof RequestSchema>["manuscript"],
-  query: string
+  query: string,
+  mode: z.infer<typeof RequestSchema>["mode"]
 ): Source[] {
   const manuscriptSources = manuscript ? chunkManuscript(manuscript) : [];
   const transcriptSources = transcripts.flatMap(({ label, text }) => chunkTranscript(label, text));
   const completeSources = [...manuscriptSources, ...transcriptSources];
   if (completeSources.reduce((total, source) => total + source.excerpt.length, 0) <= MAX_COMPLETE_CONTEXT_CHARACTERS) {
     return completeSources;
+  }
+
+  if (mode === "plan") {
+    const transcriptGroups = Array.from(
+      transcriptSources.reduce((groups, source) => {
+        const group = groups.get(source.label) ?? [];
+        group.push(source);
+        groups.set(source.label, group);
+        return groups;
+      }, new Map<string, Source[]>()).values()
+    );
+    const transcriptBudget = Math.max(1600, MAX_COMPLETE_CONTEXT_CHARACTERS - 20000);
+    const groupBudget = Math.max(1600, Math.floor(transcriptBudget / Math.max(1, transcriptGroups.length)));
+    const selectedTranscriptSources = transcriptGroups.flatMap((group) => {
+      const selected: Source[] = [];
+      let groupCharacters = 0;
+      for (const source of group) {
+        if (selected.length > 0 && groupCharacters + source.excerpt.length > groupBudget) break;
+        selected.push(source);
+        groupCharacters += source.excerpt.length;
+      }
+      return selected;
+    });
+    const selectedTranscriptCharacters = selectedTranscriptSources.reduce((total, source) => total + source.excerpt.length, 0);
+    const remainingCharacters = MAX_COMPLETE_CONTEXT_CHARACTERS - selectedTranscriptCharacters;
+    const selectedManuscriptSources: Source[] = [];
+    let manuscriptCharacters = 0;
+    for (const source of scoreSources(manuscriptSources, query)) {
+      if (manuscriptCharacters + source.excerpt.length > remainingCharacters) break;
+      selectedManuscriptSources.push(source);
+      manuscriptCharacters += source.excerpt.length;
+    }
+    return [...selectedManuscriptSources, ...selectedTranscriptSources];
   }
 
   const rankedManuscriptSources = scoreSources(manuscriptSources, query);
@@ -140,7 +174,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: error instanceof Error ? error.message : "Invalid NexusLM request." }, { status: 400 });
   }
 
-  const sources = retrieveSources(input.transcripts, input.manuscript, input.query);
+  const sources = retrieveSources(input.transcripts, input.manuscript, input.query, input.mode);
   const manuscriptSources = sources.filter((source) => source.id.startsWith("M-"));
   const transcriptSources = sources.filter((source) => source.id.startsWith("T-"));
   const sourceContext = [
@@ -155,17 +189,22 @@ export async function POST(request: NextRequest) {
   const history = (input.history ?? []).map((message) => `${message.role.toUpperCase()}: ${message.content}`).join("\n");
   const writingStyle = NEXUSLM_WRITING_STYLES[input.writingStyle];
   const responseLength = NEXUSLM_RESPONSE_LENGTHS[input.responseLength];
+  const modeInstruction = input.mode === "plan"
+    ? "This is Plan Whole Book mode. Use every uploaded transcript slot represented in the transcript context, synthesize the author's complete teaching arc, and produce a practical whole-book plan before drafting. Include the book promise, core thesis, target reader, chapter sequence, each chapter's purpose and source-grounded teaching beats, progression between chapters, uncovered material, and the recommended writing order. Distinguish supported source material from decisions or gaps that require the author's input. Do not draft full chapters."
+    : input.mode === "socratic"
+      ? "This is Socratic Vetting mode. Produce a detailed, actionable vetting brief with these headings: Diagnosis; Evidence and assumptions; Proposed fixes; Chapter implementation plan; Questions requiring the author's decision. For every proposed fix, explain the problem it solves and the exact change a new chapter should make. Do not stop at questions or general criticism."
+      : "This is Ask mode: answer directly, distinguish transcript evidence from interpretation, and cite sources.";
 
   try {
     const generationRequest = {
       ...(input.agent === "nexusR1" ? { temperature: 1 } : input.mode === "ask" ? { temperature: 0.2 } : {}),
       maxRetries: 2,
-      maxTokens: input.mode === "socratic" ? responseLength.chatSocraticTokens : responseLength.chatAskTokens,
+      maxTokens: input.mode === "socratic" || input.mode === "plan" ? responseLength.chatSocraticTokens : responseLength.chatAskTokens,
       system: `You are NexusLM, a source-grounded book companion. The selected agent is ${input.agent}. The active persona is ${input.persona}.
 The book is "${input.book.title}".
 The requested presentation form is ${writingStyle.label}: ${writingStyle.instruction}
     The written manuscript is the primary audit target. Use the supplied WRITTEN MANUSCRIPT EXCERPTS to assess what the book actually says, demonstrates, defines, and sequences. Use transcript excerpts only as supporting provenance for the author's underlying teaching. Use the sources for grounding, but never expose source IDs, slot labels, bracketed retrieval markers, or internal routing labels in the final answer. If the supplied excerpts do not support an answer, say so. Do not fabricate quotations.
-  ${input.mode === "socratic" ? "This is Socratic Vetting mode. Produce a detailed, actionable vetting brief with these headings: Diagnosis; Evidence and assumptions; Proposed fixes; Chapter implementation plan; Questions requiring the author's decision. For every proposed fix, explain the problem it solves and the exact change a new chapter should make. Do not stop at questions or general criticism." : "This is Ask mode: answer directly, distinguish transcript evidence from interpretation, and cite sources."}
+  ${modeInstruction}
   ${SCRIPTURE_FORMATTING_RULES}`,
       prompt: `RESPONSE LENGTH: ${responseLength.label}. ${responseLength.instruction}
 

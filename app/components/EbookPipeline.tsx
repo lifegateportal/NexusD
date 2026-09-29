@@ -4537,8 +4537,8 @@ export function EbookPipeline({
               disabled={isRunning}
               className="w-full rounded-xl border border-slate-700/60 bg-slate-950/70 px-3 py-2 text-base text-slate-100 outline-none focus:border-violet-500/40 disabled:opacity-60 disabled:cursor-not-allowed"
             >
-              <option value="deepseek">DeepSeek R1 (default)</option>
-              <option value="gemini">Gemini 2.0 Flash (beta)</option>
+              <option value="deepseek">NexusR1 (default)</option>
+              <option value="gemini">Nexus-Chat</option>
             </select>
             <p className="text-[10px] text-slate-600">Select which LLM to use for chapter generation, voice analysis, and front/back matter.</p>
           </div>
