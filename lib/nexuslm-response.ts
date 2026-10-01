@@ -34,7 +34,7 @@ export const NEXUSLM_RESPONSE_LENGTHS: Record<NexusLMResponseLength, {
   longer: {
     label: "Longer",
     description: "More context, detail, and development",
-    chatAskTokens: 5200,
+    chatAskTokens: 11000,
     chatSocraticTokens: 12000,
     draftTokens: 32000,
     editTokens: 12000,

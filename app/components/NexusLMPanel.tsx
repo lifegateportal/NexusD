@@ -22,7 +22,10 @@ type Mode = "ask" | "socratic" | "plan" | "draft" | "edit";
 type Persona = "editorial-coach" | "skeptical-reviewer" | "socratic-teacher" | "voice-guardian";
 type Message = { role: "user" | "assistant" | "system"; content: string };
 type Source = { id: string; label: string; excerpt: string };
-type PendingEdit = { instruction: string; summary: string; confidence?: "high" | "medium" | "low" };
+type EditPatch = {
+  updatedSections?: Array<{ chapterNumber: number; sectionNumber: number; heading?: string; body?: string }>;
+};
+type PendingEdit = { instruction: string; summary: string; confidence?: "high" | "medium" | "low"; patch: EditPatch };
 
 function cleanAssistantLine(line: string): string {
   return sanitizeNexusLMText(line);
@@ -75,6 +78,14 @@ function compactHistory(history: Message[]): Array<{ role: "user" | "assistant";
         ? `${message.content.slice(0, 5600)}\n\n[Earlier response truncated from conversation history.]\n\n${message.content.slice(-300)}`
         : message.content,
     }));
+}
+
+function formatEditProposal(summary: string, patch: EditPatch): string {
+  const sectionPreviews = (patch.updatedSections ?? [])
+    .filter((section) => section.body?.trim())
+    .map((section) => `### Proposed section ${section.chapterNumber}.${section.sectionNumber}${section.heading ? `: ${section.heading}` : ""}\n\n${section.body}`)
+    .join("\n\n");
+  return [`Proposal ready for review: ${summary}`, sectionPreviews].filter(Boolean).join("\n\n");
 }
 
 function initialMessage(manifest: EbookManifest | null): Message {
@@ -298,7 +309,7 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
           dryRun: requestMode !== "edit",
         }),
       });
-      const json = await res.json() as { manifest?: unknown; patch?: unknown; summary?: string; confidence?: "high" | "medium" | "low"; error?: string; clarificationNeeded?: string; needsClarification?: boolean; noChanges?: boolean; manifestVersion?: string };
+      const json = await res.json() as { manifest?: unknown; patch?: EditPatch; summary?: string; confidence?: "high" | "medium" | "low"; error?: string; clarificationNeeded?: string; needsClarification?: boolean; noChanges?: boolean; manifestVersion?: string };
       if (!res.ok || json.error) throw new Error(json.error ?? `Request failed (${res.status})`);
       if (json.needsClarification && json.clarificationNeeded) {
       setMessages((current) => [...current, { role: "assistant", content: sanitizeNexusLMText(json.clarificationNeeded!) }]);
@@ -307,8 +318,8 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
 
       if (activeMode === "edit") {
         if (!json.patch || !json.summary) throw new Error("NexusLM returned no editable proposal.");
-        setPendingEdit({ instruction, summary: json.summary, confidence: json.confidence });
-        setMessages((current) => [...current, { role: "assistant", content: sanitizeNexusLMText(`Proposal ready for review: ${json.summary}`) }]);
+        setPendingEdit({ instruction, summary: json.summary, confidence: json.confidence, patch: json.patch });
+        setMessages((current) => [...current, { role: "assistant", content: sanitizeNexusLMText(formatEditProposal(json.summary!, json.patch!)) }]);
         return;
       }
 
@@ -376,6 +387,7 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
         body: JSON.stringify({
           manifest,
           instruction: pendingEdit.instruction,
+          approvedPatch: pendingEdit.patch,
           history: compactHistory(messages),
           responseLength,
           pipeline: pipelineSnapshot ?? undefined,

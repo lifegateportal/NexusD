@@ -41,6 +41,7 @@ const RequestSchema = z.object({
     responseLength: NexusLMResponseLengthSchema.default("default"),
   transcriptSources: z.array(TranscriptSourceSchema).max(20).optional(),
   dryRun: z.boolean().optional(),
+  approvedPatch: z.unknown().optional(),
   manifestVersion: z.string().optional(),
   pipeline: z.object({
     stage: z.string(),
@@ -199,6 +200,8 @@ export async function POST(req: NextRequest) {
     .map((source, index) => `[T${index + 1} | ${source.label}]\n${source.excerpt.slice(0, 2200)}`)
     .join("\n\n---\n\n");
 
+  const requestsAlternative = /\b(?:different|another approach|new approach|fresh approach|alternative|reframe|restructure|stop repeating|not the same)\b/i.test(`${instruction} ${historyText}`);
+
   // Detect structural / high-reasoning operations that benefit from R1:
   // Structural: reorder/move/merge/split/add/remove chapters or sections
   // Book-wide: operations touching every chapter simultaneously
@@ -295,13 +298,24 @@ export async function POST(req: NextRequest) {
   try {
     const maxTokens = Math.min(calculateMaxTokens(input.manifest), responseLength.editTokens);
     
-    const { object } = await generateObject({
-      model: selectedModel,
-      schema: EbookChangeSchema,
-      mode: "json",
-      maxTokens,
-      temperature: 0.15,
-      system: `You are the Nexus Book Director — a precision ebook editor with MAXIMUM AUTHORITY over every part of this published teaching book. You receive the full book structure and can make any change the user requests.
+    const approvedPatch = input.approvedPatch === undefined
+      ? null
+      : EbookChangeSchema.safeParse(input.approvedPatch);
+    if (approvedPatch && !approvedPatch.success) {
+      return NextResponse.json({ error: `Approved edit proposal is invalid: ${approvedPatch.error.message}` }, { status: 400 });
+    }
+
+    let object: z.infer<typeof EbookChangeSchema>;
+    if (approvedPatch?.success) {
+      object = approvedPatch.data;
+    } else {
+      const result = await generateObject({
+        model: selectedModel,
+        schema: EbookChangeSchema,
+        mode: "json",
+        maxTokens,
+        temperature: requestsAlternative ? 0.45 : 0.15,
+        system: `You are the Nexus Book Director — a precision ebook editor with MAXIMUM AUTHORITY over every part of this published teaching book. You receive the full book structure and can make any change the user requests.
 ${responseLength.instruction}
 
 ════════════════════════════════════════════
@@ -326,6 +340,11 @@ ${PREMIUM_BOOK_STYLE_RULES}
 BOOK-SAFETY RULE — ALWAYS APPLY
 - Remove or avoid church-room chatter that does not belong in a book: greetings to congregation, thanking attendees/teams, service-flow remarks, crowd-response prompts, and stage directions.
 - Keep only reader-appropriate teaching prose.
+
+════════════════════════════════════════════
+ALTERNATIVE PRESENTATION RULE
+════════════════════════════════════════════
+When the user asks for a different, fresh, alternative, or non-repetitive presentation, treat the prior candidate in the conversation history as rejected. Produce a materially different draft: change the rhetorical entry point, paragraph sequence, pacing, framing, or emphasis. Do not satisfy the request with synonyms or cosmetic edits. Preserve the same supported teaching, facts, scripture, and authorial voice.
 
 ════════════════════════════════════════════
 NATURAL LANGUAGE MAPPINGS — interpret these colloquial phrases correctly
@@ -468,7 +487,9 @@ OUTPUT RULES
         "CURRENT USER INSTRUCTION:",
         instruction,
       ].join("\n"),
-    });
+      });
+      object = result.object;
+    }
 
     // ── Dry-run: return the AI patch without applying it ────────────────────────
     // The client can diff this against the current manifest and show a preview

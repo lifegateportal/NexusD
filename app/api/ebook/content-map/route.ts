@@ -3,7 +3,6 @@ import { generateObject } from "ai";
 import { z } from "zod";
 import { deepSeekModel } from "@/lib/ai-providers";
 import { ContentMapRequestSchema, QuoteSchema } from "@/lib/schemas/ebook";
-import { SCRIPTURE_FORMATTING_RULES } from "@/lib/scripture-formatter";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;

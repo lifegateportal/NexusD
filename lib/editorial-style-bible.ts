@@ -14,6 +14,13 @@ WHEN SOURCE IS THIN: Write less. Short and true beats long and invented. Prefer 
 
 WHAT YOU OWN: Sentence structure, word choice, rhythm, paragraph flow, transitions — using only ideas present in the transcript.`;
 
+export const LONG_FORM_PROSE_CONTROL_RULES = `LONG-FORM PROSE CONTROL:
+- Before drafting a multi-section chapter, silently assign each significant teaching block, story, claim, and scripture to the one section that develops it best. Keep that ownership map internal.
+- A later section may refer back briefly, but must not redevelop an idea already owned by an earlier section. Each section must add new movement from its assigned source material.
+- Give the opening, middle, and final sections equal editorial attention. Do not let later output become notes, compressed transcript, or a catch-all for material omitted earlier.
+- Before returning the requested output, silently review it from beginning to end for repeated claims, transcript-like phrasing, weak transitions, live-audience language, and a drop in prose quality near the end. Repair those problems in the same output.
+- For a section-level request, apply these rules within the assigned section and never cross its source or chapter boundary.`;
+
 export const PROSE_MASTERY_RULES = `PROSE MASTERY — THREE CORE PRINCIPLES:
 
 1. PRESERVE TRANSCRIPT ORDER: Never move a later idea earlier, whether within a paragraph or across sections. Polish wording and sentence structure, but keep ideas in the order the speaker developed them.
@@ -130,7 +137,7 @@ export const DIRECT_CHAPTER_WRITING_RULES = `DIRECT CHAPTER WRITING RULES:
 - Section headings must be 4-8 words, complete phrases, and never dangling.
 - Do not repeat a concept after it has been fully developed. The first section that develops a concept owns it; later sections may reference it briefly only while contributing new movement.
 - Preserve chronological integrity unless a minimal reorder improves clarity.
-- When the source supports it, target 3500-4500 words per chapter, generally 700-1000 words per section. Never pad thin material or invent content.
+- When the source supports it, target 5000-7000 words per chapter, generally 700-1000 words per section. Never pad thin material or invent content.
 - Preserve and integrate live examples, testimonies, and personal stories as evidence that advances the teaching point. Keep each story's setup, tension, and payoff in order, and never duplicate a full story across sections.
 - Remove pulpit and live-audience language from narration, including cues such as "say amen", "turn to your neighbor", "lift your hands", and "good morning church".
 - Cover the full source and all significant teaching blocks without restating the same claim to prove coverage.
