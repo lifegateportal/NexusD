@@ -124,6 +124,7 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
   const [agent, setAgent] = useState<NexusLMAgent>("NexusChat");
   const [writingStyle, setWritingStyle] = useState<NexusLMWritingStyle>("book-prose");
   const [responseLength, setResponseLength] = useState<NexusLMResponseLength>("default");
+  const [nexusLMTemperature, setNexusLMTemperature] = useState(0.3);
   const [loading, setLoading] = useState(false);
   const [sources, setSources] = useState<Source[]>([]);
   const [pendingEdit, setPendingEdit] = useState<PendingEdit | null>(null);
@@ -238,6 +239,7 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
             agent,
             writingStyle,
             responseLength,
+            llmTemperature: nexusLMTemperature,
             book: {
               title: manifest?.bookTitle ?? pipelineSnapshot?.bookTitle ?? "Untitled book",
               chapters: manifest?.chapters.map((chapter) => ({ number: chapter.number, title: chapter.title })) ?? [],
@@ -270,6 +272,7 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
             agent,
             writingStyle,
             responseLength,
+            llmTemperature: nexusLMTemperature,
             book: { title: manifest?.bookTitle ?? pipelineSnapshot?.bookTitle ?? "Untitled book", chapters: manifest?.chapters.map((chapter) => ({ number: chapter.number, title: chapter.title })) ?? [] },
             manuscript: manifest ? { frontMatter: manifest.frontMatter, chapters: manifest.chapters } : null,
             transcripts,
@@ -292,6 +295,7 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
           instruction: `${MODES[activeMode].prompt}\nPersona: ${PERSONAS[persona].description}\n\nUser request:\n${userMessage}`,
           history: compactHistory(nextMessages),
           responseLength,
+          llmTemperature: nexusLMTemperature,
           pipeline: pipelineSnapshot ?? undefined,
           manifestVersion: (manifest as Record<string, unknown>).__version as string | undefined,
           transcriptSources: transcripts,
@@ -378,6 +382,7 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
           instruction: pendingEdit.instruction,
           history: compactHistory(messages),
           responseLength,
+          llmTemperature: nexusLMTemperature,
           pipeline: pipelineSnapshot ?? undefined,
           manifestVersion: (manifest as Record<string, unknown>).__version as string | undefined,
           transcriptSources: transcripts,
@@ -503,6 +508,24 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
           {Object.entries(NEXUSLM_RESPONSE_LENGTHS).map(([value, item]) => <option key={value} value={value}>{item.label}</option>)}
         </select>
         <p className="mt-2 text-xs leading-5 text-slate-500">{NEXUSLM_RESPONSE_LENGTHS[responseLength].description}</p>
+
+        <label className="mt-6 block text-xs font-semibold uppercase tracking-widest text-slate-500" htmlFor="nexuslm-temperature">NexusLM temperature</label>
+        <input
+          id="nexuslm-temperature"
+          type="number"
+          min={0}
+          max={1}
+          step={0.01}
+          value={nexusLMTemperature}
+          onChange={(event) => {
+            const next = Number.parseFloat(event.target.value);
+            if (Number.isNaN(next)) return;
+            const bounded = Math.min(1, Math.max(0, next));
+            setNexusLMTemperature(Number(bounded.toFixed(2)));
+          }}
+          className="mt-2 min-h-12 w-full rounded-xl border border-slate-700 bg-slate-900 px-3 text-base text-slate-200"
+        />
+        <p className="mt-2 text-xs leading-5 text-slate-500">Controls NexusLM generation randomness. Range: 0.00 to 1.00.</p>
 
         <div className="mt-6 border-t border-slate-800 pt-5">
           <p className="text-xs font-semibold uppercase tracking-widest text-slate-500">Download latest response</p>

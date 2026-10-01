@@ -38,7 +38,8 @@ const RequestSchema = z.object({
   manifest: EbookManifestSchema,
   instruction: z.string().min(1).max(4000),
   history: z.array(ChatMessageSchema).max(20).optional(),
-    responseLength: NexusLMResponseLengthSchema.default("default"),
+  responseLength: NexusLMResponseLengthSchema.default("default"),
+  llmTemperature: z.number().min(0).max(1).optional(),
   transcriptSources: z.array(TranscriptSourceSchema).max(20).optional(),
   dryRun: z.boolean().optional(),
   manifestVersion: z.string().optional(),
@@ -300,7 +301,7 @@ export async function POST(req: NextRequest) {
       schema: EbookChangeSchema,
       mode: "json",
       maxTokens,
-      temperature: 0.15,
+      temperature: input.llmTemperature ?? 0.15,
       system: `You are the Nexus Book Director — a precision ebook editor with MAXIMUM AUTHORITY over every part of this published teaching book. You receive the full book structure and can make any change the user requests.
 ${responseLength.instruction}
 

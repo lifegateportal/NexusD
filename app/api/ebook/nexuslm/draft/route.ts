@@ -25,6 +25,7 @@ const RequestSchema = z.object({
   agent: NexusLMAgentSchema.default("nexusR1"),
   writingStyle: NexusLMWritingStyleSchema.default("book-prose"),
   responseLength: NexusLMResponseLengthSchema.default("default"),
+  llmTemperature: z.number().min(0).max(1).optional(),
   vettingGuidance: z.string().max(20000).optional(),
 }).superRefine((value, context) => {
   const totalCharacters = value.transcripts.reduce((sum, transcript) => sum + transcript.text.length, 0);
@@ -90,6 +91,7 @@ Return JSON only.`;
       mode: "json",
       maxRetries: 2,
       maxTokens: responseLength.draftTokens,
+      ...(input.llmTemperature === undefined ? {} : { temperature: input.llmTemperature }),
       system,
       prompt,
     });

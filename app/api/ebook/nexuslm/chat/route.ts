@@ -18,6 +18,7 @@ const RequestSchema = z.object({
   agent: NexusLMAgentSchema.default("NexusChat"),
   writingStyle: NexusLMWritingStyleSchema.default("book-prose"),
   responseLength: NexusLMResponseLengthSchema.default("default"),
+  llmTemperature: z.number().min(0).max(1).optional(),
   book: z.object({
     title: z.string().max(2000),
     chapters: z.array(z.object({ number: z.number().int().positive(), title: z.string().max(300) })).max(100),
@@ -196,8 +197,9 @@ export async function POST(request: NextRequest) {
       : "This is Ask mode: answer directly, distinguish transcript evidence from interpretation, and cite sources.";
 
   try {
+    const temperature = input.llmTemperature ?? (input.agent === "nexusR1" ? 1 : input.mode === "ask" ? 0.2 : undefined);
     const generationRequest = {
-      ...(input.agent === "nexusR1" ? { temperature: 1 } : input.mode === "ask" ? { temperature: 0.2 } : {}),
+      ...(temperature === undefined ? {} : { temperature }),
       maxRetries: 2,
       maxTokens: input.mode === "socratic" || input.mode === "plan" ? responseLength.chatSocraticTokens : responseLength.chatAskTokens,
       system: `You are NexusLM, a source-grounded book companion. The selected agent is ${input.agent}. The active persona is ${input.persona}.
