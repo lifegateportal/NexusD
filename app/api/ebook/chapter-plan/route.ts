@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { generateObject } from "ai";
 import { z } from "zod";
-import { deepSeekReasonerModel } from "@/lib/ai-providers";
+import { deepSeekModel } from "@/lib/ai-providers";
 import { ChapterPlanRequestSchema, ChapterPlanResponseSchema } from "@/lib/schemas/ebook";
 import { SOURCE_LOCK_RULES, READER_NORMALIZATION_RULES } from "@/lib/editorial-style-bible";
 
@@ -191,10 +191,10 @@ ${excerptPayload}`;
   // We send a space every 15s; JSON.parse (used by res.json()) ignores leading whitespace.
   const encoder = new TextEncoder();
   const generatePromise = generateObject({
-    model: deepSeekReasonerModel,
+    model: deepSeekModel,
     schema: ChapterPlanLLMSchema,
     mode: "json",
-    temperature: 0.28, // R1 for concept ownership reasoning
+    temperature: 0.3, // deterministic structural planning: consistent concept ownership & excerpt locking
     system,
     prompt,
   });

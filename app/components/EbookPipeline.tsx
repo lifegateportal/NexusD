@@ -3090,7 +3090,8 @@ export function EbookPipeline({
       let masterTranscript = acc.masterTranscript;
       if (!masterTranscript) {
         type FilterResult = { cleanedTranscript: string; removedSegments: { reason: string; excerpt: string }[]; summary: string };
-        const transcriptResults: { label: string; text: string }[] = [];
+        const filteredTranscriptResults: { label: string; text: string }[] = [];
+        const rawTranscriptResults: { label: string; text: string }[] = [];
 
         // Reset all statuses to idle before starting
         setAudioSourceStatuses(["idle", "idle", "idle", "idle", "idle", "idle", "idle", "idle", "idle", "idle"]);
@@ -3139,12 +3140,13 @@ export function EbookPipeline({
             addLog(`  ↷ ${label} Simple Direct mode — skipping signal filter, using full raw transcript`);
           }
 
-          transcriptResults.push({ label, text: slotText });
+          rawTranscriptResults.push({ label, text: rawText });
+          filteredTranscriptResults.push({ label, text: slotText });
         }
-        masterTranscript = transcriptResults
+        masterTranscript = filteredTranscriptResults
           .map((t) => `[${t.label}]\n${t.text}`)
           .join("\n\n═══════════════════════════════════════\n\n");
-        setSourceTranscripts(transcriptResults);
+        setSourceTranscripts(rawTranscriptResults);
         addLog(`Master transcript assembled — ${countWords(masterTranscript).toLocaleString()} words after per-slot filtering`);
 
         // ── Stage 1b: Glossary sanitization — zero-cost regex ASR correction ─
@@ -3163,7 +3165,7 @@ export function EbookPipeline({
         }
 
         acc.masterTranscript = masterTranscript;
-        acc.transcripts = transcriptResults;
+        acc.transcripts = rawTranscriptResults;
         await checkpoint("filtering");
       } else {
         setSourceTranscripts(acc.transcripts ?? []);
