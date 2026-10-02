@@ -202,7 +202,7 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
     URL.revokeObjectURL(url);
   }
 
-  async function send(requestText?: string, requestMode?: Mode) {
+  async function send(requestText?: string, requestMode?: Mode, draftTranscriptScope: "all" | "selected" = "all") {
     const instruction = (requestText ?? input).trim();
     if (!instruction || loading) return;
     const activeMode = requestMode ?? inferMode(instruction, mode);
@@ -245,11 +245,8 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
               chapters: manifest?.chapters.map((chapter) => ({ number: chapter.number, title: chapter.title })) ?? [],
               manuscriptChapter: manifest?.chapters.find((chapter) => chapter.number === chapterNumber) ?? null,
             },
-            transcripts: selectedTranscript ? [selectedTranscript] : transcripts,
-            vettingGuidance: messages
-              .slice()
-              .reverse()
-              .find((message) => message.role === "assistant")?.content,
+            transcripts: draftTranscriptScope === "selected" && selectedTranscript ? [selectedTranscript] : transcripts,
+            transcriptScope: draftTranscriptScope,
           }),
         });
         const json = await res.json() as { chapter?: unknown; error?: string };
@@ -577,14 +574,24 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
               {selectedTranscript && (
                 <>
                   <textarea readOnly value={selectedTranscript.text} aria-label={`${selectedTranscript.label} transcript`} className="mt-3 h-48 w-full resize-y rounded-xl border border-slate-800 bg-slate-900 p-3 text-base leading-5 text-slate-400" />
-                  <button
-                    type="button"
-                    onClick={() => { setMode("draft"); void send(`Write a complete chapter from ${selectedTranscript.label}. Use only this slot's transcript and the existing manuscript context.`, "draft"); }}
-                    disabled={loading}
-                    className="mt-3 min-h-12 w-full rounded-xl border border-amber-400/40 bg-amber-400/10 px-3 text-sm font-semibold text-amber-200 disabled:cursor-not-allowed disabled:opacity-40"
-                  >
-                    Draft chapter from {selectedTranscript.label}
-                  </button>
+                  <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                    <button
+                      type="button"
+                      onClick={() => { setMode("draft"); void send(`Write a complete chapter from ${selectedTranscript.label} only. Shape the introduction and body freely from this slot's material.`, "draft", "selected"); }}
+                      disabled={loading}
+                      className="min-h-12 rounded-xl border border-amber-400/40 bg-amber-400/10 px-3 text-sm font-semibold text-amber-200 disabled:cursor-not-allowed disabled:opacity-40"
+                    >
+                      Draft from {selectedTranscript.label}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => { setMode("draft"); void send("Write a complete chapter using all available transcript slots and the existing manuscript context. Choose the strongest material and shape the chapter freely.", "draft", "all"); }}
+                      disabled={loading}
+                      className="min-h-12 rounded-xl border border-cyan-400/40 bg-cyan-400/10 px-3 text-sm font-semibold text-cyan-200 disabled:cursor-not-allowed disabled:opacity-40"
+                    >
+                      Draft from all slots
+                    </button>
+                  </div>
                 </>
               )}
             </>

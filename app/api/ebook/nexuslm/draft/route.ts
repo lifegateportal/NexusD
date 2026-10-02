@@ -3,7 +3,6 @@ import { generateObject } from "ai";
 import { z } from "zod";
 import { deepSeekModel, deepSeekReasonerModel } from "@/lib/ai-providers";
 import { ChapterDraftSchema } from "@/lib/schemas/ebook";
-import { DIRECT_CHAPTER_WRITING_RULES, SOURCE_LOCK_RULES, PROSE_MASTERY_RULES, READER_NORMALIZATION_RULES, PREMIUM_BOOK_STYLE_RULES } from "@/lib/editorial-style-bible";
 import { SCRIPTURE_FORMATTING_RULES } from "@/lib/scripture-formatter";
 import { NexusLMWritingStyleSchema, NEXUSLM_WRITING_STYLES } from "@/lib/nexuslm-writing-styles";
 import { NexusLMAgentSchema } from "@/lib/nexuslm-agents";
@@ -26,7 +25,7 @@ const RequestSchema = z.object({
   writingStyle: NexusLMWritingStyleSchema.default("book-prose"),
   responseLength: NexusLMResponseLengthSchema.default("default"),
   llmTemperature: z.number().min(0).max(1).optional(),
-  vettingGuidance: z.string().max(20000).optional(),
+  transcriptScope: z.enum(["all", "selected"]).default("all"),
 }).superRefine((value, context) => {
   const totalCharacters = value.transcripts.reduce((sum, transcript) => sum + transcript.text.length, 0);
   if (totalCharacters > 1000000) context.addIssue({ code: z.ZodIssueCode.custom, message: "Transcript context is too large." });
@@ -51,17 +50,17 @@ export async function POST(request: NextRequest) {
     .join("\n\n---\n\n");
   const writingStyle = NEXUSLM_WRITING_STYLES[input.writingStyle];
   const responseLength = NEXUSLM_RESPONSE_LENGTHS[input.responseLength];
+  const transcriptScopeInstruction = input.transcriptScope === "selected"
+    ? "Use only the selected transcript slot supplied below as source material for this chapter."
+    : "Use all transcript slots supplied below as source material, choosing the strongest material for this chapter.";
 
   try {
     const system = `Return only one valid JSON object matching the ChapterDraft schema. Do not wrap it in markdown fences and do not include reasoning outside the JSON object.
 You are NexusLM, a professional book ghostwriter. Selected agent: ${input.agent}. Persona: ${input.persona}.
 Presentation form: ${writingStyle.label}. ${writingStyle.instruction}
-Write only from the supplied manuscript context and transcript sources. Do not invent teachings, stories, quotations, facts, or theological claims. Preserve the author's voice and remove live-audience language.
-${DIRECT_CHAPTER_WRITING_RULES}
-${SOURCE_LOCK_RULES}
-${READER_NORMALIZATION_RULES}
-${PROSE_MASTERY_RULES}
-${PREMIUM_BOOK_STYLE_RULES}
+  ${transcriptScopeInstruction} The source material constrains factual, theological, biographical, and scriptural truth, but it does not constrain your creative judgment about the chapter's title, introduction, section architecture, body prose, transitions, emphasis, or ending. Do not treat an existing outline, manuscript chapter, chapter premise, key point, or prior wording as mandatory. Choose the strongest material and shape a coherent chapter freely.
+  You may create original framing, synthesis, transitions, imagery, rhetorical movement, and reader-facing introduction when these clarify and develop ideas supported by the sources. Do not invent concrete facts, quotations, scripture references, testimonies, doctrine, or claims that the sources do not support.
+  Write polished reader-facing book prose and remove live-audience language. Trust your editorial judgment about what the chapter needs instead of mechanically preserving transcript order or filling a predetermined premise.
 ${SCRIPTURE_FORMATTING_RULES}
 Return a complete ChapterDraft object. The sections must contain readable prose in the body field, not planning notes. ${responseLength.instruction}
 Do not expose source IDs, slot labels, retrieval markers, or internal routing labels in any field. Use standalone blockquotes for Scripture exactly as required above.`;
@@ -76,12 +75,10 @@ Write Chapter ${input.chapterNumber} based on this request: ${input.instruction}
 
 CURRENT MANUSCRIPT CHAPTER:
 ${manuscriptChapter}
+Treat this as optional background only. You may substantially reshape or replace its introduction, section bodies, and organization.
 
 TRANSCRIPT SOURCES:
 ${transcriptContext || "No transcript sources were uploaded. State that source material is insufficient in the chapter draft."}
-
-VETTING GUIDANCE TO IMPLEMENT:
-${input.vettingGuidance || "No prior vetting guidance was provided."}
 
 Return JSON only.`;
 
