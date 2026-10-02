@@ -22,7 +22,7 @@ type Mode = "ask" | "socratic" | "plan" | "draft" | "edit";
 type Persona = "editorial-coach" | "skeptical-reviewer" | "socratic-teacher" | "voice-guardian";
 type Message = { role: "user" | "assistant" | "system"; content: string };
 type Source = { id: string; label: string; excerpt: string };
-type PendingEdit = { instruction: string; summary: string; confidence?: "high" | "medium" | "low" };
+type PendingEdit = { instruction: string; summary: string; confidence?: "high" | "medium" | "low"; scope: "chapter" | "focused" };
 
 function cleanAssistantLine(line: string): string {
   return sanitizeNexusLMText(line);
@@ -63,6 +63,11 @@ function inferMode(instruction: string, selectedMode: Mode): Mode {
   if (/\b(vet|challenge|question|assumption|contradiction|weak|gap|skeptic|critique)\b/.test(text)) return "socratic";
   if (/\b(edit|rewrite|revise|enrich|expand|shorten|tighten|change|improve|fix)\b/.test(text)) return "edit";
   return selectedMode === "ask" ? "ask" : selectedMode;
+}
+
+function isChapterWideEdit(instruction: string): boolean {
+  return /\b(?:rewrite|edit|revise|fix|improve|correct|clean|polish|enrich|apply)\b[\s\S]{0,100}\bchapter\s+\d+\b|\bchapter\s+\d+\b[\s\S]{0,100}\b(?:rewrite|edit|revise|fix|improve|correct|clean|polish|enrich|apply)\b/i.test(instruction)
+    && !/\bsection\s+\d+[.\s-]+\d+\b/i.test(instruction);
 }
 
 function compactHistory(history: Message[]): Array<{ role: "user" | "assistant"; content: string }> {
@@ -308,7 +313,12 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
 
       if (activeMode === "edit") {
         if (!json.patch || !json.summary) throw new Error("NexusLM returned no editable proposal.");
-        setPendingEdit({ instruction, summary: json.summary, confidence: json.confidence });
+        setPendingEdit({
+          instruction,
+          summary: json.summary,
+          confidence: json.confidence,
+          scope: isChapterWideEdit(instruction) ? "chapter" : "focused",
+        });
         setMessages((current) => [...current, { role: "assistant", content: sanitizeNexusLMText(`Proposal ready for review: ${json.summary}`) }]);
         return;
       }
@@ -447,7 +457,9 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
                 <p className="mt-2 text-sm leading-6 text-amber-50">{pendingEdit.summary}</p>
                 <p className="mt-2 text-xs text-amber-200/70">Confidence: {pendingEdit.confidence ?? "high"}. Review the request before applying it.</p>
                 <div className="mt-3 flex gap-2">
-                  <button type="button" onClick={() => void applyPendingEdit()} disabled={loading} className="min-h-12 rounded-xl bg-amber-300 px-4 text-sm font-bold text-slate-950 disabled:opacity-40">Apply change</button>
+                  <button type="button" onClick={() => void applyPendingEdit()} disabled={loading} className="min-h-12 rounded-xl bg-amber-300 px-4 text-sm font-bold text-slate-950 disabled:opacity-40">
+                    {pendingEdit.scope === "chapter" ? "Apply all chapter fixes" : "Apply change"}
+                  </button>
                   <button type="button" onClick={() => setPendingEdit(null)} disabled={loading} className="min-h-12 rounded-xl border border-slate-700 px-4 text-sm font-semibold text-slate-300 disabled:opacity-40">Discard</button>
                 </div>
               </div>

@@ -19,7 +19,7 @@ export const NEXUSLM_RESPONSE_LENGTHS: Record<NexusLMResponseLength, {
     chatAskTokens: 1800,
     chatSocraticTokens: 4500,
     draftTokens: 14000,
-    editTokens: 6000,
+    editTokens: 10000,
     instruction: "Keep the response focused and concise. Include only the most important supported points.",
   },
   default: {
@@ -28,7 +28,7 @@ export const NEXUSLM_RESPONSE_LENGTHS: Record<NexusLMResponseLength, {
     chatAskTokens: 3000,
     chatSocraticTokens: 7500,
     draftTokens: 24000,
-    editTokens: 8000,
+    editTokens: 18000,
     instruction: "Give a balanced response with enough development to be useful without padding.",
   },
   longer: {
@@ -37,7 +37,7 @@ export const NEXUSLM_RESPONSE_LENGTHS: Record<NexusLMResponseLength, {
     chatAskTokens: 5200,
     chatSocraticTokens: 12000,
     draftTokens: 32000,
-    editTokens: 12000,
+    editTokens: 28000,
     instruction: "Develop the supported material fully. Do not omit relevant manuscript or transcript content merely to be brief.",
   },
 };

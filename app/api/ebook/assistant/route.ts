@@ -122,7 +122,7 @@ const EbookChangeSchema = z.object({
 
 export async function POST(req: NextRequest) {
   const body = await req.json() as unknown;
-  let input;
+  let input: z.infer<typeof RequestSchema>;
   try {
     input = RequestSchema.parse(body);
   } catch (err) {
@@ -180,9 +180,24 @@ export async function POST(req: NextRequest) {
     }
     return refs;
   }
+
+  function parseExplicitChapterRefs(text: string): Set<number> {
+    const chapters = new Set<number>();
+    const chapterWide = /\b(?:chapter|ch\.?)\s*(\d+)\b/gi;
+    let match: RegExpExecArray | null;
+    while ((match = chapterWide.exec(text)) !== null) {
+      chapters.add(Number(match[1]));
+    }
+    return chapters;
+  }
+
   // Gather refs from the full conversation so contextual follow-ups ("make it longer") work
   const historyText = (history ?? []).map((m) => m.content).join(" ");
   const explicitRefs = parseExplicitSectionRefs(instruction + " " + historyText);
+  const explicitChapters = parseExplicitChapterRefs(instruction + " " + historyText);
+  const isChapterWideEdit = explicitChapters.size > 0
+    && /\b(?:rewrite|edit|revise|fix|improve|correct|clean|polish|enrich|apply)\b[\s\S]{0,100}\b(?:chapter|ch\.?)\s*\d+\b|\b(?:chapter|ch\.?)\s*\d+\b[\s\S]{0,100}\b(?:rewrite|edit|revise|fix|improve|correct|clean|polish|enrich|apply)\b/i.test(instruction + " " + historyText)
+    && explicitRefs.size === 0;
 
   const transcriptTerms = (instruction + " " + historyText)
     .toLowerCase()
@@ -250,7 +265,8 @@ export async function POST(req: NextRequest) {
         const fullBody = s.body ?? "";
         const isExplicit = explicitRefs.has(`${ch.number}:${s.sectionNumber}`);
         // Explicit sections are always sent in full; others truncated only if they exceed 4000 chars
-        const isTruncated = !isExplicit && fullBody.length > 4000;
+        const isTargetedChapter = isChapterWideEdit && explicitChapters.has(ch.number);
+        const isTruncated = !isExplicit && !isTargetedChapter && fullBody.length > 4000;
         if (isTruncated) {
           truncatedSections.add(`${ch.number}:${s.sectionNumber}`);
         }
@@ -294,7 +310,16 @@ export async function POST(req: NextRequest) {
   }
 
   try {
-    const maxTokens = Math.min(calculateMaxTokens(input.manifest), responseLength.editTokens);
+    const baseMaxTokens = calculateMaxTokens(input.manifest);
+    const targetedChapterWords = isChapterWideEdit
+      ? manifest.chapters
+        .filter((chapter) => explicitChapters.has(chapter.number))
+        .reduce((sum, chapter) => sum + chapter.totalWordCount, 0)
+      : 0;
+    const chapterEditBudget = targetedChapterWords > 0
+      ? Math.ceil(targetedChapterWords * 2.2)
+      : baseMaxTokens;
+    const maxTokens = Math.min(Math.max(baseMaxTokens, chapterEditBudget), responseLength.editTokens);
     
     const { object } = await generateObject({
       model: selectedModel,
@@ -442,6 +467,7 @@ OUTPUT RULES
 - If chapters array is returned, include ALL chapters (changed and unchanged) with ALL their sections
 - If updatedSections is returned, include ONLY the changed sections — the client merges them by chapterNumber + sectionNumber
 - The body field in updatedSections MUST be the FULL rewritten prose — never truncate
+${isChapterWideEdit ? "- This is a chapter-wide edit. For each explicitly named chapter, review every section body and return every changed section in full under updatedSections. Do not return a full chapters array. Untargeted chapters must not be changed." : ""}
 - frontMatter: if returned, include ALL fields (preface, introduction, conclusion, aboutAuthor, resourcesList)
 - backMatter: if returned, include ONLY the changed sub-fields (glossary, readingGroupGuide, scriptureIndex, or recommendedResources); unchanged fields may be omitted
 - libraryPatch: if updating the published catalog, include the slug plus only the changed metadata fields
