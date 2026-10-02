@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
+import { stripScriptureMetadata } from "@/lib/scripture-verse";
 
 export const runtime = "nodejs";
 export const maxDuration = 15;
@@ -17,7 +18,7 @@ const BOLLS_CODE: Record<(typeof BOLLS_TRANSLATIONS)[number], string> = {
 };
 
 function stripHtml(s: string): string {
-  return s.replace(/<[^>]+>/g, "").replace(/\s+/g, " ").trim();
+  return stripScriptureMetadata(s.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim());
 }
 
 const BOOK_IDS: Record<string, number> = {

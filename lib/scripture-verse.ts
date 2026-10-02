@@ -60,7 +60,15 @@ function parseReference(reference: string): ParsedReference | null {
 }
 
 function stripHtml(value: string): string {
-  return value.replace(/<[^>]+>/g, "").replace(/\s+/g, " ").trim();
+  return stripScriptureMetadata(value.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim());
+}
+
+export function stripScriptureMetadata(value: string): string {
+  return value
+    .replace(/^\s*BOOK\s+[IVXLCDM]+(?:\s+Psalms?\s+\d+(?:[-–]\d+)?)?\s*\.{0,3}\s*/i, "")
+    .replace(/^\s*Psalms?\s+\d+\s*/i, "")
+    .replace(/^\s*For the director of music\.\s*(?:A\s+(?:maskil|psalm|song|hymn)\b[^.]*\.\s*)?/i, "")
+    .trim();
 }
 
 function canonicalReference(parsed: ParsedReference): string {
@@ -93,7 +101,7 @@ async function fetchFromBibleApi(reference: string, parsed: ParsedReference, tra
   if (!response.ok) return null;
   const data = await response.json() as { text?: string; error?: string };
   if (data.error || !data.text?.trim()) return null;
-  return { reference: canonicalReference(parsed), translation: translation.toUpperCase(), text: data.text.replace(/\n+/g, " ").trim() };
+  return { reference: canonicalReference(parsed), translation: translation.toUpperCase(), text: stripScriptureMetadata(data.text.replace(/\n+/g, " ").trim()) };
 }
 
 export async function fetchCanonicalScripture(reference: string, translation: string): Promise<CanonicalScripture | null> {
@@ -124,9 +132,14 @@ export async function completeScriptureBlockquotes(text: string): Promise<string
   const completed = await Promise.all(paragraphs.map(async (paragraph) => {
     const quote = parseMarkdownBlockquote(paragraph);
     if (!quote?.reference || !quote.translation || !/\d+:\d+/.test(quote.reference)) return paragraph;
+    const cleanedQuoteText = stripScriptureMetadata(quote.text);
     const canonical = await fetchCanonicalScripture(quote.reference, quote.translation);
-    if (!canonical) return paragraph;
-    if (comparableText(quote.text) === comparableText(canonical.text)) return paragraph;
+    if (!canonical) {
+      return cleanedQuoteText === quote.text
+        ? paragraph
+        : `> ${cleanedQuoteText}\n> ${formatScriptureReference(quote.reference, quote.translation)}`;
+    }
+    if (comparableText(cleanedQuoteText) === comparableText(canonical.text) && cleanedQuoteText === quote.text) return paragraph;
     return `> ${canonical.text}\n> ${formatScriptureReference(canonical.reference, canonical.translation)}`;
   }));
   return completed.join("\n\n");
