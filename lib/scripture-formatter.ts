@@ -31,7 +31,11 @@ export type ScriptureQuote = {
   translation?: string;
 };
 
-const BIBLE_BOOK_PATTERN = /\b(?:[1-3]\s+)?(?:genesis|exodus|leviticus|numbers|deuteronomy|joshua|judges|ruth|samuel|kings|chronicles|ezra|nehemiah|esther|job|psalms?|proverbs?|ecclesiastes|song of solomon|song of songs|isaiah|jeremiah|lamentations|ezekiel|daniel|hosea|joel|amos|obadiah|jonah|micah|nahum|habakkuk|zephaniah|haggai|zechariah|malachi|matthew|mark|luke|john|acts|romans|corinthians|galatians|ephesians|philippians|colossians|thessalonians|timothy|titus|philemon|hebrews|james|peter|jude|revelation)\s+\d+:\d+/i;
+const BIBLE_BOOK_NAME_SOURCE = "(?:[1-3]\\s+)?(?:genesis|exodus|leviticus|numbers|deuteronomy|joshua|judges|ruth|samuel|kings|chronicles|ezra|nehemiah|esther|job|psalms?|proverbs?|ecclesiastes|song of solomon|song of songs|isaiah|jeremiah|lamentations|ezekiel|daniel|hosea|joel|amos|obadiah|jonah|micah|nahum|habakkuk|zephaniah|haggai|zechariah|malachi|matthew|mark|luke|john|acts|romans|corinthians|galatians|ephesians|philippians|colossians|thessalonians|timothy|titus|philemon|hebrews|james|peter|jude|revelation)";
+const BIBLE_BOOK_PATTERN = new RegExp(`\\b${BIBLE_BOOK_NAME_SOURCE}\\s+\\d+:\\d+`, "i");
+const SCRIPTURE_CITATION_RE = new RegExp(`^(${BIBLE_BOOK_NAME_SOURCE}\\s+\\d+:\\d+(?:[-–]\\d+)?)(?:\\s+([A-Za-z][A-Za-z0-9-]*))?$`, "i");
+const SCRIPTURE_REFERENCE_LINE_RE = new RegExp(`^[-—–]?\\s*${BIBLE_BOOK_NAME_SOURCE}\\s+\\d+:\\d+(?:[-–]\\d+)?(?:\\s*\\([^)]+\\))?(?:\\s+[A-Za-z][A-Za-z0-9-]*)?$`, "i");
+const INLINE_SCRIPTURE_RE = new RegExp(`(["“])([^"”\\n]{3,})["”]\\s*(?:[—–-]\\s*)?(?:\\(([^)]+)\\)|(${BIBLE_BOOK_NAME_SOURCE}\\s+\\d+:\\d+(?:[-–]\\d+)?)(?:\\s*\\(([^)]+)\\))?)`, "gi");
 
 /**
  * Parse a markdown blockquote paragraph (lines starting with '> ') into
@@ -118,6 +122,57 @@ export function containsScripture(text: string): boolean {
   return BIBLE_BOOK_PATTERN.test(text);
 }
 
+function citationParts(rawCitation: string, trailingTranslation?: string): { reference: string; translation?: string } {
+  const parsed = rawCitation.trim().match(SCRIPTURE_CITATION_RE);
+  if (!parsed) return { reference: rawCitation.trim(), translation: trailingTranslation?.trim() || undefined };
+  return { reference: parsed[1], translation: trailingTranslation?.trim() || parsed[2] || undefined };
+}
+
+function normalizeReferenceLine(line: string): string {
+  const cleaned = line.replace(/^>\s*/, "").replace(/^[-—–]\s*/, "").trim();
+  const citationMatch = cleaned.match(new RegExp(`^(${BIBLE_BOOK_NAME_SOURCE}\\s+\\d+:\\d+(?:[-–]\\d+)?)(?:\\s*\\(([^)]+)\\))?(?:\\s+([A-Za-z][A-Za-z0-9-]*))?$`, "i"));
+  if (!citationMatch) return `> ${cleaned}`;
+  return `> ${formatScriptureReference(citationMatch[1], citationMatch[2] || citationMatch[3])}`;
+}
+
+function normalizeInlineScripture(text: string): string {
+  INLINE_SCRIPTURE_RE.lastIndex = 0;
+  let match: RegExpExecArray | null;
+  let cursor = 0;
+  const parts: string[] = [];
+
+  while ((match = INLINE_SCRIPTURE_RE.exec(text))) {
+    const lead = text.slice(cursor, match.index).trim();
+    if (lead) parts.push(`${lead.replace(/[,:;]\s*$/, "")}:`);
+    const citation = citationParts(match[3] || match[4] || "", match[5]);
+    parts.push(`> ${match[2].trim()}\n> ${formatScriptureReference(citation.reference, citation.translation)}`);
+    cursor = match.index + match[0].length;
+  }
+
+  if (parts.length === 0) return text;
+  const trailing = text.slice(cursor).replace(/^\s*[,.;!?]\s*/, "").trim();
+  if (trailing) parts.push(trailing);
+  return parts.join("\n\n");
+}
+
+function normalizeBlockquote(paragraph: string): string {
+  const lines = paragraph.split("\n").map((line) => line.replace(/^>\s?/, "").trim()).filter(Boolean);
+  const referenceIndex = lines.findIndex((line) => SCRIPTURE_REFERENCE_LINE_RE.test(line));
+  if (referenceIndex < 0) return normalizeInlineScripture(paragraph);
+
+  const verseLines = lines.slice(0, referenceIndex).map((line) => `> ${line}`);
+  return [...verseLines, normalizeReferenceLine(lines[referenceIndex])].join("\n");
+}
+
+export function normalizeScriptureBlockquotes(text: string): string {
+  return text
+    .split(/\n{2,}/)
+    .map((paragraph) => paragraph.trim())
+    .filter(Boolean)
+    .map((paragraph) => paragraph.startsWith(">") ? normalizeBlockquote(paragraph) : normalizeInlineScripture(paragraph))
+    .join("\n\n");
+}
+
 /**
  * Canonical prompt text for scripture formatting rules.
  * SINGLE SOURCE OF TRUTH — every route that generates or rewrites scripture
@@ -191,61 +246,3 @@ PLACEMENT AND SEQUENCING:
 • Quote each scripture in full ONCE per section. Every subsequent reference to that same passage uses shorthand only: "As Jesus said in John 15:5..." — never reprint the verse text again.
 • Never add biblical background (historical setting, authorial intent, cultural or manuscript context) unless the source explicitly stated it.
 • Every scripture must complete TEXT → TRUTH → APPLICATION within 2–3 paragraphs of the quotation.`;
-
-/**
- * Validate that scripture formatting follows the blockquote-only, 3-part pattern rule.
- * Returns violations found in the prose.
- */
-export function validateScriptureFormatting(prose: string): {
-  violations: string[];
-  hasInlineQuotes: boolean;
-  hasMissingApplications: boolean;
-  hasMissingColons: boolean;
-} {
-  const violations: string[] = [];
-  
-  // Detect inline scripture quotes (should be blockquotes only)
-  const inlineQuotePattern = /\*"[^"]+"\*\s*\([^)]*\d+:\d+[^)]*\)/gi;
-  const hasInlineQuotes = inlineQuotePattern.test(prose);
-  if (hasInlineQuotes) {
-    violations.push("Inline scripture quotes detected — all verses must be blockquotes");
-  }
-
-  // Detect scripture without preceding colon intro
-  const scriptureLinePattern = /^>\s*.+$/gm;
-  const scriptureMatches = prose.match(scriptureLinePattern) || [];
-  
-  for (const match of scriptureMatches) {
-    const lineIdx = prose.indexOf(match);
-    if (lineIdx > 0) {
-      const beforeText = prose.substring(Math.max(0, lineIdx - 100), lineIdx);
-      // Check if there's a colon immediately before the blockquote
-      if (!beforeText.match(/:[\n\s]*$/)) {
-        violations.push("Blockquote scripture found without introduction sentence ending in colon");
-      }
-    }
-  }
-
-  // Detect missing application paragraphs after scriptures
-  const blockquotePattern = /^>\s*[\s\S]*?^>\s*—.*$/gm;
-  const blockquotes = prose.match(blockquotePattern) || [];
-  const hasMissingApplications = blockquotes.length > 0 && prose.split("\n\n").length < blockquotes.length * 2;
-  
-  if (hasMissingApplications) {
-    violations.push("Scripture blockquote(s) detected without clear application paragraph following");
-  }
-
-  // Detect colon-less introductions before blockquotes
-  const colonIntroPattern = /[^:]\n\n^>/m;
-  const hasMissingColons = colonIntroPattern.test(prose);
-  if (hasMissingColons) {
-    violations.push("Blockquote found after paragraph not ending with colon");
-  }
-
-  return {
-    violations,
-    hasInlineQuotes,
-    hasMissingApplications,
-    hasMissingColons,
-  };
-}
