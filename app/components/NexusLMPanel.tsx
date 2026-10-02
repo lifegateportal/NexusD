@@ -22,7 +22,7 @@ type Mode = "ask" | "socratic" | "plan" | "draft" | "edit";
 type Persona = "editorial-coach" | "skeptical-reviewer" | "socratic-teacher" | "voice-guardian";
 type Message = { role: "user" | "assistant" | "system"; content: string };
 type Source = { id: string; label: string; excerpt: string };
-type PendingEdit = { instruction: string; summary: string; confidence?: "high" | "medium" | "low"; scope: "chapter" | "focused" };
+type PendingEdit = { instruction: string; summary: string; confidence?: "high" | "medium" | "low"; scope: "chapter" | "focused"; transcriptLabel?: string };
 
 function cleanAssistantLine(line: string): string {
   return sanitizeNexusLMText(line);
@@ -301,6 +301,7 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
           pipeline: pipelineSnapshot ?? undefined,
           manifestVersion: (manifest as Record<string, unknown>).__version as string | undefined,
           transcriptSources: transcripts,
+          selectedTranscriptLabel: selectedTranscript?.label,
           dryRun: requestMode !== "edit",
         }),
       });
@@ -318,6 +319,7 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
           summary: json.summary,
           confidence: json.confidence,
           scope: isChapterWideEdit(instruction) ? "chapter" : "focused",
+          transcriptLabel: selectedTranscript?.label,
         });
         setMessages((current) => [...current, { role: "assistant", content: sanitizeNexusLMText(`Proposal ready for review: ${json.summary}`) }]);
         return;
@@ -393,6 +395,7 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
           pipeline: pipelineSnapshot ?? undefined,
           manifestVersion: (manifest as Record<string, unknown>).__version as string | undefined,
           transcriptSources: transcripts,
+          selectedTranscriptLabel: pendingEdit.transcriptLabel,
           dryRun: false,
         }),
       });

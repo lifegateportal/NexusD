@@ -41,6 +41,7 @@ const RequestSchema = z.object({
   responseLength: NexusLMResponseLengthSchema.default("default"),
   llmTemperature: z.number().min(0).max(1).optional(),
   transcriptSources: z.array(TranscriptSourceSchema).max(20).optional(),
+  selectedTranscriptLabel: z.string().min(1).max(200).optional(),
   dryRun: z.boolean().optional(),
   manifestVersion: z.string().optional(),
   pipeline: z.object({
@@ -203,7 +204,18 @@ export async function POST(req: NextRequest) {
     .toLowerCase()
     .split(/[^a-z0-9']+/)
     .filter((term) => term.length > 2);
-  const transcriptEvidence = (input.transcriptSources ?? [])
+  const selectedTranscript = input.selectedTranscriptLabel
+    ? (input.transcriptSources ?? []).find((source) => source.label === input.selectedTranscriptLabel)
+    : undefined;
+  if (input.selectedTranscriptLabel && !selectedTranscript) {
+    return NextResponse.json(
+      { error: `The selected transcript slot "${input.selectedTranscriptLabel}" was not included in the edit request.` },
+      { status: 400 }
+    );
+  }
+
+  const rankedTranscriptEvidence = (input.transcriptSources ?? [])
+    .filter((source) => source.label !== input.selectedTranscriptLabel)
     .flatMap((source) => source.text.split(/\n\s*\n/).map((excerpt) => ({ label: source.label, excerpt: excerpt.trim() })))
     .filter((source) => source.excerpt.length > 80)
     .map((source) => ({
@@ -214,6 +226,12 @@ export async function POST(req: NextRequest) {
     .slice(0, 8)
     .map((source, index) => `[T${index + 1} | ${source.label}]\n${source.excerpt.slice(0, 2200)}`)
     .join("\n\n---\n\n");
+  const transcriptEvidence = [
+    selectedTranscript
+      ? `COMPLETE SELECTED TRANSCRIPT SLOT | ${selectedTranscript.label}\n${selectedTranscript.text}`
+      : "",
+    rankedTranscriptEvidence,
+  ].filter(Boolean).join("\n\n---\n\n");
 
   // Detect structural / high-reasoning operations that benefit from R1:
   // Structural: reorder/move/merge/split/add/remove chapters or sections
