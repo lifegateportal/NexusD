@@ -6,6 +6,7 @@ import { WriteSectionRequestSchema } from "@/lib/schemas/ebook";
 import { PREMIUM_BOOK_STYLE_RULES, PROSE_MASTERY_RULES, READER_NORMALIZATION_RULES, SOURCE_LOCK_RULES } from "@/lib/editorial-style-bible";
 import { stripAudienceLanguage } from "@/lib/editorial-style-bible";
 import { SCRIPTURE_FORMATTING_RULES } from "@/lib/scripture-formatter";
+import { completeScriptureBlockquotes } from "@/lib/scripture-verse";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
@@ -929,7 +930,7 @@ ${isAbsoluteFirstSection ? "" : "\nTRANSITIONAL OPENING: Open with \"Having seen
       console.warn("[write-section] Line Editor polish failed, proceeding with base draft.", err);
     }
 
-    const body = stripAudienceLanguage(normalizeReaderFacingProse(rawBody));
+    const body = await completeScriptureBlockquotes(stripAudienceLanguage(normalizeReaderFacingProse(rawBody)));
     
     // ── Upgrade 8: Passive voice detection ───────────────────────────────
     const passiveHits = detectPassiveVoice(body);
@@ -951,7 +952,7 @@ ${isAbsoluteFirstSection ? "" : "\nTRANSITIONAL OPENING: Open with \"Having seen
         sequenceBreakCount,
       };
     } catch (err) {
-      const fallbackBody = stripAudienceLanguage(normalizeReaderFacingProse(await fallbackSectionBody(assignment)));
+      const fallbackBody = await completeScriptureBlockquotes(stripAudienceLanguage(normalizeReaderFacingProse(await fallbackSectionBody(assignment))));
       return {
         body: fallbackBody,
         claimLedger: [],
