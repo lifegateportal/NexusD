@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { generateText } from "ai";
 import { z } from "zod";
 import { deepSeekModel, deepSeekReasonerModel } from "@/lib/ai-providers";
+import { EM_DASH_MINIMIZATION_RULES } from "@/lib/editorial-style-bible";
 import { ChapterDraftSchema, FrontBackMatterSchema } from "@/lib/schemas/ebook";
 import { NexusLMWritingStyleSchema, NEXUSLM_WRITING_STYLES } from "@/lib/nexuslm-writing-styles";
 import { NexusLMAgentSchema } from "@/lib/nexuslm-agents";
@@ -208,6 +209,7 @@ The book is "${input.book.title}".
 The requested presentation form is ${writingStyle.label}: ${writingStyle.instruction}
     The written manuscript is the primary audit target. Use the supplied WRITTEN MANUSCRIPT EXCERPTS to assess what the book actually says, demonstrates, defines, and sequences. Use transcript excerpts only as supporting provenance for the author's underlying teaching. Use the sources for grounding, but never expose source IDs, slot labels, bracketed retrieval markers, or internal routing labels in the final answer. If the supplied excerpts do not support an answer, say so. Do not fabricate quotations.
   ${modeInstruction}
+  ${EM_DASH_MINIMIZATION_RULES}
   ${SCRIPTURE_FORMATTING_RULES}`,
       prompt: `RESPONSE LENGTH: ${responseLength.label}. ${responseLength.instruction}
 

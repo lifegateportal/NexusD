@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { generateObject, generateText } from "ai";
 import { z } from "zod";
-import { DIRECT_CHAPTER_WRITING_RULES, READER_NORMALIZATION_RULES, SOURCE_LOCK_RULES } from "@/lib/editorial-style-bible";
+import { DIRECT_CHAPTER_WRITING_RULES, EM_DASH_MINIMIZATION_RULES, READER_NORMALIZATION_RULES, SOURCE_LOCK_RULES } from "@/lib/editorial-style-bible";
 import { normalizeScriptureBlockquotes, SCRIPTURE_FORMATTING_RULES } from "@/lib/scripture-formatter";
 import { getEbookModel, getEbookTemperature } from "@/lib/ebook-model-selector";
 import { completeScriptureBlockquotes } from "@/lib/scripture-verse";
@@ -409,6 +409,8 @@ ${DIRECT_CHAPTER_WRITING_RULES}
 ${SOURCE_LOCK_RULES}
 
 ${READER_NORMALIZATION_RULES}
+
+${EM_DASH_MINIMIZATION_RULES}
 
 NARRATIVE VOICE HARD BAN:
 - Never describe the source from outside the book with phrases such as "the speaker said," "the author said," "the preacher said," "the message says," or "in this sermon/message."

@@ -22,6 +22,12 @@ export const PROSE_MASTERY_RULES = `PROSE MASTERY — THREE CORE PRINCIPLES:
 
 3. TRUST THE READER: No explanatory padding ("This means that...", "In other words..."). Land images and points directly. Vary sentence length and paragraph structure deliberately. Use active verbs. Polish for rhythm and clarity.`;
 
+export const EM_DASH_MINIMIZATION_RULES = `EM-DASH MINIMIZATION — FINAL OUTPUT CHECK:
+- Use zero em dashes in prose sentences whenever possible. The only routine em dash allowed in finished book content is the one immediately before a Scripture citation line: "— Book Chapter:Verse (Translation)".
+- Do not carry em dashes from the transcript into rewritten prose. Replace them with a comma, colon, semicolon, subordinate clause, or two strong sentences.
+- Never use spaced em dashes, unspaced em dashes, or double hyphens (--) as em dashes in prose.
+- Before returning output, scan every title, heading, paragraph, takeaway, question, and transition. Rewrite each prose em dash and preserve only Scripture citation em dashes.`;
+
 export const PREMIUM_BOOK_STYLE_RULES = `PREMIUM BOOK STYLE STANDARDS:
 
 
@@ -34,11 +40,7 @@ You have full creative authority over sentence structure, word choice, rhythm, r
 - The CONTENT (every idea, argument, story, claim, and fact) is locked to the transcript. The PRESENTATION is yours. These are separate decisions. Never confuse them.
 - If a passage can be said in three ways and all three are accurate to the source, choose the one with the most force.
 
-EM DASH BAN (absolute in prose — one sanctioned exception):
-- Never use an em dash (—) for any purpose in prose sentences.
-- Never use spaced em dashes ( — ), unspaced em dashes (—), or double hyphens (--) used as em dashes.
-- Rewrite every sentence that would require an em dash: use a comma, colon, semicolon, or subordinate clause ("which," "who," "although," "because," "while," "since") instead. Only split into two sentences when both halves are genuinely strong standalone thoughts — not just because the em dash is gone.
-- THE ONE EXCEPTION: the em dash preceding a scripture reference line ("— Book Chapter:Verse") is a bibliographic citation mark, not prose, and is required there. See SCRIPTURE FORMATTING rules.
+${EM_DASH_MINIMIZATION_RULES}
 
 PARAGRAPH CRAFT:
 - No paragraph should exceed 5 sentences. Short paragraphs (1–2 sentences) are not weakness; they are emphasis.
