@@ -4,6 +4,7 @@ import { z } from "zod";
 import { deepSeekModel, deepSeekReasonerModel } from "@/lib/ai-providers";
 import { ChapterDraftSchema } from "@/lib/schemas/ebook";
 import { normalizeScriptureBlockquotes, SCRIPTURE_FORMATTING_RULES } from "@/lib/scripture-formatter";
+import { completeScriptureBlockquotes } from "@/lib/scripture-verse";
 import { NexusLMWritingStyleSchema, NEXUSLM_WRITING_STYLES } from "@/lib/nexuslm-writing-styles";
 import { NexusLMAgentSchema } from "@/lib/nexuslm-agents";
 import { NexusLMResponseLengthSchema, NEXUSLM_RESPONSE_LENGTHS, sanitizeNexusLMText } from "@/lib/nexuslm-response";
@@ -95,8 +96,8 @@ Return JSON only.`;
       system,
       prompt,
     });
-    let sections = object.sections.map((section, index) => {
-      const body = normalizeScriptureBlockquotes(sanitizeNexusLMText(section.body.trim()));
+    let sections = await Promise.all(object.sections.map(async (section, index) => {
+      const body = await completeScriptureBlockquotes(normalizeScriptureBlockquotes(sanitizeNexusLMText(section.body.trim())));
       return {
         chapterNumber: input.chapterNumber,
         sectionNumber: section.sectionNumber || index + 1,
@@ -105,20 +106,23 @@ Return JSON only.`;
         wordCount: section.wordCount > 0 ? section.wordCount : body.split(/\s+/).filter(Boolean).length,
         status: "complete" as const,
       };
-    });
+    }));
     if (sections.length === 0 || sections.every((section) => !section.body.trim())) {
       throw new Error("The selected model returned no usable chapter sections.");
     }
+    const completeText = (value: string) => completeScriptureBlockquotes(
+      normalizeScriptureBlockquotes(sanitizeNexusLMText(value))
+    );
     const normalizedCandidate = {
       ...object,
       number: input.chapterNumber,
       title: sanitizeNexusLMText(object.title.trim()) || `Chapter ${input.chapterNumber}`,
       intro: "",
-      epigraph: normalizeScriptureBlockquotes(sanitizeNexusLMText(object.epigraph.trim())),
+      epigraph: await completeText(object.epigraph.trim()),
       sections,
-      forwardQuestion: normalizeScriptureBlockquotes(sanitizeNexusLMText(object.forwardQuestion.trim())),
-      keyTakeaways: object.keyTakeaways.map((value) => normalizeScriptureBlockquotes(sanitizeNexusLMText(String(value)))),
-      reflectionQuestions: object.reflectionQuestions.map((value) => normalizeScriptureBlockquotes(sanitizeNexusLMText(String(value)))),
+      forwardQuestion: await completeText(object.forwardQuestion.trim()),
+      keyTakeaways: await Promise.all(object.keyTakeaways.map((value) => completeText(String(value)))),
+      reflectionQuestions: await Promise.all(object.reflectionQuestions.map((value) => completeText(String(value)))),
       totalWordCount: sections.reduce((sum, section) => sum + section.wordCount, 0),
       status: "complete" as const,
     };

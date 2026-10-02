@@ -6,7 +6,8 @@ import { ChapterDraftSchema, FrontBackMatterSchema } from "@/lib/schemas/ebook";
 import { NexusLMWritingStyleSchema, NEXUSLM_WRITING_STYLES } from "@/lib/nexuslm-writing-styles";
 import { NexusLMAgentSchema } from "@/lib/nexuslm-agents";
 import { NexusLMResponseLengthSchema, NEXUSLM_RESPONSE_LENGTHS, sanitizeNexusLMText } from "@/lib/nexuslm-response";
-import { SCRIPTURE_FORMATTING_RULES } from "@/lib/scripture-formatter";
+import { normalizeScriptureBlockquotes, SCRIPTURE_FORMATTING_RULES } from "@/lib/scripture-formatter";
+import { completeScriptureBlockquotes } from "@/lib/scripture-verse";
 
 export const runtime = "nodejs";
 export const maxDuration = 90;
@@ -220,7 +221,7 @@ CHAPTER OUTLINE:\n${chapterContext || "No chapter outline available."}\n\nTRANSC
     });
     if (!text.trim()) throw new Error("The selected model returned an empty response.");
 
-    const answer = sanitizeNexusLMText(text);
+    const answer = await completeScriptureBlockquotes(normalizeScriptureBlockquotes(sanitizeNexusLMText(text)));
     if (!answer) {
       return NextResponse.json({ error: "The reasoning model returned no final vetting response. Please try again." }, { status: 502 });
     }

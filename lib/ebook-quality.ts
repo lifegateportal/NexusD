@@ -1,8 +1,9 @@
 import type { ChapterDraft, ContentMap, FrontBackMatter } from "@/lib/schemas/ebook";
 import { NON_BOOK_CUE_RE } from "@/lib/editorial-style-bible";
+import { normalizeScriptureBlockquotes, parseMarkdownBlockquote } from "@/lib/scripture-formatter";
 
 export type QualityIssue = {
-  code: "AUDIENCE_LANGUAGE" | "LOW_CONTENT_OVERLAP" | "SHORT_SECTION" | "EMPTY_FRONTMATTER" | "REDUNDANT_RECAP" | "EM_DASH_FOUND" | "AI_SIGNATURE_WORD" | "PASSIVE_VOICE_HIGH" | "THEMATIC_DRIFT" | "ORPHAN_PARAGRAPH" | "SAME_OPENER_RUN";
+  code: "AUDIENCE_LANGUAGE" | "LOW_CONTENT_OVERLAP" | "SHORT_SECTION" | "EMPTY_FRONTMATTER" | "REDUNDANT_RECAP" | "EM_DASH_FOUND" | "AI_SIGNATURE_WORD" | "PASSIVE_VOICE_HIGH" | "THEMATIC_DRIFT" | "ORPHAN_PARAGRAPH" | "SAME_OPENER_RUN" | "INCOMPLETE_SCRIPTURE_QUOTE";
   severity: "warn" | "error";
   message: string;
 };
@@ -80,6 +81,50 @@ function normalizeRecapSentence(input: string): string {
     .trim();
 }
 
+function normalizeScriptureText(input: string): string {
+  return input
+    .toLowerCase()
+    .replace(/[’']/g, "")
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
+function findIncompleteScriptureQuotes(chapters: ChapterDraft[], contentMap: ContentMap): Array<{ chapterNumber: number; sectionNumber: number | null; reference: string }> {
+  const sourceQuotes = (contentMap.allQuotes ?? [])
+    .filter((quote) => quote.type === "scripture" && quote.reference.trim() && quote.text.trim())
+    .map((quote) => ({
+      reference: quote.reference.trim().toLowerCase().replace(/[–-]/g, "-"),
+      text: normalizeScriptureText(quote.text),
+    }));
+  if (sourceQuotes.length === 0) return [];
+
+  const findings: Array<{ chapterNumber: number; sectionNumber: number | null; reference: string }> = [];
+  for (const chapter of chapters) {
+    const fields: Array<{ text: string; sectionNumber: number | null }> = [
+      { text: chapter.epigraph, sectionNumber: null },
+      ...chapter.sections.map((section) => ({ text: section.body ?? "", sectionNumber: section.sectionNumber })),
+      { text: chapter.forwardQuestion, sectionNumber: null },
+      ...chapter.keyTakeaways.map((text) => ({ text, sectionNumber: null })),
+      ...chapter.reflectionQuestions.map((text) => ({ text, sectionNumber: null })),
+    ];
+    for (const field of fields) {
+      const normalized = normalizeScriptureBlockquotes(field.text ?? "");
+      for (const paragraph of normalized.split(/\n{2,}/).filter(Boolean)) {
+        const quote = parseMarkdownBlockquote(paragraph);
+        if (!quote?.reference || !quote.text.trim()) continue;
+        const reference = quote.reference.toLowerCase().replace(/[–-]/g, "-");
+        const candidate = normalizeScriptureText(quote.text);
+        const source = sourceQuotes.find((item) => item.reference === reference);
+        if (!source || candidate.length >= source.text.length) continue;
+        if (source.text.includes(candidate) || /(?:\.\s*){3}|\.\.\./.test(quote.text)) {
+          findings.push({ chapterNumber: chapter.number, sectionNumber: field.sectionNumber, reference: quote.reference });
+        }
+      }
+    }
+  }
+  return findings;
+}
+
 export function evaluateBookQuality(input: {
   chapters: ChapterDraft[];
   contentMap: ContentMap;
@@ -87,6 +132,15 @@ export function evaluateBookQuality(input: {
 }): QualityReport {
   const issues: QualityIssue[] = [];
   let score = 100;
+
+  for (const finding of findIncompleteScriptureQuotes(input.chapters, input.contentMap)) {
+    issues.push({
+      code: "INCOMPLETE_SCRIPTURE_QUOTE",
+      severity: "error",
+      message: `Chapter ${finding.chapterNumber}${finding.sectionNumber === null ? "" : ` section ${finding.sectionNumber}`} contains a partial direct Scripture quotation for ${finding.reference}; restore the complete cited verse or range before export.`,
+    });
+    score -= 10;
+  }
 
   const sourceCorpus = input.contentMap.segments.map((s) => s.rawText).join("\n\n");
   const sourceTokens = tokenize(sourceCorpus);

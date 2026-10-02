@@ -234,9 +234,15 @@ SCRIPTURE DETECTION & CLEANUP:
 • Normalize translation names: MSG → Message, msg → Message, "new international" → NIV
 
 VERBATIM ACCURACY — ABSOLUTE:
-• Reproduce scripture EXACTLY as quoted in the source: exact wording, exact punctuation, exact capitalization. Never paraphrase, modernize, silently correct, or smooth a verse's wording.
+• When the source provides a complete quotation, reproduce scripture EXACTLY as quoted: exact wording, exact punctuation, exact capitalization. Never paraphrase, modernize, silently correct, or smooth a verse's wording.
 • If the source omits words mid-verse, mark the omission with a spaced ellipsis: " . . . " (three spaced periods; four when the omission follows a sentence-ending period). Never use an unspaced "...".
 • Use curly quotation marks only ("..." not straight "..."), with single curly quotes for a quotation nested inside the verse text ('...').
+
+FULL-PASSAGE QUOTING — NEXUSLM REQUIREMENT:
+• A direct quotation cited as a single verse or contiguous range MUST reproduce the complete cited verse or range. Never attach a full reference to only a clause or sentence fragment.
+• Do not use an ellipsis to shorten a single-verse or contiguous-range quotation in NexusLM output. Resolve the complete text from the stated translation before returning it.
+• If the stated translation cannot be verified, do not silently fill gaps from another translation and do not present a partial quotation as complete. State that the quotation needs verification or use a citation-only reference.
+• Apply this procedure in order: identify the reference, identify the translation, obtain the canonical passage, compare the draft text, then replace any partial text with the complete canonical passage before delivery.
 
 PLACEMENT AND SEQUENCING:
 • INTRODUCTION SENTENCE + BLOCKQUOTE + APPLICATION: Every scripture must follow this 3-part pattern.
