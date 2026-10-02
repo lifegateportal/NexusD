@@ -105,6 +105,26 @@ const BackMatterPatchSchema = z.object({
   recommendedResources: z.array(z.string()).optional(),
 });
 
+const SectionContentSchema = z.object({
+  heading: z.string().min(1),
+  body: z.string().min(1),
+});
+
+const SectionOperationSchema = z.discriminatedUnion("operation", [
+  z.object({
+    operation: z.literal("insert"),
+    chapterNumber: z.number().int().min(1),
+    afterSectionNumber: z.number().int().min(0),
+    section: SectionContentSchema,
+  }),
+  z.object({
+    operation: z.literal("split"),
+    chapterNumber: z.number().int().min(1),
+    sectionNumber: z.number().int().min(1),
+    sections: z.array(SectionContentSchema).min(2).max(4),
+  }),
+]);
+
 // The agent returns only what changed — undefined fields = no change
 const EbookChangeSchema = z.object({
   bookTitle:     z.string().optional(),
@@ -115,6 +135,7 @@ const EbookChangeSchema = z.object({
   chapters:      z.array(ChapterDraftSchema).optional(),     // ONLY for section reorders / full restructures
   chapterPatches: z.array(ChapterPatchSchema).optional(),    // preferred for chapter-level field edits
   updatedSections: z.array(SectionDraftSchema).optional(),   // targeted section edits
+  sectionOperations: z.array(SectionOperationSchema).optional(), // insert or split sections
   libraryPatch:  LibraryPatchSchema.optional(),              // update the published catalog entry metadata
   confidence: z.enum(["high", "medium", "low"]).default("high"), // AI's self-assessed certainty
   clarificationNeeded: z.string().optional(), // question to surface when confidence is low
@@ -238,7 +259,7 @@ export async function POST(req: NextRequest) {
   // Book-wide: operations touching every chapter simultaneously
   // Quality-fix: resolving a failed quality report across the manuscript
   // Back matter generation: building glossary/scripture index from scratch
-  const isStructuralOp = /\b(reorder\s+chapter|move\s+(?:chapter|section)|merge\s+chapter|split\s+chapter|add\s+a?\s*chapter|remove\s+chapter|delete\s+chapter|restructure|reorganize|rearrange\s+chapter|add\s+a?\s*section|swap\s+chapter|fix\s+all|remove\s+all|add\s+(?:takeaways|questions|conclusions?)\s+to\s+all|book[- ]wide|across\s+all\s+chapters|every\s+chapter|fix\s+(?:the\s+)?(?:quality|issues?|errors?|problems?)|resolve\s+(?:quality|issues?)|build\s+(?:the\s+)?(?:glossary|scripture\s+index|back\s+matter|reading\s+guide)|generate\s+(?:the\s+)?(?:glossary|scripture\s+index|back\s+matter)|create\s+(?:the\s+)?(?:glossary|scripture\s+index|back\s+matter))\b/i.test(instruction);
+  const isStructuralOp = /\b(reorder\s+chapter|move\s+(?:chapter|section)|merge\s+chapter|split\s+(?:chapter|section)|add\s+(?:a\s+)?(?:new\s+)?chapter|remove\s+chapter|delete\s+chapter|restructure|reorganize|rearrange\s+chapter|(?:add|create|insert)\s+(?:a\s+)?(?:new\s+)?section|swap\s+chapter|fix\s+all|remove\s+all|add\s+(?:takeaways|questions|conclusions?)\s+to\s+all|book[- ]wide|across\s+all\s+chapters|every\s+chapter|fix\s+(?:the\s+)?(?:quality|issues?|errors?|problems?)|resolve\s+(?:quality|issues?)|build\s+(?:the\s+)?(?:glossary|scripture\s+index|back\s+matter|reading\s+guide)|generate\s+(?:the\s+)?(?:glossary|scripture\s+index|back\s+matter)|create\s+(?:the\s+)?(?:glossary|scripture\s+index|back\s+matter))\b/i.test(instruction);
   const selectedModel = isStructuralOp ? deepSeekReasonerModel : deepSeekModel;
 
   // Track which sections are truncated so we can restore original content if the AI loses words
@@ -404,6 +425,12 @@ NATURAL LANGUAGE MAPPINGS — interpret these colloquial phrases correctly
 "move section X to chapter Y" / "transfer section X" / "section X belongs in chapter Y"
   → chapters array restructure: remove from source chapter, add to target chapter
 
+"add a new section to chapter N" / "insert section N.M" / "create a new section"
+  → sectionOperations: [{operation:"insert", chapterNumber:N, afterSectionNumber:M-1, section:{heading:"...", body:"FULL SOURCE-GROUNDED BODY"}}]
+
+"split section N.M" / "separate the condensed section" / "divide this section into two"
+  → sectionOperations: [{operation:"split", chapterNumber:N, sectionNumber:M, sections:[{heading:"...", body:"FULL BODY"},{heading:"...", body:"FULL BODY"}]}]
+
 "chapter X needs reflection questions" / "add questions at the end of chapter X"
   → chapterPatches: reflectionQuestions for that chapter
 
@@ -460,6 +487,13 @@ SECTION OPERATIONS — return only changed sections via updatedSections:
   "fix the tone in section N.M"       → updatedSections with tone adjusted, same content
   "remove audience language from section N.M" → updatedSections with congregation/live-event language removed
 
+STRUCTURAL SECTION OPERATIONS — use sectionOperations, never updatedSections, when the section count or positions change:
+  "add/create/insert a new section" → one insert operation with chapterNumber, afterSectionNumber, and a complete heading/body section
+  "split section N.M" → one split operation with the existing section reference and two or more complete replacement sections
+  For insert, afterSectionNumber is the existing section immediately before the new section. Use 0 to insert at the beginning.
+  For split, return complete bodies for every replacement section. The server renumbers the replacement sections and all later sections.
+  Do not invent a section number for an insert and do not use a decimal section number. Do not use updatedSections for a section that does not already exist.
+
 BOOK-WIDE OPERATIONS:
   "fix all live-audience language"    → updatedSections for every section that contains crowd language
   "remove all greeting/crowd phrases" → updatedSections for affected sections only
@@ -485,6 +519,8 @@ OUTPUT RULES
 - If chapters array is returned, include ALL chapters (changed and unchanged) with ALL their sections
 - If updatedSections is returned, include ONLY the changed sections — the client merges them by chapterNumber + sectionNumber
 - The body field in updatedSections MUST be the FULL rewritten prose — never truncate
+- If sectionOperations is returned, include complete heading/body content for every inserted or split section. Use sectionOperations for all additions, removals, splits, or other changes to section count/order.
+- For a new section, do not return a guessed section number such as 3.5. Return an insert operation with the existing section immediately before it as afterSectionNumber.
 ${isChapterWideEdit ? "- This is a chapter-wide edit. For each explicitly named chapter, review every section body and return every changed section in full under updatedSections. Do not return a full chapters array. Untargeted chapters must not be changed." : ""}
 - frontMatter: if returned, include ALL fields (preface, introduction, conclusion, aboutAuthor, resourcesList)
 - backMatter: if returned, include ONLY the changed sub-fields (glossary, readingGroupGuide, scriptureIndex, or recommendedResources); unchanged fields may be omitted
@@ -556,8 +592,82 @@ ${isChapterWideEdit ? "- This is a chapter-wide edit. For each explicitly named 
       });
     }
 
+    if (object.sectionOperations && object.sectionOperations.length > 0) {
+      const structuralErrors: string[] = [];
+
+      for (const operation of object.sectionOperations) {
+        const chapterIndex = mergedChapters.findIndex((chapter) => chapter.number === operation.chapterNumber);
+        if (chapterIndex < 0) {
+          structuralErrors.push(`chapter ${operation.chapterNumber} does not exist`);
+          continue;
+        }
+
+        const chapter = mergedChapters[chapterIndex];
+        if (operation.operation === "insert") {
+          const afterIndex = operation.afterSectionNumber === 0
+            ? -1
+            : chapter.sections.findIndex((section) => section.sectionNumber === operation.afterSectionNumber);
+          if (operation.afterSectionNumber > 0 && afterIndex < 0) {
+            structuralErrors.push(`chapter ${operation.chapterNumber} has no section ${operation.afterSectionNumber} to insert after`);
+            continue;
+          }
+
+          const sections = chapter.sections.map((section) => (
+            section.sectionNumber > operation.afterSectionNumber
+              ? { ...section, sectionNumber: section.sectionNumber + 1 }
+              : section
+          ));
+          sections.splice(afterIndex + 1, 0, {
+            chapterNumber: operation.chapterNumber,
+            sectionNumber: operation.afterSectionNumber + 1,
+            heading: operation.section.heading,
+            body: operation.section.body,
+            wordCount: 0,
+            status: "complete" as const,
+          });
+          mergedChapters = mergedChapters.map((candidate, index) => (
+            index === chapterIndex ? { ...candidate, sections } : candidate
+          ));
+          continue;
+        }
+
+        const targetIndex = chapter.sections.findIndex((section) => section.sectionNumber === operation.sectionNumber);
+        if (targetIndex < 0) {
+          structuralErrors.push(`chapter ${operation.chapterNumber} has no section ${operation.sectionNumber} to split`);
+          continue;
+        }
+
+        const sectionShift = operation.sections.length - 1;
+        const replacementSections = operation.sections.map((section, index) => ({
+          chapterNumber: operation.chapterNumber,
+          sectionNumber: operation.sectionNumber + index,
+          heading: section.heading,
+          body: section.body,
+          wordCount: 0,
+          status: "complete" as const,
+        }));
+        const sections = chapter.sections.flatMap((section, index) => {
+          if (index === targetIndex) return replacementSections;
+          if (index > targetIndex) {
+            return [{ ...section, sectionNumber: section.sectionNumber + sectionShift }];
+          }
+          return [section];
+        });
+        mergedChapters = mergedChapters.map((candidate, index) => (
+          index === chapterIndex ? { ...candidate, sections } : candidate
+        ));
+      }
+
+      if (structuralErrors.length > 0) {
+        return NextResponse.json(
+          { error: `Structural edit could not be applied: ${structuralErrors.join("; ")}` },
+          { status: 422 }
+        );
+      }
+    }
+
     if (object.updatedSections && object.updatedSections.length > 0) {
-      mergedChapters = manifest.chapters.map((ch) => ({
+      mergedChapters = mergedChapters.map((ch) => ({
         ...ch,
         sections: ch.sections.map((s) => {
           const updated = object.updatedSections!.find(
@@ -579,6 +689,50 @@ ${isChapterWideEdit ? "- This is a chapter-wide edit. For each explicitly named 
           return { ...updated, body: bodyToUse };
         }),
       }));
+    }
+
+    const unmatchedSectionUpdates = (object.updatedSections ?? []).filter((updated) => (
+      !mergedChapters.some((chapter) => chapter.number === updated.chapterNumber
+        && chapter.sections.some((section) => section.sectionNumber === updated.sectionNumber))
+    ));
+    if (unmatchedSectionUpdates.length > 0) {
+      const insertionErrors: string[] = [];
+      for (const updated of unmatchedSectionUpdates) {
+        const chapterIndex = mergedChapters.findIndex((chapter) => chapter.number === updated.chapterNumber);
+        if (chapterIndex < 0) {
+          insertionErrors.push(`chapter ${updated.chapterNumber} does not exist for section ${updated.sectionNumber}`);
+          continue;
+        }
+        if (!Number.isInteger(updated.sectionNumber) || updated.sectionNumber < 1 || !updated.body.trim()) {
+          insertionErrors.push(`section ${updated.chapterNumber}.${updated.sectionNumber} is not a complete insertion`);
+          continue;
+        }
+
+        const chapter = mergedChapters[chapterIndex];
+        const insertionIndex = chapter.sections.findIndex((section) => section.sectionNumber >= updated.sectionNumber);
+        const sections = chapter.sections.map((section) => (
+          section.sectionNumber >= updated.sectionNumber
+            ? { ...section, sectionNumber: section.sectionNumber + 1 }
+            : section
+        ));
+        sections.splice(insertionIndex < 0 ? sections.length : insertionIndex, 0, {
+          ...updated,
+          chapterNumber: updated.chapterNumber,
+          sectionNumber: updated.sectionNumber,
+          wordCount: 0,
+          status: "complete" as const,
+        });
+        mergedChapters = mergedChapters.map((candidate, index) => (
+          index === chapterIndex ? { ...candidate, sections } : candidate
+        ));
+      }
+
+      if (insertionErrors.length > 0) {
+        return NextResponse.json(
+          { error: `Structural section update could not be applied: ${insertionErrors.join("; ")}` },
+          { status: 422 }
+        );
+      }
     }
 
     // If chapters array was explicitly returned, use that instead,
@@ -674,6 +828,7 @@ ${isChapterWideEdit ? "- This is a chapter-wide edit. For each explicitly named 
     const hasChanges =
       object.chapterPatches?.length ||
       object.updatedSections?.length ||
+      object.sectionOperations?.length ||
       object.chapters?.length ||
       object.frontMatter !== undefined ||
       object.backMatter  !== undefined ||
@@ -696,9 +851,13 @@ ${isChapterWideEdit ? "- This is a chapter-wide edit. For each explicitly named 
       model:       (isStructuralOp ? "r1" : "v3") as "r1" | "v3",
     };
     const existingLog = (manifest.changeLog ?? []) as typeof changeLogEntry[];
-    harmonized.changeLog = [...existingLog, changeLogEntry].slice(-50);
+    const normalizedManifest = {
+      ...harmonized,
+      totalWordCount: harmonized.chapters.reduce((sum, chapter) => sum + chapter.totalWordCount, 0),
+      changeLog: [...existingLog, changeLogEntry].slice(-50),
+    };
 
-    const validated = EbookManifestSchema.safeParse(harmonized);
+    const validated = EbookManifestSchema.safeParse(normalizedManifest);
     if (!validated.success) {
       return NextResponse.json(
         { error: `Manifest validation failed: ${validated.error.issues[0]?.message}` },
