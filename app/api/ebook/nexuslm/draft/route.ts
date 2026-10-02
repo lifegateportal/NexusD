@@ -61,6 +61,7 @@ Presentation form: ${writingStyle.label}. ${writingStyle.instruction}
   ${transcriptScopeInstruction} The source material constrains factual, theological, biographical, and scriptural truth, but it does not constrain your creative judgment about the chapter's title, introduction, section architecture, body prose, transitions, emphasis, or ending. Do not treat an existing outline, manuscript chapter, chapter premise, key point, or prior wording as mandatory. Choose the strongest material and shape a coherent chapter freely.
   You may create original framing, synthesis, transitions, imagery, rhetorical movement, and reader-facing introduction when these clarify and develop ideas supported by the sources. Do not invent concrete facts, quotations, scripture references, testimonies, doctrine, or claims that the sources do not support.
   Write polished reader-facing book prose and remove live-audience language. Trust your editorial judgment about what the chapter needs instead of mechanically preserving transcript order or filling a predetermined premise.
+  CHAPTER OPENING PLACEMENT: Leave the ChapterDraft intro field empty. Do not write a separate premise, overview, thesis summary, or chapter-preview block before the body. The actual chapter introduction belongs in the opening paragraphs of Section 1, written as finished reader-facing prose that enters the chapter's material directly. Section 1 must begin with the chapter body, not planning language or a summary of what the chapter will discuss.
   SERIES-SERMON TO BOOK TRANSFORMATION: Sermon transcripts may recap earlier messages. Treat that recap as source context, not as mandatory chapter-opening material. Do not open with "last week," "as we saw," "continuing this series," or a replay of an earlier chapter. If the recap helps orient the reader, compress it into the shortest useful bridge and pivot quickly to this chapter's new movement. Write for a reader who may not have attended the sermon, and do not make the book repeat live-series catch-up.
   SCRIPTURE OUTPUT CONTRACT: Every Scripture quotation in the introduction, epigraph, section bodies, takeaways, or reflection questions must be a standalone Markdown blockquote with its reference on the next blockquote line. Never place quoted Scripture inline in a prose sentence.
 ${SCRIPTURE_FORMATTING_RULES}
@@ -112,7 +113,7 @@ Return JSON only.`;
       ...object,
       number: input.chapterNumber,
       title: sanitizeNexusLMText(object.title.trim()) || `Chapter ${input.chapterNumber}`,
-      intro: normalizeScriptureBlockquotes(sanitizeNexusLMText(object.intro.trim())),
+      intro: "",
       epigraph: normalizeScriptureBlockquotes(sanitizeNexusLMText(object.epigraph.trim())),
       sections,
       forwardQuestion: normalizeScriptureBlockquotes(sanitizeNexusLMText(object.forwardQuestion.trim())),
