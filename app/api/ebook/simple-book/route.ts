@@ -2,8 +2,11 @@ import { NextRequest, NextResponse } from "next/server";
 import { generateObject, generateText } from "ai";
 import { z } from "zod";
 import { DIRECT_CHAPTER_WRITING_RULES, READER_NORMALIZATION_RULES, SOURCE_LOCK_RULES } from "@/lib/editorial-style-bible";
-import { SCRIPTURE_FORMATTING_RULES } from "@/lib/scripture-formatter";
+import { normalizeScriptureBlockquotes, SCRIPTURE_FORMATTING_RULES } from "@/lib/scripture-formatter";
 import { getEbookModel, getEbookTemperature } from "@/lib/ebook-model-selector";
+import { completeScriptureBlockquotes } from "@/lib/scripture-verse";
+import { NEXUSLM_WRITING_STYLES } from "@/lib/nexuslm-writing-styles";
+import { sanitizeNexusLMText } from "@/lib/nexuslm-response";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
@@ -223,29 +226,6 @@ function looksLikeUnprocessedTranscript(
   return copiedSections >= 2 && copiedRatio >= 0.5;
 }
 
-function normalizeSimpleBook(object: z.infer<typeof SimpleBookSchema>, input: z.infer<typeof RequestSchema>) {
-  return {
-    ...object,
-    subtitle: (object.subtitle || "").trim() || nonEmptySubtitle(input.targetAudience, input.coreThesis),
-    strategy: (object.strategy || "single-pass-sermon-style").trim(),
-    chapters: (object.chapters ?? [])
-      .map((chapter, chapterIndex) => ({
-        ...chapter,
-        number: chapterIndex + 1,
-        title: (chapter.title || `Chapter ${chapterIndex + 1}`).trim(),
-        sections: (chapter.sections ?? [])
-          .filter((section) => (section.body || "").trim().length > 0)
-          .map((section, sectionIndex) => ({
-            ...section,
-            sectionNumber: sectionIndex + 1,
-            heading: (section.heading || `Section ${sectionIndex + 1}`).trim(),
-            body: section.body || "",
-          })),
-      }))
-      .filter((chapter) => chapter.sections.length > 0),
-  };
-}
-
 function buildSlotSourceSegments(slotText: string, sourceAudio: `audio-${number}`, maxSegments = 80): SimpleSourceSegment[] {
   const paragraphs = slotText
     .split(/\n\s*\n/g)
@@ -339,6 +319,45 @@ function normalizeSlotChapter(object: z.infer<typeof SlotChapterSchema>, chapter
   };
 }
 
+type GeneratedChapter = z.infer<typeof SlotChapterSchema> | z.infer<typeof ChapterSchema>;
+
+async function normalizeGeneratedText(value: string): Promise<string> {
+  return completeScriptureBlockquotes(
+    normalizeScriptureBlockquotes(sanitizeNexusLMText(value.trim()))
+  );
+}
+
+async function normalizeGeneratedChapter(object: GeneratedChapter, chapterNumber: number): Promise<z.infer<typeof ChapterSchema>> {
+  const sections = await Promise.all((object.sections ?? []).map(async (section, sectionIndex) => ({
+    ...section,
+    sectionNumber: section.sectionNumber || sectionIndex + 1,
+    heading: sanitizeNexusLMText(section.heading.trim()) || `Section ${sectionIndex + 1}`,
+    body: await normalizeGeneratedText(section.body),
+    keyClaims: section.keyClaims.map((claim) => sanitizeNexusLMText(claim)).filter(Boolean),
+  })));
+
+  return {
+    number: chapterNumber,
+    title: sanitizeNexusLMText(object.title.trim()) || `Chapter ${chapterNumber}`,
+    sections: sections.filter((section) => section.body.trim().length > 0),
+  };
+}
+
+async function normalizeSimpleBook(object: z.infer<typeof SimpleBookSchema>, input: z.infer<typeof RequestSchema>) {
+  const chapters = await Promise.all((object.chapters ?? []).map((chapter, chapterIndex) =>
+    normalizeGeneratedChapter(chapter, chapterIndex + 1)
+  ));
+
+  return {
+    ...object,
+    bookTitle: sanitizeNexusLMText(object.bookTitle.trim()) || "Untitled",
+    subtitle: sanitizeNexusLMText(object.subtitle.trim()) || nonEmptySubtitle(input.targetAudience, input.coreThesis),
+    authorName: sanitizeNexusLMText(object.authorName.trim()) || "the Author",
+    strategy: sanitizeNexusLMText(object.strategy.trim()) || "single-pass-sermon-style",
+    chapters,
+  };
+}
+
 export async function POST(req: NextRequest) {
   const body = await req.json() as unknown;
   let input: z.infer<typeof RequestSchema>;
@@ -395,6 +414,13 @@ NARRATIVE VOICE HARD BAN:
 - Never describe the source from outside the book with phrases such as "the speaker said," "the author said," "the preacher said," "the message says," or "in this sermon/message."
 - Write the teaching directly as reader-facing book prose. Preserve first-person language only when the transcript contains the author's own testimony or experience.
 - Before returning JSON, scan every chapter title, heading, premise, and section body for these narrator phrases and rewrite them.
+
+NEXUSLM BOOK-PROSE STANDARD:
+- ${NEXUSLM_WRITING_STYLES["book-prose"].instruction}
+- Use creative judgment for original framing, synthesis, transitions, imagery, rhetorical movement, emphasis, pacing, and closure when those choices clarify ideas supported by the transcript.
+- Do not mechanically preserve transcript order, copy transcript blocks, or fill a predetermined premise when a stronger source-grounded structure serves the reader.
+- Do not invent concrete facts, quotations, Scripture references, testimonies, doctrine, or applications that the transcript does not support.
+- Write for a reader who was not present at the recording. Convert live delivery into finished book prose without flattening the author's distinctive teaching.
 
 PROSE PRINCIPLES:
 - Do not mechanically remove words from finished prose.`;
@@ -572,7 +598,7 @@ ${slot.text}${priorClaimsBlock}`;
           );
         }
 
-        const normalizedChapter = normalizeSlotChapter(chapterObject, chapterNumber);
+        const normalizedChapter = await normalizeGeneratedChapter(chapterObject, chapterNumber);
         if (normalizedChapter.sections.length === 0) {
           return NextResponse.json(
             { error: `Simple book generation failed: slot ${chapterNumber} produced no section content` },
@@ -622,7 +648,7 @@ ${slot.text}${priorClaimsBlock}`;
         chapters,
       };
 
-      const normalizedSlotsBook = normalizeSimpleBook(bookFromSlots, input);
+      const normalizedSlotsBook = await normalizeSimpleBook(bookFromSlots, input);
       return NextResponse.json({
         ...normalizedSlotsBook,
         sourceSegments,
@@ -644,7 +670,7 @@ ${slot.text}${priorClaimsBlock}`;
           prompt: `${prompt}\n\n${storyIntegrationBlock}`,
           abortSignal: AbortSignal.timeout(generationTimeoutMs),
         });
-        const normalized = normalizeSimpleBook(object, input);
+        const normalized = await normalizeSimpleBook(object, input);
         if (normalized.chapters.length > 0) {
           return NextResponse.json(normalized);
         }
