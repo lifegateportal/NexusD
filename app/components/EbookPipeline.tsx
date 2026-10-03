@@ -113,6 +113,14 @@ type SimpleBookResponse = {
   }>;
 };
 
+type SimpleDirectFrontMatterResponse = FrontBackMatter & {
+  chapterInsights: Array<{
+    chapterNumber: number;
+    keyTakeaways: string[];
+    reflectionQuestions: string[];
+  }>;
+};
+
 function routeLabel(url: string): string {
   return url.split("/").filter(Boolean).slice(-2).join("/");
 }
@@ -3482,7 +3490,7 @@ export function EbookPipeline({
           : slotWriteList
               .map((t) => `[${t.label}]\n${t.text}`)
               .join("\n\n═══════════════════════════════════════\n\n");
-        const simpleFrontMatter = await postJson<FrontBackMatter>("/api/ebook/frontmatter", {
+        const simpleFrontMatterResponse = await postJson<SimpleDirectFrontMatterResponse>("/api/ebook/frontmatter", {
           masterTranscript: frontMatterTranscript.slice(0, 14000),
           architecture: simpleArchitecture,
           voiceDNA: simpleVoiceDNA,
@@ -3491,8 +3499,37 @@ export function EbookPipeline({
           forbiddenVerseTexts: [],
           eBookModel: selectedEbookModel,
           llmTemperature: simpleDirectTemperature,
+          simpleDirect: {
+            chapters: builtChapters.map((chapter) => ({
+              number: chapter.number,
+              title: chapter.title,
+              sections: chapter.sections.map((section) => ({
+                heading: section.heading,
+                body: section.body,
+              })),
+            })),
+          },
         });
-        addLog("✓ Simple Direct front matter complete");
+        const { chapterInsights, ...simpleFrontMatter } = simpleFrontMatterResponse;
+        const insightByChapter = new Map(chapterInsights.map((insight) => [insight.chapterNumber, insight]));
+        const populatedChapters = builtChapters.map((chapter) => {
+          const insights = insightByChapter.get(chapter.number);
+          if (!insights) {
+            throw new Error(`Simple Direct front matter returned no insights for Chapter ${chapter.number}`);
+          }
+          return {
+            ...chapter,
+            keyTakeaways: insights.keyTakeaways,
+            reflectionQuestions: insights.reflectionQuestions,
+            totalWordCount: chapter.totalWordCount + countWords([
+              ...insights.keyTakeaways,
+              ...insights.reflectionQuestions,
+            ].join(" ")),
+          };
+        });
+        builtChapters.splice(0, builtChapters.length, ...populatedChapters);
+        setChapters([...builtChapters]);
+        addLog(`✓ Simple Direct front matter complete — populated takeaways and reflection questions for ${chapterInsights.length} chapters`);
 
         const simpleManifest: EbookManifest = {
           jobId,
@@ -3501,7 +3538,7 @@ export function EbookPipeline({
           authorName: authorNameFromRuns || "the Author",
           frontMatter: simpleFrontMatter,
           chapters: builtChapters,
-          totalWordCount: totalSimpleWords,
+          totalWordCount: builtChapters.reduce((sum, chapter) => sum + chapter.totalWordCount, 0),
           allQuotes: [],
           generatedAt: new Date().toISOString(),
           voiceDNA: simpleVoiceDNA,

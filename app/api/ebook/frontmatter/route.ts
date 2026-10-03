@@ -10,12 +10,32 @@ import { getEbookModel, getEbookTemperature } from "@/lib/ebook-model-selector";
 export const runtime = "nodejs";
 export const maxDuration = 300;
 
-// LLM generates introduction + conclusion only — no preface
+// LLM generates introduction + conclusion only — no preface.
+// Simple Direct mode additionally generates per-chapter reader insights.
 const IntroConclSchema = FrontBackMatterSchema.omit({ preface: true, scriptureIndex: true });
+const SimpleDirectChapterInputSchema = z.object({
+  number: z.number().int().positive(),
+  title: z.string().min(1).max(500),
+  sections: z.array(z.object({
+    heading: z.string().max(500),
+    body: z.string().min(1).max(500000),
+  })).min(1),
+});
+const ChapterInsightsSchema = z.object({
+  chapterNumber: z.number().int().positive(),
+  keyTakeaways: z.array(z.string().min(1).max(1000)).min(3).max(7),
+  reflectionQuestions: z.array(z.string().min(1).max(1000)).min(3).max(6),
+});
+const FrontMatterOutputSchema = IntroConclSchema.extend({
+  chapterInsights: z.array(ChapterInsightsSchema).default([]),
+});
 
 const FrontMatterExtendedRequestSchema = FrontMatterRequestSchema.extend({
   eBookModel: z.enum(["deepseek", "gemini"]).default("deepseek"),
   llmTemperature: z.number().min(0).max(1).optional(),
+  simpleDirect: z.object({
+    chapters: z.array(SimpleDirectChapterInputSchema).min(1).max(12),
+  }).optional(),
 });
 
 export async function POST(req: NextRequest) {
@@ -31,12 +51,15 @@ export async function POST(req: NextRequest) {
   const reasoningTemperature = input.llmTemperature ?? getEbookTemperature(eBookModel, "reasoning");
   const transcript = typeof input.masterTranscript === "string" ? input.masterTranscript : "";
   const authorConfig = input.authorConfig;
+  const simpleDirectMode = Boolean(input.simpleDirect);
   const authorConfigBlock = (authorConfig?.instructions || authorConfig?.targetAudience)
     ? `\n\n════════════════════════════════════════════\nAUTHOR BOOK CONFIGURATION (presentation directives)\n════════════════════════════════════════════${authorConfig.targetAudience ? `\nTARGET AUDIENCE: ${authorConfig.targetAudience}` : ""}${authorConfig.instructions ? `\nBOOK INSTRUCTIONS: ${authorConfig.instructions}` : ""}
 
 Apply this configuration as high-priority guidance for HOW this material is presented: voice, framing, emphasis, pacing, structure, and reader experience.
 
-⚠️ CRITICAL BOUNDARY: These directives shape presentation, not source truth. They do NOT override SOURCE-LOCK-RULES. Never fabricate examples, background, or theological context. Intro/conclusion must stay grounded in what the author actually taught in the master transcript.`
+${simpleDirectMode
+  ? "In Simple Direct mode, use these directives with broad editorial judgment when shaping the reader's experience."
+  : "⚠️ CRITICAL BOUNDARY: These directives shape presentation, not source truth. They do NOT override SOURCE-LOCK-RULES. Never fabricate examples, background, or theological context. Intro/conclusion must stay grounded in what the author actually taught in the master transcript."}`
     : "";
 
   // Scripture already quoted in full elsewhere in the book (chapter bodies, epigraphs) —
@@ -45,10 +68,25 @@ Apply this configuration as high-priority guidance for HOW this material is pres
     ? `\n\n════════════════════════════════════════════\nSCRIPTURE DEDUP — ALREADY QUOTED IN FULL ELSEWHERE IN THIS BOOK\n════════════════════════════════════════════${input.alreadyQuotedRefs.length > 0 ? `\nThese references already appear in full in a chapter or a chapter epigraph — reference them by citation only (e.g. "as Psalm 27:1 declares"), never reprint the verse text: ${input.alreadyQuotedRefs.join(", ")}` : ""}${input.forbiddenVerseTexts.length > 0 ? `\nForbidden verse texts (exact wording already printed — hard ban on reprinting, even with a different translation label): ${input.forbiddenVerseTexts.slice(0, 8).map((t) => `"${t.slice(0, 80)}…"`).join(" | ")}` : ""}`
     : "";
 
+  const contentAuthorityBlock = simpleDirectMode
+    ? `SIMPLE DIRECT CREATIVE LICENSE:
+Use the transcript and completed chapter manuscript as the book's conceptual foundation, not as a sentence-by-sentence cage. You have full editorial latitude over framing, synthesis, transitions, imagery, emotional arc, rhetorical questions, pacing, and the shape of the invitation and close. Write an original introduction and conclusion with the confidence and polish of a bestselling nonfiction ghostwriter.
+
+Preserve the author's central meaning and voice. Do not invent verifiable biographical details, named sources, events, Scripture quotations or references, or claims presented as factual that are absent from the supplied material. Non-factual illustrative language and fresh editorial synthesis are welcome when they clarify the book's promise.`
+    : `ABSOLUTE CONTENT RULE — ZERO FABRICATION:
+Every sentence must come verbatim-idea from the provided transcript. You may not add content, context, or ideas not present in the audio/transcript — not even plausible extensions, inferred background, theological context the author "probably" knows, or biographical details you can reasonably assume. If you cannot point to the exact idea in the transcript text below, delete the sentence. Write shorter output rather than pad with invented content.`;
+
+  const simpleDirectChapterBlock = simpleDirectMode
+    ? `\n\n════════════════════════════════════════════
+COMPLETED CHAPTER MANUSCRIPT — SOURCE FOR INSIGHTS
+════════════════════════════════════════════
+${input.simpleDirect!.chapters.map((chapter) => `CHAPTER ${chapter.number}: "${chapter.title}"
+${chapter.sections.map((section) => `SECTION: ${section.heading}\n${section.body}`).join("\n\n")}`).join("\n\n════════════════════════════════════════════\n\n")}`
+    : "";
+
   const frontmatterSystem = `You are an editorial assistant writing the introduction and conclusion of a published teaching book.
 
-ABSOLUTE CONTENT RULE — ZERO FABRICATION:
-Every sentence must come verbatim-idea from the provided transcript. You may not add content, context, or ideas not present in the audio/transcript — not even plausible extensions, inferred background, theological context the author "probably" knows, or biographical details you can reasonably assume. If you cannot point to the exact idea in the transcript text below, delete the sentence. Write shorter output rather than pad with invented content.
+${contentAuthorityBlock}
 
 ════════════════════════════════════════════
 INDUSTRY-STANDARD FRONTMATTER REQUIREMENT
@@ -100,7 +138,7 @@ The introduction speaks in first person as the author. This means:
 • The rhetoricalPatterns describe HOW this author moves through an argument. Replicate those moves in the introduction's structure. If the speaker characteristically "states a problem then provides the scriptural answer," do that in the introduction.
 • Any sentence that sounds like a publicist describing the author (rather than the author speaking) is wrong. Rewrite it.
 
-${SOURCE_LOCK_RULES}
+${simpleDirectMode ? "" : SOURCE_LOCK_RULES}
 
 ${READER_NORMALIZATION_RULES}
 
@@ -115,15 +153,25 @@ COMPLIANCE CHECKPOINT — BEFORE FINALIZING OUTPUT
   - Does it preview chapter titles, themes, or sequence? DELETE those sentences.
   - Does it repeat examples, stories, or scripture already in chapter bodies? DELETE those sentences.
   - Does it sound like a table of contents or roadmap? REWRITE entirely.
-  - Is every sentence grounded in the transcript? If not, DELETE.
+  - ${simpleDirectMode
+    ? "In Simple Direct mode, preserve strong original framing and synthesis when it serves the book's promise and remains factually honest."
+    : "Is every sentence grounded in the transcript? If not, DELETE."}
 
 ✅ CONCLUSION: Before returning, scan for:
   - Does it recap or summarize chapter content? DELETE those sentences.
   - Does it remind readers what they learned? DELETE those sentences.
   - Does it reprint stories, scripture, or illustrations from chapters? DELETE those sentences.
-  - Is every sentence grounded in the transcript? If not, DELETE.
+  - ${simpleDirectMode
+    ? "In Simple Direct mode, preserve strong original framing and synthesis when it serves the book's promise and remains factually honest."
+    : "Is every sentence grounded in the transcript? If not, DELETE."}
 
-If after removing these violations the introduction or conclusion is very short, that is CORRECT. Short and true beats long and padded.${authorConfigBlock}${quoteDedupBlock}`;
+${simpleDirectMode
+  ? "Prefer a fully realized, emotionally resonant introduction and conclusion over a short output. Do not pad; make every paragraph earn its place."
+  : "If after removing these violations the introduction or conclusion is very short, that is CORRECT. Short and true beats long and padded."}
+
+${simpleDirectMode ? `SIMPLE DIRECT CHAPTER INSIGHTS:
+Return one chapterInsights entry for every completed chapter. For each chapter, write 4–6 specific, memorable key takeaways and 3–5 specific reflection questions grounded in that chapter's actual manuscript. Takeaways must state meaningful claims or practices, not generic encouragement. Questions must point to concrete ideas, tensions, stories, or choices in the chapter, not "What did you learn?" or "How can you apply this?" Do not use chapter-roadmap language. These insights are reader-facing and should meet the same editorial standard as the book.
+` : ""}${authorConfigBlock}${quoteDedupBlock}`;
 
   const frontmatterPrompt = `Write the front and back matter for this ebook.
 
@@ -144,11 +192,25 @@ ${transcript.slice(0, 4000)}
 [… sermon middle omitted — use chapter themes below for content coverage across the full book …]
 
 CHAPTER-BY-CHAPTER CONTENT (full book map — introduction and conclusion must cover all chapters):
-${input.architecture.chapters.map((c, i) => `Chapter ${i + 1}: "${c.title}"\n  Core theme: ${c.keyTheme}\n  Sections: ${((c as {sections?: {heading: string}[]}).sections ?? []).map((s) => s.heading).join(" | ") || "(none)"}`).join("\n\n")}`;
+${input.architecture.chapters.map((c, i) => `Chapter ${i + 1}: "${c.title}"\n  Core theme: ${c.keyTheme}\n  Sections: ${((c as {sections?: {heading: string}[]}).sections ?? []).map((s) => s.heading).join(" | ") || "(none)"}`).join("\n\n")}${simpleDirectChapterBlock}`;
 
-  const buildResponse = (object: Awaited<ReturnType<typeof generateObject<typeof IntroConclSchema>>>["object"]) =>
-    NextResponse.json({
-      ...object,
+  const buildResponse = (object: z.infer<typeof FrontMatterOutputSchema>) => {
+    if (simpleDirectMode) {
+      const expectedChapterNumbers = new Set(input.simpleDirect!.chapters.map((chapter) => chapter.number));
+      const returnedChapterNumbers = new Set(object.chapterInsights.map((insight) => insight.chapterNumber));
+      const hasAllChapterInsights = object.chapterInsights.length === input.simpleDirect!.chapters.length
+        && expectedChapterNumbers.size === returnedChapterNumbers.size
+        && [...expectedChapterNumbers].every((number) => returnedChapterNumbers.has(number))
+        && object.chapterInsights.every((insight) => insight.keyTakeaways.length > 0 && insight.reflectionQuestions.length > 0);
+      if (!hasAllChapterInsights) {
+        throw new Error("Simple Direct front matter generation returned incomplete chapter insights");
+      }
+    }
+
+    const { chapterInsights, ...frontMatterObject } = object;
+    return NextResponse.json({
+      ...frontMatterObject,
+      ...(simpleDirectMode ? { chapterInsights } : {}),
       preface: "",
       introduction: object.introduction ?? "",
       conclusion: object.conclusion ?? "",
@@ -167,12 +229,13 @@ ${input.architecture.chapters.map((c, i) => `Chapter ${i + 1}: "${c.title}"\n  C
           }, []);
       })(),
     }, { status: 200 });
+  };
 
   // Try selected model first for speed. If it fails, fall back to alternative.
   try {
     const { object } = await generateObject({
       model: getEbookModel(eBookModel),
-      schema: IntroConclSchema,
+      schema: FrontMatterOutputSchema,
       mode: "json",
       temperature: reasoningTemperature,
       system: frontmatterSystem,
@@ -185,7 +248,7 @@ ${input.architecture.chapters.map((c, i) => `Chapter ${i + 1}: "${c.title}"\n  C
       const fallbackModel = eBookModel === "gemini" ? deepSeekReasonerModel : deepSeekModel;
       const { object } = await generateObject({
         model: fallbackModel,
-        schema: IntroConclSchema,
+        schema: FrontMatterOutputSchema,
         mode: "json",
         temperature: reasoningTemperature,
         system: frontmatterSystem,
