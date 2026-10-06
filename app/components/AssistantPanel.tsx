@@ -9,36 +9,8 @@ import type { AcademyPackage } from "@/lib/schemas/academy";
 import type { SiteConfig } from "@/lib/schemas/site-config";
 import type { EbookManifest } from "@/lib/schemas/ebook";
 import type { ChatMessage } from "@/lib/project-store";
-import {
-  buildManifestChangeEntries,
-  clearEbookUndoSnapshot,
-  loadEbookUndoSnapshot,
-  saveEbookUndoSnapshot,
-} from "@/lib/ebook-change-control";
-import type { EbookChangeEntry, EbookUndoSnapshot } from "@/lib/ebook-change-control";
 
 type Message = ChatMessage;
-type VersionedManifest = EbookManifest & { __version?: string };
-type LibraryPatch = {
-  slug: string;
-  title?: string;
-  subtitle?: string;
-  authorName?: string;
-  synopsis?: string;
-  coverAccent?: string;
-};
-
-type PendingProposal = {
-  instruction: string;
-  summary: string;
-  confidence?: "high" | "medium" | "low";
-  baseManifest: EbookManifest;
-  proposedManifest: EbookManifest;
-  changes: EbookChangeEntry[];
-  selectedPaths: string[];
-  manifestVersion: string;
-  libraryPatch?: LibraryPatch;
-};
 
 type AssistantPanelProps = {
   isOpen: boolean;
@@ -204,20 +176,8 @@ export function AssistantPanel({ isOpen, onClose, academy, onUpdate, siteConfig,
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [showChips, setShowChips] = useState(false);
-  const [pendingProposal, setPendingProposal] = useState<PendingProposal | null>(null);
-  const [auditReport, setAuditReport] = useState<BookAuditReport | null>(null);
-  const [showProposalDiff, setShowProposalDiff] = useState(false);
-  const [showHistory, setShowHistory] = useState(false);
-  const [undoSnapshot, setUndoSnapshot] = useState<EbookUndoSnapshot | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
-
-  useEffect(() => {
-    setPendingProposal(null);
-    setShowProposalDiff(false);
-    setShowHistory(false);
-    setUndoSnapshot(ebookManifest?.jobId ? loadEbookUndoSnapshot(ebookManifest.jobId) : null);
-  }, [ebookManifest?.jobId]);
 
   // Restore chat history when a project is loaded
   useEffect(() => {
@@ -268,8 +228,8 @@ export function AssistantPanel({ isOpen, onClose, academy, onUpdate, siteConfig,
     if (isOpen) inputRef.current?.focus();
   }, [isOpen]);
 
-  async function send(instructionOverride?: string) {
-    const text = (instructionOverride ?? input).trim();
+  async function send() {
+    const text = input.trim();
     if (!text || loading) return;
 
     const hasContent = academy || ebookManifest;
@@ -295,7 +255,6 @@ export function AssistantPanel({ isOpen, onClose, academy, onUpdate, siteConfig,
 
     setMessages((prev) => [...prev, { role: "user", content: text }]);
     setInput("");
-    if (!isAuditIntent(text)) setAuditReport(null);
     setLoading(true);
 
     try {
@@ -308,7 +267,6 @@ export function AssistantPanel({ isOpen, onClose, academy, onUpdate, siteConfig,
         });
         const json = await res.json() as BookAuditReport & { error?: string };
         if (!res.ok || json.error) throw new Error(json.error ?? `HTTP ${res.status}`);
-        setAuditReport(json);
         setMessages((prev) => [...prev, { role: "assistant", content: formatAuditReport(json) }]);
         return;
       }
@@ -330,12 +288,10 @@ export function AssistantPanel({ isOpen, onClose, academy, onUpdate, siteConfig,
             history: historyForApi,
             pipeline: ebookPipelineSnapshot ?? undefined,
             manifestVersion: (ebookManifest as Record<string, unknown>).__version as string | undefined,
-            dryRun: true,
           }),
         });
         const json = await res.json() as {
           manifest?: unknown;
-          patch?: unknown;
           summary?: string;
           noChanges?: boolean;
           error?: string;
@@ -344,7 +300,7 @@ export function AssistantPanel({ isOpen, onClose, academy, onUpdate, siteConfig,
           clarificationNeeded?: string;
           confidence?: "high" | "medium" | "low";
           manifestVersion?: string;
-          libraryPatch?: LibraryPatch;
+          libraryPatch?: { slug: string; title?: string; subtitle?: string; authorName?: string; synopsis?: string; coverAccent?: string };
         };
         if (res.status === 409) {
           setMessages((prev) => [...prev, { role: "assistant", content: `⚠️ **Edit conflict** — the book was changed in another tab. Please reload the page and try again.` }]);
@@ -361,29 +317,23 @@ export function AssistantPanel({ isOpen, onClose, academy, onUpdate, siteConfig,
 ⚠️ No manuscript changes were applied. Please rephrase your instruction more specifically — e.g. name the exact chapter or section number you want changed.` }]);
           return;
         }
+        // Apply library catalog patch if the assistant updated published metadata
+        if (json.libraryPatch) {
+          await fetch("/api/ebook/publish", {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(json.libraryPatch),
+          }).catch(() => { /* best-effort — don't block the manifest update */ });
+        }
         const parsed = EbookManifestSchema.safeParse(json.manifest);
         if (!parsed.success) throw new Error("Invalid ebook manifest returned from assistant");
-        const changes = buildManifestChangeEntries(ebookManifest, parsed.data);
-        if (changes.length === 0) {
-          setMessages((prev) => [...prev, { role: "assistant", content: "The assistant generated no reviewable manuscript changes." }]);
-          return;
-        }
-        setPendingProposal({
-          instruction: text,
-          summary: json.summary ?? "Book changes are ready for review.",
-          confidence: json.confidence,
-          baseManifest: ebookManifest,
-          proposedManifest: parsed.data,
-          changes,
-          selectedPaths: changes.map((change) => change.path),
-          manifestVersion: json.manifestVersion ?? "",
-          libraryPatch: json.libraryPatch,
-        });
-        const confidenceNote = json.confidence === "medium" ? " Review carefully; confidence is medium." : "";
-        setMessages((prev) => [...prev, {
-          role: "assistant",
-          content: `Proposal ready: ${json.summary ?? "Book changes are ready for review."}\n\n${changes.length} change${changes.length === 1 ? "" : "s"} are waiting for your approval.${confidenceNote}`,
-        }]);
+        // Stash the version token on the manifest object so the next call can send it back
+        const manifestWithVersion = json.manifestVersion
+          ? { ...parsed.data, __version: json.manifestVersion }
+          : parsed.data;
+        onEbookUpdate(manifestWithVersion as typeof parsed.data, json.summary ?? "Book updated.");
+        const confidenceNote = json.confidence === "medium" ? " *(medium confidence — review before saving)*" : "";
+        setMessages((prev) => [...prev, { role: "assistant", content: (json.summary ?? "Done.") + confidenceNote }]);
         return;
       }
 
@@ -465,118 +415,6 @@ export function AssistantPanel({ isOpen, onClose, academy, onUpdate, siteConfig,
     }
   }
 
-  function toggleProposalPath(path: string): void {
-    setPendingProposal((current) => {
-      if (!current) return current;
-      const selectedPaths = current.selectedPaths.includes(path)
-        ? current.selectedPaths.filter((selectedPath) => selectedPath !== path)
-        : [...current.selectedPaths, path];
-      return { ...current, selectedPaths };
-    });
-  }
-
-  async function applyProposal(paths: string[]): Promise<void> {
-    if (!pendingProposal || !ebookManifest || !onEbookUpdate || paths.length === 0 || loading) return;
-    if (buildManifestChangeEntries(pendingProposal.baseManifest, ebookManifest).length > 0) {
-      setPendingProposal(null);
-      setMessages((prev) => [...prev, {
-        role: "assistant",
-        content: "⚠️ **Edit conflict** — the manuscript changed while this proposal was open. Generate a fresh preview before applying it.",
-      }]);
-      return;
-    }
-    setLoading(true);
-
-    try {
-      const appliedSummary = `Applied ${paths.length} of ${pendingProposal.changes.length} approved changes: ${pendingProposal.summary}`;
-      const res = await fetch("/api/ebook/changes/apply", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          manifest: ebookManifest,
-          proposedManifest: pendingProposal.proposedManifest,
-          selectedPaths: paths,
-          manifestVersion: pendingProposal.manifestVersion,
-          instruction: pendingProposal.instruction,
-          summary: appliedSummary,
-        }),
-      });
-      const json = await res.json() as {
-        manifest?: unknown;
-        summary?: string;
-        manifestVersion?: string;
-        error?: string;
-      };
-      if (res.status === 409) {
-        setMessages((prev) => [...prev, {
-          role: "assistant",
-          content: "⚠️ **Edit conflict** — the book changed while this proposal was open. Generate a fresh preview before applying it.",
-        }]);
-        setPendingProposal(null);
-        return;
-      }
-      if (!res.ok || json.error) throw new Error(json.error ?? `HTTP ${res.status}`);
-
-      const parsed = EbookManifestSchema.safeParse(json.manifest);
-      if (!parsed.success) throw new Error("Invalid manuscript returned from change approval");
-
-      const snapshotSaved = saveEbookUndoSnapshot(ebookManifest.jobId, {
-        timestamp: new Date().toISOString(),
-        instruction: pendingProposal.instruction,
-        summary: appliedSummary,
-        manifest: pendingProposal.baseManifest,
-      });
-      const manifestWithVersion: VersionedManifest = json.manifestVersion
-        ? { ...parsed.data, __version: json.manifestVersion }
-        : parsed.data;
-      onEbookUpdate(manifestWithVersion, json.summary ?? appliedSummary);
-      setUndoSnapshot(snapshotSaved ? {
-        timestamp: new Date().toISOString(),
-        instruction: pendingProposal.instruction,
-        summary: appliedSummary,
-        manifest: pendingProposal.baseManifest,
-      } : null);
-
-      let catalogWarning = "";
-      if (pendingProposal.libraryPatch) {
-        const catalogRes = await fetch("/api/ebook/publish", {
-          method: "PATCH",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(pendingProposal.libraryPatch),
-        });
-        if (!catalogRes.ok) {
-          catalogWarning = " The manuscript was updated, but published catalog metadata could not be synced.";
-        }
-      }
-
-      setPendingProposal(null);
-      setMessages((prev) => [...prev, {
-        role: "assistant",
-        content: `${json.summary ?? appliedSummary}${catalogWarning}`,
-      }]);
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : "Unable to apply the approved changes";
-      setMessages((prev) => [...prev, { role: "assistant", content: `Error: ${msg}` }]);
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  function rejectProposal(): void {
-    if (!pendingProposal) return;
-    setPendingProposal(null);
-    setShowProposalDiff(false);
-    setMessages((prev) => [...prev, { role: "assistant", content: "Proposal rejected. No manuscript changes were applied." }]);
-  }
-
-  function undoLastChange(): void {
-    if (!ebookManifest || !undoSnapshot || !onEbookUpdate) return;
-    onEbookUpdate(undoSnapshot.manifest, `Undid: ${undoSnapshot.summary}`);
-    clearEbookUndoSnapshot(ebookManifest.jobId);
-    setUndoSnapshot(null);
-    setMessages((prev) => [...prev, { role: "assistant", content: `↩️ Undid the last approved change: ${undoSnapshot.summary}` }]);
-  }
-
   return (
     <>
       {/* Backdrop */}
@@ -610,51 +448,15 @@ export function AssistantPanel({ isOpen, onClose, academy, onUpdate, siteConfig,
               </p>
             )}
           </div>
-          <div className="flex items-center gap-1.5">
-            {ebookManifest?.changeLog && ebookManifest.changeLog.length > 0 && (
-              <button
-                type="button"
-                onClick={() => setShowHistory((current) => !current)}
-                className={`flex min-h-12 items-center rounded-xl border px-3 text-[11px] font-semibold ${showHistory ? "border-cyan-500/50 bg-cyan-500/10 text-cyan-300" : "border-slate-700 text-slate-400"}`}
-              >
-                History
-              </button>
-            )}
-            {undoSnapshot && (
-              <button
-                type="button"
-                onClick={undoLastChange}
-                className="flex min-h-12 items-center rounded-xl border border-amber-500/40 bg-amber-500/10 px-3 text-[11px] font-semibold text-amber-300"
-              >
-                Undo
-              </button>
-            )}
-            <button
-              type="button"
-              onClick={onClose}
-              aria-label="Close assistant"
-              className="flex min-h-12 min-w-12 items-center justify-center rounded-xl border border-slate-700 text-slate-400 transition hover:border-slate-500 hover:text-slate-200"
-            >
-              ✕
-            </button>
-          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Close assistant"
+            className="flex min-h-10 min-w-10 items-center justify-center rounded-xl border border-slate-700 text-slate-400 transition hover:border-slate-500 hover:text-slate-200"
+          >
+            ✕
+          </button>
         </div>
-
-        {showHistory && ebookManifest?.changeLog && (
-          <div className="max-h-48 flex-shrink-0 overflow-y-auto border-b border-slate-800 bg-slate-950/40 px-4 py-3">
-            <p className="mb-2 text-[10px] font-semibold uppercase tracking-widest text-slate-500">Change history</p>
-            <div className="space-y-2">
-              {[...ebookManifest.changeLog].reverse().map((entry, index) => (
-                <div key={`${entry.timestamp}-${index}`} className="rounded-lg border border-slate-800 bg-slate-900/70 px-3 py-2">
-                  <p className="text-xs text-slate-200">{entry.summary}</p>
-                  <p className="mt-1 text-[10px] text-slate-500">
-                    {new Date(entry.timestamp).toLocaleString()} · {entry.model.toUpperCase()}
-                  </p>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
 
         {/* Quick-action chips — collapsed by default to give chat messages room */}
         {(ebookManifest || (academy && !ebookManifest)) && (
@@ -744,176 +546,6 @@ export function AssistantPanel({ isOpen, onClose, academy, onUpdate, siteConfig,
           </div>
         )}
 
-        {auditReport && (
-          <section className="max-h-[48dvh] flex-shrink-0 overflow-y-auto border-b border-emerald-500/25 bg-emerald-950/10 px-3 py-3" aria-label="Interactive audit findings">
-            <div className="flex items-start justify-between gap-3">
-              <div>
-                <p className="text-xs font-bold uppercase tracking-widest text-emerald-300">Audit findings</p>
-                <p className="mt-1 text-[11px] text-slate-400">
-                  {auditReport.totalConceptDuplicates + auditReport.totalSimilarPairs + auditReport.totalRepetitionPhrases + auditReport.totalOverusedWords} flagged item{auditReport.totalConceptDuplicates + auditReport.totalSimilarPairs + auditReport.totalRepetitionPhrases + auditReport.totalOverusedWords === 1 ? "" : "s"}
-                </p>
-              </div>
-              <button
-                type="button"
-                onClick={() => setAuditReport(null)}
-                className="min-h-12 rounded-xl border border-slate-700 px-3 text-[11px] font-semibold text-slate-400"
-              >
-                Dismiss
-              </button>
-            </div>
-
-            <div className="mt-3 space-y-2">
-              {auditReport.conceptDuplicates.slice(0, 6).map((duplicate, index) => (
-                <div key={`duplicate-${index}`} className="rounded-xl border border-rose-500/25 bg-rose-950/20 p-3">
-                  <p className="text-xs font-semibold text-rose-200">{duplicate.title}</p>
-                  <p className="mt-1 text-[11px] leading-relaxed text-slate-400">
-                    {duplicate.locations.map((location) => location.location).join(" · ")}
-                  </p>
-                  <div className="mt-2 flex flex-wrap gap-2">
-                    <button
-                      type="button"
-                      onClick={() => void send(`Fix the concept duplicate "${duplicate.title}" in ${duplicate.locations.map((location) => location.location).join(" and ")}. Preserve each section's unique teaching.`)}
-                      className="min-h-12 rounded-xl bg-rose-400/15 px-3 text-[11px] font-bold text-rose-200"
-                    >
-                      Fix automatically
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => void send(`Show me the duplicated sections for "${duplicate.title}" and explain what should remain unique.`)}
-                      className="min-h-12 rounded-xl border border-slate-700 px-3 text-[11px] font-semibold text-slate-400"
-                    >
-                      Review sections
-                    </button>
-                  </div>
-                </div>
-              ))}
-
-              {auditReport.similarPairs.slice(0, 4).map((pair, index) => (
-                <div key={`similar-${index}`} className="rounded-xl border border-amber-500/25 bg-amber-950/20 p-3">
-                  <p className="text-xs font-semibold text-amber-200">Similar sections · {Math.round(pair.similarity * 100)}%</p>
-                  <p className="mt-1 text-[11px] text-slate-400">{pair.locationA} · {pair.locationB}</p>
-                  <button
-                    type="button"
-                    onClick={() => void send(`Rewrite ${pair.locationA} and ${pair.locationB} to remove structural similarity while preserving their distinct teaching.`)}
-                    className="mt-2 min-h-12 rounded-xl bg-amber-400/15 px-3 text-[11px] font-bold text-amber-200"
-                  >
-                    Fix automatically
-                  </button>
-                </div>
-              ))}
-
-              {auditReport.repetitions.slice(0, 5).map((repetition, index) => (
-                <div key={`repetition-${index}`} className="rounded-xl border border-cyan-500/25 bg-cyan-950/20 p-3">
-                  <p className="text-xs font-semibold text-cyan-200">Repeated phrase · “{repetition.phrase}” ×{repetition.count}</p>
-                  <button
-                    type="button"
-                    onClick={() => void send(`Reduce unnecessary repetition of the phrase "${repetition.phrase}" throughout the book. Keep intentional uses and vary the rest.`)}
-                    className="mt-2 min-h-12 rounded-xl bg-cyan-400/15 px-3 text-[11px] font-bold text-cyan-200"
-                  >
-                    Fix automatically
-                  </button>
-                </div>
-              ))}
-
-              {auditReport.overusedWords.slice(0, 5).map((word, index) => (
-                <div key={`word-${index}`} className="rounded-xl border border-violet-500/25 bg-violet-950/20 p-3">
-                  <p className="text-xs font-semibold text-violet-200">Overused word · “{word.word}” ×{word.count}</p>
-                  <button
-                    type="button"
-                    onClick={() => void send(`Review the overused word "${word.word}" across the book and replace unnecessary repetitions with context-appropriate alternatives.`)}
-                    className="mt-2 min-h-12 rounded-xl bg-violet-400/15 px-3 text-[11px] font-bold text-violet-200"
-                  >
-                    Fix automatically
-                  </button>
-                </div>
-              ))}
-            </div>
-          </section>
-        )}
-
-        {pendingProposal && (
-          <section className="max-h-[48dvh] flex-shrink-0 overflow-y-auto border-b border-cyan-500/25 bg-cyan-950/10 px-3 py-3" aria-label="Proposed manuscript changes">
-            <div className="flex items-start justify-between gap-3">
-              <div>
-                <p className="text-xs font-bold uppercase tracking-widest text-cyan-300">Change preview</p>
-                <p className="mt-1 text-xs leading-relaxed text-slate-300">{pendingProposal.summary}</p>
-                <p className="mt-1 text-[11px] text-slate-500">
-                  {pendingProposal.changes.length} change{pendingProposal.changes.length === 1 ? "" : "s"} · {pendingProposal.confidence ?? "high"} confidence
-                </p>
-              </div>
-              <button
-                type="button"
-                onClick={() => setShowProposalDiff((current) => !current)}
-                className="min-h-12 flex-shrink-0 rounded-xl border border-slate-700 px-3 text-[11px] font-semibold text-slate-300"
-              >
-                {showProposalDiff ? "Hide diff" : "View diff"}
-              </button>
-            </div>
-
-            <div className="mt-3 space-y-2">
-              {pendingProposal.changes.map((change) => {
-                const selected = pendingProposal.selectedPaths.includes(change.path);
-                return (
-                  <label
-                    key={change.path}
-                    className={`block min-h-12 rounded-xl border px-3 py-2 ${selected ? "border-cyan-500/40 bg-slate-900/80" : "border-slate-800 bg-slate-950/40 opacity-70"}`}
-                  >
-                    <span className="flex items-start gap-3">
-                      <input
-                        type="checkbox"
-                        checked={selected}
-                        onChange={() => toggleProposalPath(change.path)}
-                        className="mt-1 h-6 w-6 flex-shrink-0 accent-cyan-400"
-                      />
-                      <span className="min-w-0 flex-1">
-                        <span className="block text-xs font-semibold text-slate-200">{change.label}</span>
-                        {showProposalDiff && (
-                          <span className="mt-2 block space-y-2">
-                            <span className="block overflow-x-auto rounded-lg border border-rose-500/20 bg-rose-950/20 p-2 text-[11px] leading-relaxed text-rose-200">
-                              <span className="mb-1 block text-[10px] font-semibold uppercase tracking-widest text-rose-400">Before</span>
-                              <span className="whitespace-pre-wrap">{change.before}</span>
-                            </span>
-                            <span className="block overflow-x-auto rounded-lg border border-emerald-500/20 bg-emerald-950/20 p-2 text-[11px] leading-relaxed text-emerald-200">
-                              <span className="mb-1 block text-[10px] font-semibold uppercase tracking-widest text-emerald-400">After</span>
-                              <span className="whitespace-pre-wrap">{change.after}</span>
-                            </span>
-                          </span>
-                        )}
-                      </span>
-                    </span>
-                  </label>
-                );
-              })}
-            </div>
-
-            <div className="mt-3 flex flex-wrap gap-2">
-              <button
-                type="button"
-                onClick={() => void applyProposal(pendingProposal.selectedPaths)}
-                disabled={loading || pendingProposal.selectedPaths.length === 0}
-                className="min-h-12 rounded-xl bg-cyan-400 px-4 text-xs font-bold text-slate-950 disabled:bg-slate-700 disabled:text-slate-500"
-              >
-                Apply selected ({pendingProposal.selectedPaths.length})
-              </button>
-              <button
-                type="button"
-                onClick={() => void applyProposal(pendingProposal.changes.map((change) => change.path))}
-                disabled={loading}
-                className="min-h-12 rounded-xl border border-emerald-500/40 bg-emerald-500/10 px-4 text-xs font-bold text-emerald-300 disabled:opacity-50"
-              >
-                Apply all
-              </button>
-              <button
-                type="button"
-                onClick={rejectProposal}
-                disabled={loading}
-                className="min-h-12 rounded-xl border border-slate-700 px-4 text-xs font-semibold text-slate-400 disabled:opacity-50"
-              >
-                Reject
-              </button>
-            </div>
-          </section>
-        )}
 
         {/* Message history */}
         <div

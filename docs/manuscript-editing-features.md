@@ -2,19 +2,20 @@
 
 This document outlines the manuscript tools that give you complete control over your ebook manuscript.
 
-## 0. Nexus Director Change Control ✅ COMPLETED
+## 0. NexusLM Change Control ✅ COMPLETED
 
-**Location:** Director AI drawer
+**Location:** Ebook workspace → NexusLM tab
 
-AI manuscript edits now use a **preview → approve → undo** workflow:
+NexusLM manuscript edits now use a **preview → approve → undo** workflow:
 
-- Ask Director AI to make an edit in natural language
+- Open the NexusLM tab and choose **Edit / Enrich**
+- Ask NexusLM to make an edit in natural language
 - Review the proposed fields before anything changes
 - Toggle individual changes on or off
 - Use **View diff** to compare before and after text
 - Select **Apply selected**, **Apply all**, or **Reject**
 - Use **Undo** to restore the previous approved manuscript
-- Open **History** to review the assistant's saved edit timeline
+- Open **NexusLM change history** to review the assistant's saved edit timeline
 
 The approval request uses optimistic version locking. If another tab changes the book while a proposal is open, the proposal is rejected and a fresh preview is required.
 

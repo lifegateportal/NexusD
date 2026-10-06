@@ -9,6 +9,13 @@ import { deleteNexusLMChat, getNexusLMChat, saveNexusLMChat } from "@/lib/nexusl
 import { NEXUSLM_WRITING_STYLES, type NexusLMWritingStyle } from "@/lib/nexuslm-writing-styles";
 import { NEXUSLM_AGENTS, type NexusLMAgent } from "@/lib/nexuslm-agents";
 import { NEXUSLM_RESPONSE_LENGTHS, sanitizeNexusLMText, type NexusLMResponseLength } from "@/lib/nexuslm-response";
+import {
+  buildManifestChangeEntries,
+  clearEbookUndoSnapshot,
+  loadEbookUndoSnapshot,
+  saveEbookUndoSnapshot,
+} from "@/lib/ebook-change-control";
+import type { EbookChangeEntry, EbookUndoSnapshot } from "@/lib/ebook-change-control";
 
 type NexusLMPanelProps = {
   conversationKey: string;
@@ -22,7 +29,48 @@ type Mode = "ask" | "socratic" | "plan" | "draft" | "edit";
 type Persona = "editorial-coach" | "skeptical-reviewer" | "socratic-teacher" | "voice-guardian";
 type Message = { role: "user" | "assistant" | "system"; content: string };
 type Source = { id: string; label: string; excerpt: string };
-type PendingEdit = { instruction: string; summary: string; confidence?: "high" | "medium" | "low"; scope: "chapter" | "focused"; transcriptLabel?: string };
+type LibraryPatch = {
+  slug: string;
+  title?: string;
+  subtitle?: string;
+  authorName?: string;
+  synopsis?: string;
+  coverAccent?: string;
+};
+type PendingEdit = {
+  instruction: string;
+  summary: string;
+  confidence?: "high" | "medium" | "low";
+  scope: "chapter" | "focused";
+  transcriptLabel?: string;
+  baseManifest: EbookManifest;
+  proposedManifest: EbookManifest;
+  changes: EbookChangeEntry[];
+  selectedPaths: string[];
+  manifestVersion: string;
+  libraryPatch?: LibraryPatch;
+};
+type AuditConceptDuplicate = {
+  type: string;
+  title: string;
+  description: string;
+  severity: "minor" | "major";
+  locations: Array<{ location: string; excerpt: string }>;
+  recommendation: string;
+};
+type AuditSimilarPair = { locationA: string; locationB: string; similarity: number };
+type AuditRepetition = { phrase: string; count: number; reason: string | null; alternatives: string[] };
+type AuditOverusedWord = { word: string; count: number; frequency: string; alternatives: string[] };
+type BookAuditReport = {
+  conceptDuplicates: AuditConceptDuplicate[];
+  similarPairs: AuditSimilarPair[];
+  repetitions: AuditRepetition[];
+  overusedWords: AuditOverusedWord[];
+  totalConceptDuplicates: number;
+  totalSimilarPairs: number;
+  totalRepetitionPhrases: number;
+  totalOverusedWords: number;
+};
 
 function cleanAssistantLine(line: string): string {
   return sanitizeNexusLMText(line);
@@ -63,6 +111,44 @@ function inferMode(instruction: string, selectedMode: Mode): Mode {
   if (/\b(vet|challenge|question|assumption|contradiction|weak|gap|skeptic|critique)\b/.test(text)) return "socratic";
   if (/\b(edit|rewrite|revise|enrich|expand|shorten|tighten|change|improve|fix)\b/.test(text)) return "edit";
   return selectedMode === "ask" ? "ask" : selectedMode;
+}
+
+function isAuditIntent(text: string): boolean {
+  return /\b(audit|full[\s-]?audit|review\s+the\s+book|analyse|analyze|repetit|duplicat|overused\s+words?|similar\s+sections?|quality\s+check|book\s+report|flag\s+issues|check\s+(?:the\s+)?book|find\s+(issues|problems|errors|duplicates?)|sounds?\s+redundant|too\s+repetitive|check\s+for\s+(duplicates?|repetition|issues|problems))\b/i.test(text);
+}
+
+function formatAuditReport(report: BookAuditReport): string {
+  const total = report.totalConceptDuplicates + report.totalSimilarPairs + report.totalRepetitionPhrases;
+  const lines = [
+    "BOOK AUDIT COMPLETE",
+    total === 0 ? "No significant issues found." : `${total} significant issue${total === 1 ? "" : "s"} flagged.`,
+  ];
+  if (report.conceptDuplicates.length > 0) {
+    lines.push("", `CONCEPT DUPLICATES (${report.conceptDuplicates.length})`);
+    for (const duplicate of report.conceptDuplicates.slice(0, 8)) {
+      lines.push(`• ${duplicate.title} [${duplicate.severity}]`);
+      lines.push(`  ${duplicate.locations.map((location) => location.location).join(" · ")}`);
+    }
+  }
+  if (report.similarPairs.length > 0) {
+    lines.push("", `SIMILAR SECTIONS (${report.similarPairs.length})`);
+    for (const pair of report.similarPairs.slice(0, 8)) {
+      lines.push(`• ${pair.locationA} ↔ ${pair.locationB} (${Math.round(pair.similarity * 100)}%)`);
+    }
+  }
+  if (report.repetitions.length > 0) {
+    lines.push("", `REPEATED PHRASES (${report.repetitions.length})`);
+    for (const repetition of report.repetitions.slice(0, 8)) {
+      lines.push(`• "${repetition.phrase}" ×${repetition.count}`);
+    }
+  }
+  if (report.overusedWords.length > 0) {
+    lines.push("", `OVERUSED WORDS (${report.overusedWords.length})`);
+    for (const word of report.overusedWords.slice(0, 8)) {
+      lines.push(`• "${word.word}" ×${word.count} (${word.frequency})`);
+    }
+  }
+  return lines.join("\n");
 }
 
 function isChapterWideEdit(instruction: string): boolean {
@@ -134,10 +220,19 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
   const [sources, setSources] = useState<Source[]>([]);
   const [pendingEdit, setPendingEdit] = useState<PendingEdit | null>(null);
   const [pendingDraft, setPendingDraft] = useState<ChapterDraft | null>(null);
+  const [auditReport, setAuditReport] = useState<BookAuditReport | null>(null);
+  const [undoSnapshot, setUndoSnapshot] = useState<EbookUndoSnapshot | null>(null);
+  const [showProposalDiff, setShowProposalDiff] = useState(false);
+  const [showHistory, setShowHistory] = useState(false);
   const [selectedTranscriptLabel, setSelectedTranscriptLabel] = useState("");
   const [showMobileContext, setShowMobileContext] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const historyLoadedRef = useRef(false);
+
+  useEffect(() => {
+    setUndoSnapshot(manifest?.jobId ? loadEbookUndoSnapshot(manifest.jobId) : null);
+    setShowHistory(false);
+  }, [manifest?.jobId]);
 
   const selectedTranscript = transcripts.find((transcript) => transcript.label === selectedTranscriptLabel) ?? transcripts[0] ?? null;
 
@@ -227,6 +322,19 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
     setLoading(true);
 
     try {
+      if (manifest && isAuditIntent(instruction)) {
+        const res = await fetch("/api/ebook/audit", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ manifest }),
+        });
+        const json = await res.json() as BookAuditReport & { error?: string };
+        if (!res.ok || json.error) throw new Error(json.error ?? `Request failed (${res.status})`);
+        setAuditReport(json);
+        setMessages((current) => [...current, { role: "assistant", content: formatAuditReport(json) }]);
+        return;
+      }
+
       if (activeMode === "draft") {
         const chapterMatch = instruction.match(/\bchapter\s+(\d+)\b/i);
         const chapterNumber = chapterMatch ? Number(chapterMatch[1]) : 0;
@@ -302,10 +410,21 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
           manifestVersion: (manifest as Record<string, unknown>).__version as string | undefined,
           transcriptSources: transcripts,
           selectedTranscriptLabel: selectedTranscript?.label,
-          dryRun: requestMode !== "edit",
+          dryRun: true,
         }),
       });
-      const json = await res.json() as { manifest?: unknown; patch?: unknown; summary?: string; confidence?: "high" | "medium" | "low"; error?: string; clarificationNeeded?: string; needsClarification?: boolean; noChanges?: boolean; manifestVersion?: string };
+      const json = await res.json() as {
+        manifest?: unknown;
+        patch?: unknown;
+        summary?: string;
+        confidence?: "high" | "medium" | "low";
+        error?: string;
+        clarificationNeeded?: string;
+        needsClarification?: boolean;
+        noChanges?: boolean;
+        manifestVersion?: string;
+        libraryPatch?: LibraryPatch;
+      };
       if (!res.ok || json.error) throw new Error(json.error ?? `Request failed (${res.status})`);
       if (json.needsClarification && json.clarificationNeeded) {
       setMessages((current) => [...current, { role: "assistant", content: sanitizeNexusLMText(json.clarificationNeeded!) }]);
@@ -313,15 +432,33 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
       }
 
       if (activeMode === "edit") {
+        const editManifest = manifest;
+        if (!editManifest) throw new Error("Load a manuscript before requesting an edit.");
         if (!json.patch || !json.summary) throw new Error("NexusLM returned no editable proposal.");
+        const parsed = EbookManifestSchema.safeParse(json.manifest);
+        if (!parsed.success) throw new Error("NexusLM returned an invalid editable proposal.");
+        const changes = buildManifestChangeEntries(editManifest, parsed.data);
+        if (changes.length === 0) {
+          setMessages((current) => [...current, { role: "assistant", content: "NexusLM generated no reviewable manuscript changes." }]);
+          return;
+        }
         setPendingEdit({
           instruction,
           summary: json.summary,
           confidence: json.confidence,
           scope: isChapterWideEdit(instruction) ? "chapter" : "focused",
           transcriptLabel: selectedTranscript?.label,
+          baseManifest: editManifest,
+          proposedManifest: parsed.data,
+          changes,
+          selectedPaths: changes.map((change) => change.path),
+          manifestVersion: json.manifestVersion ?? "",
+          libraryPatch: json.libraryPatch,
         });
-        setMessages((current) => [...current, { role: "assistant", content: sanitizeNexusLMText(`Proposal ready for review: ${json.summary}`) }]);
+        setMessages((current) => [...current, {
+          role: "assistant",
+          content: sanitizeNexusLMText(`Proposal ready for review: ${json.summary}\n\n${changes.length} change${changes.length === 1 ? "" : "s"} are waiting for your approval.`),
+        }]);
         return;
       }
 
@@ -379,39 +516,94 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
     setPendingDraft(null);
   }
 
-  async function applyPendingEdit() {
-    if (!manifest || !pendingEdit || loading) return;
+  function togglePendingPath(path: string): void {
+    setPendingEdit((current) => {
+      if (!current) return current;
+      const selectedPaths = current.selectedPaths.includes(path)
+        ? current.selectedPaths.filter((selectedPath) => selectedPath !== path)
+        : [...current.selectedPaths, path];
+      return { ...current, selectedPaths };
+    });
+  }
+
+  async function applyPendingEdit(paths = pendingEdit?.selectedPaths ?? []): Promise<void> {
+    if (!manifest || !pendingEdit || paths.length === 0 || loading) return;
+    if (buildManifestChangeEntries(pendingEdit.baseManifest, manifest).length > 0) {
+      setPendingEdit(null);
+      setMessages((current) => [...current, {
+        role: "assistant",
+        content: "Edit conflict: the manuscript changed while this proposal was open. Generate a new NexusLM preview.",
+      }]);
+      return;
+    }
     setLoading(true);
     try {
-      const res = await fetch("/api/ebook/assistant", {
+      const summary = `Applied ${paths.length} of ${pendingEdit.changes.length} approved changes: ${pendingEdit.summary}`;
+      const res = await fetch("/api/ebook/changes/apply", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          manifest,
+          manifest: manifest,
+          proposedManifest: pendingEdit.proposedManifest,
+          selectedPaths: paths,
+          manifestVersion: pendingEdit.manifestVersion,
           instruction: pendingEdit.instruction,
-          history: compactHistory(messages),
-          responseLength,
-          llmTemperature: nexusLMTemperature,
-          pipeline: pipelineSnapshot ?? undefined,
-          manifestVersion: (manifest as Record<string, unknown>).__version as string | undefined,
-          transcriptSources: transcripts,
-          selectedTranscriptLabel: pendingEdit.transcriptLabel,
-          dryRun: false,
+          summary,
         }),
       });
       const json = await res.json() as { manifest?: unknown; summary?: string; error?: string; manifestVersion?: string };
+      if (res.status === 409) {
+        setMessages((current) => [...current, {
+          role: "assistant",
+          content: "Edit conflict: the manuscript changed while this proposal was open. Generate a new NexusLM preview.",
+        }]);
+        setPendingEdit(null);
+        return;
+      }
       if (!res.ok || json.error) throw new Error(json.error ?? `Request failed (${res.status})`);
       const parsed = EbookManifestSchema.safeParse(json.manifest);
       if (!parsed.success) throw new Error("NexusLM returned an invalid manuscript.");
+
+      const snapshot: EbookUndoSnapshot = {
+        timestamp: new Date().toISOString(),
+        instruction: pendingEdit.instruction,
+        summary,
+        manifest: pendingEdit.baseManifest,
+      };
+      saveEbookUndoSnapshot(manifest.jobId, snapshot);
       const nextManifest = json.manifestVersion ? { ...parsed.data, __version: json.manifestVersion } : parsed.data;
       onManifestChange(nextManifest as EbookManifest, json.summary ?? "Manuscript updated.");
-      setMessages((current) => [...current, { role: "assistant", content: sanitizeNexusLMText(json.summary ?? "Approved manuscript changes applied.") }]);
+      setUndoSnapshot(snapshot);
+
+      if (pendingEdit.libraryPatch) {
+        const catalogRes = await fetch("/api/ebook/publish", {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(pendingEdit.libraryPatch),
+        });
+        if (!catalogRes.ok) {
+          setMessages((current) => [...current, {
+            role: "assistant",
+            content: "The manuscript was updated, but published catalog metadata could not be synced.",
+          }]);
+        }
+      }
+
+      setMessages((current) => [...current, { role: "assistant", content: sanitizeNexusLMText(json.summary ?? summary) }]);
       setPendingEdit(null);
     } catch (error) {
       setMessages((current) => [...current, { role: "assistant", content: readableError(error) }]);
     } finally {
       setLoading(false);
     }
+  }
+
+  function undoLastEdit(): void {
+    if (!manifest || !undoSnapshot) return;
+    onManifestChange(undoSnapshot.manifest, `Undid: ${undoSnapshot.summary}`);
+    clearEbookUndoSnapshot(manifest.jobId);
+    setUndoSnapshot(null);
+    setMessages((current) => [...current, { role: "assistant", content: `Undid the last approved NexusLM change: ${undoSnapshot.summary}` }]);
   }
 
   return (
@@ -443,6 +635,17 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
 
         <div className="shrink-0 bg-shell-950 px-3 pb-[max(env(safe-area-inset-bottom),0.75rem)] pt-2 lg:px-8 lg:pb-5 lg:pt-3">
           <div className="mx-auto max-w-4xl">
+            {undoSnapshot && (
+              <div className="mb-3 flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-amber-500/30 bg-amber-500/10 p-4">
+                <div>
+                  <p className="text-xs font-bold uppercase tracking-widest text-amber-300">Last approved edit</p>
+                  <p className="mt-1 text-xs leading-5 text-amber-100">{undoSnapshot.summary}</p>
+                </div>
+                <button type="button" onClick={undoLastEdit} disabled={loading} className="min-h-12 rounded-xl border border-amber-400/40 px-4 text-sm font-bold text-amber-200 disabled:opacity-40">
+                  Undo
+                </button>
+              </div>
+            )}
             {pendingDraft && (
               <div className="mb-3 rounded-2xl border border-cyan-500/30 bg-cyan-500/10 p-4">
                 <p className="text-xs font-bold uppercase tracking-widest text-cyan-300">Chapter draft ready</p>
@@ -455,15 +658,105 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
               </div>
             )}
             {pendingEdit && (
-              <div className="mb-3 rounded-2xl border border-amber-500/30 bg-amber-500/10 p-4">
-                <p className="text-xs font-bold uppercase tracking-widest text-amber-300">Edit proposal</p>
-                <p className="mt-2 text-sm leading-6 text-amber-50">{pendingEdit.summary}</p>
-                <p className="mt-2 text-xs text-amber-200/70">Confidence: {pendingEdit.confidence ?? "high"}. Review the request before applying it.</p>
-                <div className="mt-3 flex gap-2">
-                  <button type="button" onClick={() => void applyPendingEdit()} disabled={loading} className="min-h-12 rounded-xl bg-amber-300 px-4 text-sm font-bold text-slate-950 disabled:opacity-40">
-                    {pendingEdit.scope === "chapter" ? "Apply all chapter fixes" : "Apply change"}
+              <div className="mb-3 max-h-[50dvh] overflow-y-auto rounded-2xl border border-cyan-500/30 bg-cyan-950/20 p-4">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <p className="text-xs font-bold uppercase tracking-widest text-cyan-300">NexusLM change preview</p>
+                    <p className="mt-2 text-sm leading-6 text-cyan-50">{pendingEdit.summary}</p>
+                    <p className="mt-2 text-xs text-cyan-200/70">
+                      {pendingEdit.changes.length} change{pendingEdit.changes.length === 1 ? "" : "s"} · Confidence: {pendingEdit.confidence ?? "high"}
+                    </p>
+                  </div>
+                  <button type="button" onClick={() => setShowProposalDiff((current) => !current)} className="min-h-12 shrink-0 rounded-xl border border-slate-700 px-3 text-xs font-semibold text-slate-300">
+                    {showProposalDiff ? "Hide diff" : "View diff"}
                   </button>
-                  <button type="button" onClick={() => setPendingEdit(null)} disabled={loading} className="min-h-12 rounded-xl border border-slate-700 px-4 text-sm font-semibold text-slate-300 disabled:opacity-40">Discard</button>
+                </div>
+                <div className="mt-3 space-y-2">
+                  {pendingEdit.changes.map((change) => {
+                    const selected = pendingEdit.selectedPaths.includes(change.path);
+                    return (
+                      <label key={change.path} className={`block rounded-xl border px-3 py-2 ${selected ? "border-cyan-500/40 bg-slate-900/80" : "border-slate-800 bg-slate-950/40 opacity-70"}`}>
+                        <span className="flex items-start gap-3">
+                          <input type="checkbox" checked={selected} onChange={() => togglePendingPath(change.path)} className="mt-1 h-6 w-6 shrink-0 accent-cyan-400" />
+                          <span className="min-w-0 flex-1">
+                            <span className="block text-xs font-semibold text-slate-200">{change.label}</span>
+                            {showProposalDiff && (
+                              <span className="mt-2 block space-y-2">
+                                <span className="block overflow-x-auto rounded-lg border border-rose-500/20 bg-rose-950/20 p-2 text-[11px] leading-relaxed text-rose-200">
+                                  <span className="mb-1 block text-[10px] font-semibold uppercase tracking-widest text-rose-400">Before</span>
+                                  <span className="whitespace-pre-wrap">{change.before}</span>
+                                </span>
+                                <span className="block overflow-x-auto rounded-lg border border-emerald-500/20 bg-emerald-950/20 p-2 text-[11px] leading-relaxed text-emerald-200">
+                                  <span className="mb-1 block text-[10px] font-semibold uppercase tracking-widest text-emerald-400">After</span>
+                                  <span className="whitespace-pre-wrap">{change.after}</span>
+                                </span>
+                              </span>
+                            )}
+                          </span>
+                        </span>
+                      </label>
+                    );
+                  })}
+                </div>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  <button type="button" onClick={() => void applyPendingEdit()} disabled={loading || pendingEdit.selectedPaths.length === 0} className="min-h-12 rounded-xl bg-cyan-300 px-4 text-sm font-bold text-slate-950 disabled:opacity-40">
+                    Apply selected ({pendingEdit.selectedPaths.length})
+                  </button>
+                  <button type="button" onClick={() => void applyPendingEdit(pendingEdit.changes.map((change) => change.path))} disabled={loading} className="min-h-12 rounded-xl border border-emerald-500/40 bg-emerald-500/10 px-4 text-sm font-bold text-emerald-200 disabled:opacity-40">
+                    Apply all
+                  </button>
+                  <button type="button" onClick={() => setPendingEdit(null)} disabled={loading} className="min-h-12 rounded-xl border border-slate-700 px-4 text-sm font-semibold text-slate-300 disabled:opacity-40">
+                    Reject
+                  </button>
+                </div>
+              </div>
+            )}
+            {auditReport && (
+              <div className="mb-3 max-h-[45dvh] overflow-y-auto rounded-2xl border border-emerald-500/30 bg-emerald-950/20 p-4">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <p className="text-xs font-bold uppercase tracking-widest text-emerald-300">NexusLM audit findings</p>
+                    <p className="mt-1 text-xs text-emerald-100/70">Select a finding to send a focused repair request through the preview workflow.</p>
+                  </div>
+                  <button type="button" onClick={() => setAuditReport(null)} className="min-h-12 rounded-xl border border-slate-700 px-3 text-xs font-semibold text-slate-300">
+                    Dismiss
+                  </button>
+                </div>
+                <div className="mt-3 space-y-2">
+                  {auditReport.conceptDuplicates.slice(0, 6).map((duplicate, index) => (
+                    <div key={`duplicate-${index}`} className="rounded-xl border border-rose-500/25 bg-rose-950/20 p-3">
+                      <p className="text-xs font-semibold text-rose-200">{duplicate.title}</p>
+                      <p className="mt-1 text-[11px] text-slate-400">{duplicate.locations.map((location) => location.location).join(" · ")}</p>
+                      <button type="button" onClick={() => void send(`Fix the concept duplicate "${duplicate.title}" in ${duplicate.locations.map((location) => location.location).join(" and ")} while preserving each section's unique teaching.`, "edit")} className="mt-2 min-h-12 rounded-xl bg-rose-400/15 px-3 text-xs font-bold text-rose-200">
+                        Fix automatically
+                      </button>
+                    </div>
+                  ))}
+                  {auditReport.similarPairs.slice(0, 4).map((pair, index) => (
+                    <div key={`similar-${index}`} className="rounded-xl border border-amber-500/25 bg-amber-950/20 p-3">
+                      <p className="text-xs font-semibold text-amber-200">Similar sections · {Math.round(pair.similarity * 100)}%</p>
+                      <p className="mt-1 text-[11px] text-slate-400">{pair.locationA} · {pair.locationB}</p>
+                      <button type="button" onClick={() => void send(`Rewrite ${pair.locationA} and ${pair.locationB} to remove structural similarity while preserving their distinct teaching.`, "edit")} className="mt-2 min-h-12 rounded-xl bg-amber-400/15 px-3 text-xs font-bold text-amber-200">
+                        Fix automatically
+                      </button>
+                    </div>
+                  ))}
+                  {auditReport.repetitions.slice(0, 5).map((repetition, index) => (
+                    <div key={`repetition-${index}`} className="rounded-xl border border-cyan-500/25 bg-cyan-950/20 p-3">
+                      <p className="text-xs font-semibold text-cyan-200">Repeated phrase · “{repetition.phrase}” ×{repetition.count}</p>
+                      <button type="button" onClick={() => void send(`Reduce unnecessary repetition of the phrase "${repetition.phrase}" throughout the book. Keep intentional uses and vary the rest.`, "edit")} className="mt-2 min-h-12 rounded-xl bg-cyan-400/15 px-3 text-xs font-bold text-cyan-200">
+                        Fix automatically
+                      </button>
+                    </div>
+                  ))}
+                  {auditReport.overusedWords.slice(0, 5).map((word, index) => (
+                    <div key={`word-${index}`} className="rounded-xl border border-violet-500/25 bg-violet-950/20 p-3">
+                      <p className="text-xs font-semibold text-violet-200">Overused word · “{word.word}” ×{word.count}</p>
+                      <button type="button" onClick={() => void send(`Review the overused word "${word.word}" across the book and replace unnecessary repetitions with context-appropriate alternatives.`, "edit")} className="mt-2 min-h-12 rounded-xl bg-violet-400/15 px-3 text-xs font-bold text-violet-200">
+                        Fix automatically
+                      </button>
+                    </div>
+                  ))}
                 </div>
               </div>
             )}
@@ -566,6 +859,25 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
           <p className="mt-3 text-xs text-slate-500">Manuscript: <span className="text-slate-300">{manifest ? `${manifest.chapters.length} written chapter${manifest.chapters.length === 1 ? "" : "s"}` : "not loaded"}</span></p>
           <p className="mt-1 text-xs text-slate-500">Transcript sources: <span className="text-slate-300">{transcripts.length}</span></p>
         </div>
+
+        {manifest?.changeLog && manifest.changeLog.length > 0 && (
+          <div className="mt-6 border-t border-slate-800 pt-5">
+            <button type="button" onClick={() => setShowHistory((current) => !current)} className="flex min-h-12 w-full items-center justify-between text-left text-xs font-semibold uppercase tracking-widest text-slate-500">
+              <span>NexusLM change history</span>
+              <span className="text-cyan-300">{showHistory ? "Hide" : `${manifest.changeLog.length} edits`}</span>
+            </button>
+            {showHistory && (
+              <div className="mt-3 space-y-2">
+                {[...manifest.changeLog].reverse().map((entry, index) => (
+                  <div key={`${entry.timestamp}-${index}`} className="rounded-xl border border-slate-800 bg-slate-900/70 px-3 py-2">
+                    <p className="text-xs leading-5 text-slate-200">{entry.summary}</p>
+                    <p className="mt-1 text-[10px] text-slate-500">{new Date(entry.timestamp).toLocaleString()} · {entry.model.toUpperCase()}</p>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
 
         <div className="mt-6 border-t border-slate-800 pt-5">
           <p className="text-xs font-semibold uppercase tracking-widest text-slate-500">Transcript slots</p>
