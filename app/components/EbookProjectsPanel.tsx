@@ -6,15 +6,26 @@ import type { EbookJobState, EbookManifest } from "@/lib/schemas/ebook";
 import { EbookManifestSchema, EbookJobStateSchema } from "@/lib/schemas/ebook";
 import type { ProjectSnapshot } from "@/lib/project-store";
 import type { PublishedBookEntry } from "@/lib/schemas/published-book";
+import { ProjectFolderTree } from "@/app/components/ProjectFolderTree";
+import {
+  flattenProjectFolders,
+  UNFILED_FOLDER_ID,
+  type ProjectFolder,
+} from "@/lib/project-organization-store";
 
 type EbookProjectsPanelProps = {
   projects: EbookProject[];
+  folders: ProjectFolder[];
   suggestedName: string;
   canSave: boolean;
-  onSave: (name: string) => void;
+  onSave: (name: string, folderId?: string) => void;
   onLoad: (id: string) => void;
   onDelete: (id: string) => void;
   onImport: (project: EbookProject) => void;
+  onMoveProject: (id: string, folderId: string) => void | Promise<void>;
+  onCreateFolder: (name: string, parentId: string | null) => void | Promise<void>;
+  onRenameFolder: (id: string, name: string) => void | Promise<void>;
+  onDeleteFolder: (id: string) => void | Promise<void>;
   /** Called with the parsed job state so the page can build a manifest from it */
   onImportManifestJson?: (job: EbookJobState) => EbookManifest | null;
   /** Called when a manifest/job JSON is successfully parsed from a device file */
@@ -66,18 +77,33 @@ function buildManifest(p: EbookProject): EbookManifest {
 
 export function EbookProjectsPanel({
   projects,
+  folders,
   suggestedName,
   canSave,
   onSave,
   onLoad,
   onDelete,
   onImport,
+  onMoveProject,
+  onCreateFolder,
+  onRenameFolder,
+  onDeleteFolder,
   onImportManifestJson,
   onManifestLoaded,
   onPublish,
   onUnpublish,
   onUpdateImages,
 }: EbookProjectsPanelProps) {
+  const [selectedFolderId, setSelectedFolderId] = useState<string | null>(null);
+  const folderCounts = projects.reduce<Record<string, number>>((counts, project) => {
+    const folderId = project.folderId ?? UNFILED_FOLDER_ID;
+    counts[folderId] = (counts[folderId] ?? 0) + 1;
+    return counts;
+  }, {});
+  const visibleProjects = selectedFolderId === null
+    ? projects
+    : projects.filter((project) => (project.folderId ?? UNFILED_FOLDER_ID) === selectedFolderId);
+  const folderOptions = flattenProjectFolders(folders);
   const [name, setName] = useState(suggestedName);
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
   const [confirmUnpublish, setConfirmUnpublish] = useState<string | null>(null);
@@ -327,7 +353,7 @@ export function EbookProjectsPanel({
             className="min-h-12 flex-1 rounded-xl border border-slate-600 bg-slate-800/60 px-4 text-base text-slate-100 placeholder-slate-500 focus:border-cyan-500 focus:outline-none"
           />
           <button
-            onClick={() => { if (name.trim()) onSave(name.trim()); }}
+            onClick={() => { if (name.trim()) onSave(name.trim(), selectedFolderId ?? UNFILED_FOLDER_ID); }}
             disabled={!name.trim()}
             className="min-h-12 rounded-xl bg-cyan-600 px-6 text-sm font-semibold text-white transition hover:bg-cyan-500 disabled:opacity-40"
           >
@@ -375,18 +401,35 @@ export function EbookProjectsPanel({
       </div>
 
       {/* ── Saved project list ───────────────────────────────────────────── */}
-      <div>
+      <div className="grid min-h-0 gap-4 lg:grid-cols-[220px_minmax(0,1fr)]">
+        <ProjectFolderTree
+          folders={folders}
+          selectedFolderId={selectedFolderId}
+          projectCounts={folderCounts}
+          totalProjectCount={projects.length}
+          onSelect={setSelectedFolderId}
+          onCreate={onCreateFolder}
+          onRename={onRenameFolder}
+          onDelete={onDeleteFolder}
+        />
+        <div className="min-w-0">
         <p className="mb-2 text-[10px] font-bold uppercase tracking-widest text-slate-500">
-          Saved Books {projects.length > 0 && `· ${projects.length}`}
+          Saved Books {visibleProjects.length > 0 && `· ${visibleProjects.length}`}
         </p>
-        {projects.length === 0 ? (
+        {visibleProjects.length === 0 ? (
           <div className="rounded-xl border border-slate-700/40 bg-slate-800/20 p-6 text-center">
-            <p className="text-sm text-slate-400">No saved books yet.</p>
-            <p className="mt-1 text-xs text-slate-600">Complete some pipeline stages, then hit Save above.</p>
+            <p className="text-sm text-slate-400">
+              {projects.length === 0 ? "No saved books yet." : "No books in this folder."}
+            </p>
+            <p className="mt-1 text-xs text-slate-600">
+              {projects.length === 0
+                ? "Complete some pipeline stages, then hit Save above."
+                : "Move a book here from its folder menu or choose another folder."}
+            </p>
           </div>
         ) : (
           <div className="flex flex-col gap-2">
-            {projects.map((p) => (
+            {visibleProjects.map((p) => (
               <div key={p.id} className="rounded-xl border border-slate-700/50 bg-slate-800/40 p-4">
                 <div className="mb-3 flex items-start justify-between gap-2">
                   <div className="min-w-0">
@@ -397,7 +440,13 @@ export function EbookProjectsPanel({
                         : p.status === "complete" ? "Complete" : p.status}
                       {p.totalWordCount > 0 && ` · ${p.totalWordCount.toLocaleString()} words`}
                       {" · "}
-                      {new Date(p.updatedAt).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })}
+                      <span>
+                        Created {new Date(p.createdAt).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })}
+                      </span>
+                      {" · "}
+                      <span>
+                        Updated {new Date(p.updatedAt).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })}
+                      </span>
                     </p>
                   </div>
 
@@ -432,7 +481,7 @@ export function EbookProjectsPanel({
                   )}
                 </div>
 
-                <div className="flex gap-2">
+                <div className="flex flex-wrap gap-2">
                   <button
                     onClick={() => onLoad(p.id)}
                     className="flex min-h-10 flex-1 items-center justify-center gap-2 rounded-lg border border-slate-600 text-sm font-semibold text-slate-300 transition hover:border-cyan-500/50 hover:text-cyan-400"
@@ -491,6 +540,21 @@ export function EbookProjectsPanel({
                       </div>
                     )}
                   </div>
+                  <label className="order-last flex min-h-12 basis-full items-center gap-2 rounded-lg border border-slate-700/50 bg-slate-900/30 px-3 text-xs text-slate-500">
+                    <span className="shrink-0">Folder</span>
+                    <select
+                      value={p.folderId ?? UNFILED_FOLDER_ID}
+                      onChange={(event) => void onMoveProject(p.id, event.target.value)}
+                      aria-label={`Move ${p.name} to folder`}
+                      className="min-h-12 min-w-0 flex-1 bg-transparent text-base text-slate-300 focus:outline-none"
+                    >
+                      {folderOptions.map((folder) => (
+                        <option key={folder.id} value={folder.id} className="bg-slate-900">
+                          {folder.name}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
                   <button
                     onClick={() => exportProject(p)}
                     title="Download full project (all pipeline stages)"
@@ -694,6 +758,7 @@ export function EbookProjectsPanel({
           </div>
         )}
       </div>
+      </div>
 
       {/* ── Library Books (live catalog from R2) ─────────────────────────── */}
       <div>
@@ -843,4 +908,3 @@ export function EbookProjectsPanel({
     </div>
   );
 }
-

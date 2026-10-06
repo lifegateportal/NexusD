@@ -4,15 +4,26 @@ import { useRef, useState } from "react";
 import { SiteConfigSchema } from "@/lib/schemas/site-config";
 import type { ProjectSnapshot } from "@/lib/project-store";
 import type { EbookProject } from "@/lib/ebook-project-store";
+import { ProjectFolderTree } from "@/app/components/ProjectFolderTree";
+import {
+  flattenProjectFolders,
+  UNFILED_FOLDER_ID,
+  type ProjectFolder,
+} from "@/lib/project-organization-store";
 
 type ProjectsPanelProps = {
   projects: ProjectSnapshot[];
+  folders: ProjectFolder[];
   suggestedName: string;
   canSave: boolean;
-  onSave: (name: string) => void;
+  onSave: (name: string, folderId?: string) => void;
   onLoad: (id: string) => void;
   onDelete: (id: string) => void;
   onImport: (snapshot: ProjectSnapshot) => void;
+  onMoveProject: (id: string, folderId: string) => void | Promise<void>;
+  onCreateFolder: (name: string, parentId: string | null) => void | Promise<void>;
+  onRenameFolder: (id: string, name: string) => void | Promise<void>;
+  onDeleteFolder: (id: string) => void | Promise<void>;
   /** Publish an ebook project to the Library — returns the slug on success */
   onPublish?: (project: ProjectSnapshot) => Promise<string | null>;
   /** Unpublish (remove from library) a published project */
@@ -34,17 +45,31 @@ function exportProject(p: ProjectSnapshot) {
 
 export function ProjectsPanel({
   projects: allProjects,
+  folders,
   suggestedName,
   canSave,
   onSave,
   onLoad,
   onDelete,
   onImport,
+  onMoveProject,
+  onCreateFolder,
+  onRenameFolder,
+  onDeleteFolder,
   onPublish,
   onUnpublish,
   onUpdateImages,
 }: ProjectsPanelProps) {
-  const projects = allProjects;
+  const [selectedFolderId, setSelectedFolderId] = useState<string | null>(null);
+  const folderCounts = allProjects.reduce<Record<string, number>>((counts, project) => {
+    const folderId = project.folderId ?? UNFILED_FOLDER_ID;
+    counts[folderId] = (counts[folderId] ?? 0) + 1;
+    return counts;
+  }, {});
+  const projects = selectedFolderId === null
+    ? allProjects
+    : allProjects.filter((project) => (project.folderId ?? UNFILED_FOLDER_ID) === selectedFolderId);
+  const folderOptions = flattenProjectFolders(folders);
   const [name, setName] = useState(suggestedName);
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
   const [confirmUnpublish, setConfirmUnpublish] = useState<string | null>(null);
@@ -108,6 +133,7 @@ export function ProjectsPanel({
             name: (ep.name || ep.bookTitle || "Imported Ebook") as string,
             createdAt: (ep.createdAt ?? new Date().toISOString()) as string,
             updatedAt: new Date().toISOString(),
+            folderId: ep.folderId,
             academy: null,
             siteConfig: defaultSiteConfig,
             deliveryInstructions: "",
@@ -128,6 +154,7 @@ export function ProjectsPanel({
             name: "Imported Ebook",
             createdAt: new Date().toISOString(),
             updatedAt: new Date().toISOString(),
+            folderId: undefined,
             academy: null,
             siteConfig: defaultSiteConfig,
             deliveryInstructions: "",
@@ -198,7 +225,7 @@ export function ProjectsPanel({
             className="min-h-12 flex-1 rounded-xl border border-slate-600 bg-slate-800/60 px-4 text-base text-slate-100 placeholder-slate-500 focus:border-cyan-500 focus:outline-none"
           />
           <button
-            onClick={() => { if (name.trim()) onSave(name.trim()); }}
+            onClick={() => { if (name.trim()) onSave(name.trim(), selectedFolderId ?? UNFILED_FOLDER_ID); }}
             disabled={!name.trim()}
             className="min-h-12 rounded-xl bg-accent-500 px-5 text-sm font-semibold text-white transition hover:opacity-90 disabled:opacity-40"
           >
@@ -207,13 +234,30 @@ export function ProjectsPanel({
         </div>
       )}
 
-      {/* Project list */}
-      {projects.length === 0 ? (
-        <div className="rounded-xl border border-slate-700/40 bg-slate-800/20 p-6 text-center">
-          <p className="text-sm text-slate-400">No saved projects yet.</p>
-          <p className="mt-1 text-xs text-slate-600">Run the pipeline, then save your work here to come back to it later.</p>
-        </div>
-      ) : (
+      <div className="grid min-h-0 gap-4 lg:grid-cols-[220px_minmax(0,1fr)]">
+        <ProjectFolderTree
+          folders={folders}
+          selectedFolderId={selectedFolderId}
+          projectCounts={folderCounts}
+          totalProjectCount={allProjects.length}
+          onSelect={setSelectedFolderId}
+          onCreate={onCreateFolder}
+          onRename={onRenameFolder}
+          onDelete={onDeleteFolder}
+        />
+        <div className="min-w-0">
+          {projects.length === 0 ? (
+            <div className="rounded-xl border border-slate-700/40 bg-slate-800/20 p-6 text-center">
+              <p className="text-sm text-slate-400">
+                {allProjects.length === 0 ? "No saved projects yet." : "No projects in this folder."}
+              </p>
+              <p className="mt-1 text-xs text-slate-600">
+                {allProjects.length === 0
+                  ? "Run the pipeline, then save your work here to come back to it later."
+                  : "Move a project here from its folder menu or choose another folder."}
+              </p>
+            </div>
+          ) : (
         <div className="flex flex-col gap-2">
           {projects.map((p) => (
             <div key={p.id} className="rounded-xl border border-slate-700/50 bg-slate-800/40 p-4">
@@ -229,11 +273,21 @@ export function ProjectsPanel({
                           ? `${p.academy.curriculum.length} module${p.academy.curriculum.length !== 1 ? "s" : ""} · ${p.academy.curriculum.flatMap((m) => m.lessons).length} lessons`
                           : null}
                     {" · "}
-                    {new Date(p.updatedAt).toLocaleDateString(undefined, {
+                    <span>
+                      Created {new Date(p.createdAt).toLocaleDateString(undefined, {
                       month: "short",
                       day: "numeric",
                       year: "numeric",
-                    })}
+                      })}
+                    </span>
+                    {" · "}
+                    <span>
+                      Updated {new Date(p.updatedAt).toLocaleDateString(undefined, {
+                        month: "short",
+                        day: "numeric",
+                        year: "numeric",
+                      })}
+                    </span>
                   </p>
                 </div>
 
@@ -292,6 +346,22 @@ export function ProjectsPanel({
                   </svg>
                 </button>
               </div>
+
+              <label className="mt-2 flex min-h-12 items-center gap-2 rounded-lg border border-slate-700/50 bg-slate-900/30 px-3 text-xs text-slate-500">
+                <span className="shrink-0">Folder</span>
+                <select
+                  value={p.folderId ?? UNFILED_FOLDER_ID}
+                  onChange={(event) => void onMoveProject(p.id, event.target.value)}
+                  aria-label={`Move ${p.name} to folder`}
+                  className="min-h-12 min-w-0 flex-1 bg-transparent text-base text-slate-300 focus:outline-none"
+                >
+                  {folderOptions.map((folder) => (
+                    <option key={folder.id} value={folder.id} className="bg-slate-900">
+                      {folder.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
 
               {/* Book images — only for ebook projects */}
               {onUpdateImages && (p.ebookJobState || p.ebookManifest) && (
@@ -476,8 +546,9 @@ export function ProjectsPanel({
             </div>
           ))}
         </div>
-      )}
+          )}
+        </div>
+      </div>
     </div>
   );
 }
-

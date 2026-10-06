@@ -5,6 +5,7 @@ export type EbookProject = {
   name: string;
   createdAt: string;
   updatedAt: string;
+  folderId?: string;
   bookTitle: string;
   chapterCount: number;
   totalWordCount: number;
@@ -20,6 +21,10 @@ export type EbookProject = {
 
 const DB_NAME = "nexus-ebook-projects";
 const STORE   = "projects";
+
+function validIsoDate(value: unknown): value is string {
+  return typeof value === "string" && Number.isFinite(Date.parse(value));
+}
 
 function openDB(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
@@ -42,7 +47,18 @@ export async function listEbookProjects(): Promise<EbookProject[]> {
       const tx  = db.transaction(STORE, "readonly");
       const req = tx.objectStore(STORE).getAll();
       req.onsuccess = () => {
-        const items = (req.result as EbookProject[]).sort(
+        const items = (req.result as EbookProject[]).map((item) => {
+          const createdAt = validIsoDate(item.createdAt)
+            ? item.createdAt
+            : validIsoDate(item.updatedAt)
+              ? item.updatedAt
+              : new Date().toISOString();
+          return {
+            ...item,
+            createdAt,
+            updatedAt: validIsoDate(item.updatedAt) ? item.updatedAt : createdAt,
+          };
+        }).sort(
           (a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()
         );
         resolve(items);
@@ -54,11 +70,28 @@ export async function listEbookProjects(): Promise<EbookProject[]> {
   }
 }
 
-export async function saveEbookProject(project: EbookProject): Promise<void> {
+export async function saveEbookProject(
+  project: EbookProject,
+  options: { touchUpdatedAt?: boolean } = {},
+): Promise<void> {
   const db = await openDB();
   return new Promise((resolve, reject) => {
     const tx = db.transaction(STORE, "readwrite");
-    tx.objectStore(STORE).put({ ...project, updatedAt: new Date().toISOString() });
+    const store = tx.objectStore(STORE);
+    const getRequest = store.get(project.id);
+    getRequest.onsuccess = () => {
+      const existing = getRequest.result as EbookProject | undefined;
+      const createdAt = validIsoDate(existing?.createdAt)
+        ? existing.createdAt
+        : validIsoDate(project.createdAt)
+          ? project.createdAt
+          : new Date().toISOString();
+      const updatedAt = options.touchUpdatedAt === false && validIsoDate(project.updatedAt)
+        ? project.updatedAt
+        : new Date().toISOString();
+      store.put({ ...project, createdAt, updatedAt });
+    };
+    getRequest.onerror = () => reject(getRequest.error);
     tx.oncomplete = () => resolve();
     tx.onerror    = () => reject(tx.error);
   });

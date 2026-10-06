@@ -38,6 +38,17 @@ import {
   deleteEbookProject,
 } from "@/lib/ebook-project-store";
 import type { ProjectSnapshot, ChatMessage } from "@/lib/project-store";
+import {
+  loadProjectOrganization,
+  makeProjectFolder,
+  createProjectOrganization,
+  saveProjectOrganization,
+  storeProjectOrganization,
+  fetchProjectOrganizationFromCloud,
+  syncProjectOrganizationToCloud,
+  UNFILED_FOLDER_ID,
+  type ProjectFolder,
+} from "@/lib/project-organization-store";
 
 const INITIAL_MODELS: ModelState[] = [
   { name: "Gemini",   handle: "gemini",   role: "Analyst",           status: "standby" },
@@ -73,14 +84,39 @@ export default function HomePage() {
   const [currentProjectId, setCurrentProjectId] = useState<string>("");
   const [chatHistory,     setChatHistory]     = useState<ChatMessage[]>([]);
   const [panelLoadKey,    setPanelLoadKey]    = useState<string>("");
+  const [folders,         setFolders]         = useState<ProjectFolder[]>([]);
 
   // Load persisted state client-side only (avoids SSR hydration mismatch)
   useEffect(() => {
     void (async () => {
       try {
+        let organization = await loadProjectOrganization().catch(() => (
+          createProjectOrganization([], new Date(0).toISOString())
+        ));
+        try {
+          const remoteOrganization = await fetchProjectOrganizationFromCloud();
+          if (
+            remoteOrganization &&
+            new Date(remoteOrganization.updatedAt).getTime() > new Date(organization.updatedAt).getTime()
+          ) {
+            await storeProjectOrganization(remoteOrganization);
+            organization = remoteOrganization;
+          } else if (!remoteOrganization || new Date(organization.updatedAt).getTime() > new Date(remoteOrganization.updatedAt).getTime()) {
+            await fetch("/api/project-folders", {
+              method: "PUT",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ organization }),
+            }).catch(() => {});
+          }
+        } catch {
+          // Organization sync is best-effort; local folders remain usable offline.
+        }
+        setFolders(organization.folders);
+
         const main = await listProjects();
         const mainIds = new Set(main.map((p) => p.id));
-        const ebookOnly = (await listEbookProjects().catch(() => []))
+        const ebookLocal = await listEbookProjects().catch(() => []);
+        const ebookOnly = ebookLocal
           .filter((e) => !mainIds.has(e.id))
           .map((e) => ({
             id: e.id,
@@ -96,12 +132,32 @@ export default function HomePage() {
             uiResult: null,
             ebookManifest: null,
             ebookJobState: e.jobState,
+            folderId: e.folderId,
             publishedSlug: e.publishedSlug,
             coverImageUrl: e.coverImageUrl,
             authorImageUrl: e.authorImageUrl,
           }));
         const mergedLocal = [...main, ...ebookOnly];
-        setProjects(mergedLocal);
+        const normalizedLocal = mergedLocal.map((project) => ({
+          ...project,
+          folderId: project.folderId ?? UNFILED_FOLDER_ID,
+        }));
+        for (const project of normalizedLocal) {
+          if (!mergedLocal.find((existing) => existing.id === project.id)?.folderId) {
+            if (mainIds.has(project.id)) {
+              await saveProject(project, { touchUpdatedAt: false }).catch(() => {});
+            } else {
+              const ebookProject = ebookLocal.find((item) => item.id === project.id);
+              if (ebookProject) {
+                await saveEbookProject({
+                  ...ebookProject,
+                  folderId: UNFILED_FOLDER_ID,
+                }, { touchUpdatedAt: false }).catch(() => {});
+              }
+            }
+          }
+        }
+        setProjects(normalizedLocal);
 
         // ── Background R2 bidirectional sync ──────────────────────────────
         void (async () => {
@@ -127,7 +183,10 @@ export default function HomePage() {
             for (const r2p of r2projects) {
               const local = localById.get(r2p.id);
               if (!local || new Date(r2p.updatedAt) > new Date(local.updatedAt)) {
-                toPullLocal.push(r2p as ProjectSnapshot);
+                toPullLocal.push({
+                  ...r2p,
+                  folderId: r2p.folderId ?? UNFILED_FOLDER_ID,
+                } as ProjectSnapshot);
               }
             }
             // Push: local has newer or unknown project
@@ -138,7 +197,7 @@ export default function HomePage() {
               }
             }
             for (const p of toPullLocal) {
-              await saveProject(p).catch(() => {});
+              await saveProject(p, { touchUpdatedAt: false }).catch(() => {});
             }
             for (const p of toPushR2) {
               await fetch("/api/projects", {
@@ -165,6 +224,7 @@ export default function HomePage() {
                   uiResult: null,
                   ebookManifest: null,
                   ebookJobState: e.jobState,
+                  folderId: e.folderId,
                   publishedSlug: e.publishedSlug,
                   coverImageUrl: e.coverImageUrl,
                   authorImageUrl: e.authorImageUrl,
@@ -233,7 +293,7 @@ export default function HomePage() {
   const EBOOK_JOB_KEY = "nexus_ebook_job_state";
   const EBOOK_PENDING_MOUNT_KEY = "nexus_ebook_pending_mount";
 
-  const handleSaveProject = useCallback(async (name: string) => {
+  const handleSaveProject = useCallback(async (name: string, folderId?: string) => {
     const id = currentProjectId || generateProjectId();
     const existingProject = projects.find((p) => p.id === id);
     const existingEbookProject = await listEbookProjects()
@@ -250,6 +310,7 @@ export default function HomePage() {
       name,
       createdAt: currentProjectId ? (projects.find((p) => p.id === id)?.createdAt ?? new Date().toISOString()) : new Date().toISOString(),
       updatedAt: new Date().toISOString(),
+      folderId: existingProject?.folderId ?? existingEbookProject?.folderId ?? folderId ?? UNFILED_FOLDER_ID,
       academy: academyResult,
       siteConfig,
       deliveryInstructions,
@@ -271,6 +332,7 @@ export default function HomePage() {
           name,
           createdAt: snapshot.createdAt,
           updatedAt: snapshot.updatedAt,
+          folderId: snapshot.folderId,
           bookTitle: ebookJobState.architecture?.bookTitle ?? name,
           chapterCount: ebookJobState.chapters?.length ?? 0,
           totalWordCount: (ebookJobState.chapters ?? []).reduce((sum, chapter) => sum + (chapter.totalWordCount ?? 0), 0),
@@ -300,6 +362,7 @@ export default function HomePage() {
           uiResult: null,
           ebookManifest: null,
           ebookJobState: e.jobState,
+          folderId: e.folderId,
           publishedSlug: e.publishedSlug,
           coverImageUrl: e.coverImageUrl,
           authorImageUrl: e.authorImageUrl,
@@ -316,6 +379,98 @@ export default function HomePage() {
       addLog({ level: "error", message: `Could not save project: ${msg}` });
     }
   }, [currentProjectId, projects, academyResult, siteConfig, deliveryInstructions, chatHistory, blueprint, logicResult, uiResult, ebookManifest, addLog]);
+
+  const persistProjectFolderChanges = useCallback(async (changes: Record<string, string>) => {
+    const currentEbookProjects = await listEbookProjects().catch(() => []);
+    for (const project of projects) {
+      const folderId = changes[project.id];
+      if (!folderId) continue;
+      const updated = { ...project, folderId };
+      await saveProject(updated, { touchUpdatedAt: false });
+      const ebookProject = currentEbookProjects.find((item) => item.id === project.id);
+      if (ebookProject) {
+        await saveEbookProject({ ...ebookProject, folderId }, { touchUpdatedAt: false }).catch(() => {});
+      }
+      fetch("/api/projects", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ project: updated }),
+      }).catch(() => {});
+    }
+    setProjects((current) => current.map((project) => (
+      changes[project.id] ? { ...project, folderId: changes[project.id] } : project
+    )));
+  }, [projects]);
+
+  const handleCreateFolder = useCallback(async (name: string, parentId: string | null) => {
+    try {
+      const organization = await loadProjectOrganization();
+      if (organization.folders.some((folder) => folder.parentId === parentId && folder.name.toLowerCase() === name.toLowerCase())) {
+        throw new Error("A folder with that name already exists here.");
+      }
+      const sortOrder = organization.folders.filter((folder) => folder.parentId === parentId).length;
+      const next = await saveProjectOrganization([
+        ...organization.folders,
+        makeProjectFolder(name, parentId, sortOrder),
+      ]);
+      setFolders(next.folders);
+      await syncProjectOrganizationToCloud(next);
+    } catch (error) {
+      addLog({ level: "error", message: error instanceof Error ? error.message : "Could not create folder." });
+    }
+  }, [addLog]);
+
+  const handleRenameFolder = useCallback(async (id: string, name: string) => {
+    try {
+      const organization = await loadProjectOrganization();
+      const folder = organization.folders.find((item) => item.id === id);
+      if (!folder || id === UNFILED_FOLDER_ID) return;
+      if (organization.folders.some((item) => item.id !== id && item.parentId === folder.parentId && item.name.toLowerCase() === name.toLowerCase())) {
+        throw new Error("A folder with that name already exists here.");
+      }
+      const now = new Date().toISOString();
+      const next = await saveProjectOrganization(organization.folders.map((item) => (
+        item.id === id ? { ...item, name: name.trim(), updatedAt: now } : item
+      )));
+      setFolders(next.folders);
+      await syncProjectOrganizationToCloud(next);
+    } catch (error) {
+      addLog({ level: "error", message: error instanceof Error ? error.message : "Could not rename folder." });
+    }
+  }, [addLog]);
+
+  const handleDeleteFolder = useCallback(async (id: string) => {
+    if (id === UNFILED_FOLDER_ID || !window.confirm("Delete this folder? Projects inside it will move to Unfiled.")) return;
+    try {
+      const organization = await loadProjectOrganization();
+      const folder = organization.folders.find((item) => item.id === id);
+      if (!folder) return;
+      const now = new Date().toISOString();
+      const next = await saveProjectOrganization(
+        organization.folders
+          .filter((item) => item.id !== id)
+          .map((item) => item.parentId === id ? { ...item, parentId: folder.parentId, updatedAt: now } : item),
+      );
+      setFolders(next.folders);
+      const changes = projects.reduce<Record<string, string>>((result, project) => {
+        if ((project.folderId ?? UNFILED_FOLDER_ID) === id) result[project.id] = UNFILED_FOLDER_ID;
+        return result;
+      }, {});
+      await persistProjectFolderChanges(changes);
+      await syncProjectOrganizationToCloud(next);
+    } catch (error) {
+      addLog({ level: "error", message: error instanceof Error ? error.message : "Could not delete folder." });
+    }
+  }, [addLog, persistProjectFolderChanges, projects]);
+
+  const handleMoveProject = useCallback(async (id: string, folderId: string) => {
+    if (!folders.some((folder) => folder.id === folderId)) return;
+    try {
+      await persistProjectFolderChanges({ [id]: folderId });
+    } catch (error) {
+      addLog({ level: "error", message: error instanceof Error ? error.message : "Could not move project." });
+    }
+  }, [addLog, folders, persistProjectFolderChanges]);
 
   const handleLoadProject = useCallback(async (id: string) => {
     const p = projects.find((proj) => proj.id === id);
@@ -420,20 +575,6 @@ export default function HomePage() {
         }));
         setEbookPipelineKey((k) => k + 1); // remount pipeline to pick up restored state
       } catch { /* ignore quota errors */ }
-      await saveEbookProject({
-        id: p.id,
-        name: p.name,
-        createdAt: p.createdAt,
-        updatedAt: new Date().toISOString(),
-        bookTitle: loadableEbookJobState.architecture?.bookTitle ?? p.name,
-        chapterCount: loadableEbookJobState.chapters?.length ?? 0,
-        totalWordCount: (loadableEbookJobState.chapters ?? []).reduce((sum, chapter) => sum + (chapter.totalWordCount ?? 0), 0),
-        status: loadableEbookJobState.status,
-        jobState: loadableEbookJobState,
-        publishedSlug: p.publishedSlug,
-        coverImageUrl: p.coverImageUrl,
-        authorImageUrl: p.authorImageUrl,
-      }).catch(() => {});
     }
     if (p.blueprint) setStage("done");
     // Navigate to ebook tab if the project has a book; otherwise overview
@@ -479,6 +620,7 @@ export default function HomePage() {
         uiResult: null,
         ebookManifest: null,
         ebookJobState: e.jobState,
+        folderId: e.folderId,
         publishedSlug: e.publishedSlug,
         coverImageUrl: e.coverImageUrl,
         authorImageUrl: e.authorImageUrl,
@@ -493,21 +635,28 @@ export default function HomePage() {
   }, [currentProjectId]);
 
   const handleImportProject = useCallback(async (snapshot: ProjectSnapshot) => {
-    await saveProject(snapshot);
-    if (snapshot.ebookJobState) {
+    const importedSnapshot = {
+      ...snapshot,
+      folderId: snapshot.folderId && folders.some((folder) => folder.id === snapshot.folderId)
+        ? snapshot.folderId
+        : UNFILED_FOLDER_ID,
+    };
+    await saveProject(importedSnapshot);
+    if (importedSnapshot.ebookJobState) {
       await saveEbookProject({
-        id: snapshot.id,
-        name: snapshot.name,
-        createdAt: snapshot.createdAt,
-        updatedAt: snapshot.updatedAt,
-        bookTitle: snapshot.ebookJobState.architecture?.bookTitle ?? snapshot.name,
-        chapterCount: snapshot.ebookJobState.chapters?.length ?? 0,
-        totalWordCount: (snapshot.ebookJobState.chapters ?? []).reduce((sum, chapter) => sum + (chapter.totalWordCount ?? 0), 0),
-        status: snapshot.ebookJobState.status,
-        jobState: snapshot.ebookJobState,
-        publishedSlug: snapshot.publishedSlug,
-        coverImageUrl: snapshot.coverImageUrl,
-        authorImageUrl: snapshot.authorImageUrl,
+        id: importedSnapshot.id,
+        name: importedSnapshot.name,
+        createdAt: importedSnapshot.createdAt,
+        updatedAt: importedSnapshot.updatedAt,
+        bookTitle: importedSnapshot.ebookJobState.architecture?.bookTitle ?? importedSnapshot.name,
+        chapterCount: importedSnapshot.ebookJobState.chapters?.length ?? 0,
+        totalWordCount: (importedSnapshot.ebookJobState.chapters ?? []).reduce((sum, chapter) => sum + (chapter.totalWordCount ?? 0), 0),
+        status: importedSnapshot.ebookJobState.status,
+        jobState: importedSnapshot.ebookJobState,
+        folderId: importedSnapshot.folderId,
+        publishedSlug: importedSnapshot.publishedSlug,
+        coverImageUrl: importedSnapshot.coverImageUrl,
+        authorImageUrl: importedSnapshot.authorImageUrl,
       }).catch(() => {});
     }
     const main = await listProjects();
@@ -528,17 +677,18 @@ export default function HomePage() {
         uiResult: null,
         ebookManifest: null,
         ebookJobState: e.jobState,
+        folderId: e.folderId,
         publishedSlug: e.publishedSlug,
         coverImageUrl: e.coverImageUrl,
         authorImageUrl: e.authorImageUrl,
       }));
     setProjects([...main, ...ebookOnly]);
-    addLog({ level: "success", message: `Project "${snapshot.name}" imported.` });
+    addLog({ level: "success", message: `Project "${importedSnapshot.name}" imported.` });
     fetch("/api/projects", {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ project: snapshot }),
+      body: JSON.stringify({ project: importedSnapshot }),
     }).catch(() => {});
-  }, [addLog]);
+  }, [addLog, folders]);
 
   const handlePublishProject = useCallback(async (snapshot: ProjectSnapshot): Promise<string | null> => {
     const job = snapshot.ebookJobState;
@@ -600,6 +750,7 @@ export default function HomePage() {
         academy: null, siteConfig: SiteConfigSchema.parse({}), deliveryInstructions: "",
         chatHistory: [], blueprint: null, logicResult: null, uiResult: null,
         ebookManifest: null, ebookJobState: e.jobState, publishedSlug: e.publishedSlug,
+        folderId: e.folderId,
       }));
       setProjects([...freshMain, ...freshEbook]);
       addLog({ level: "success", message: `Published to /library/${slug}` });
@@ -651,6 +802,7 @@ export default function HomePage() {
         uiResult: null,
         ebookManifest: null,
         ebookJobState: e.jobState,
+        folderId: e.folderId,
         publishedSlug: e.publishedSlug,
         coverImageUrl: e.coverImageUrl,
         authorImageUrl: e.authorImageUrl,
@@ -703,6 +855,7 @@ export default function HomePage() {
           uiResult: null,
           ebookManifest: null,
           ebookJobState: e.jobState,
+          folderId: e.folderId,
           publishedSlug: e.publishedSlug,
           coverImageUrl: e.coverImageUrl,
           authorImageUrl: e.authorImageUrl,
@@ -965,12 +1118,17 @@ export default function HomePage() {
                 {activeNav === "projects" ? (
                   <ProjectsPanel
                     projects={projects}
+                    folders={folders}
                     suggestedName={blueprint?.title ?? ""}
                     canSave={!!blueprint}
                     onSave={handleSaveProject}
                     onLoad={handleLoadProject}
                     onDelete={handleDeleteProject}
                     onImport={handleImportProject}
+                    onMoveProject={handleMoveProject}
+                    onCreateFolder={handleCreateFolder}
+                    onRenameFolder={handleRenameFolder}
+                    onDeleteFolder={handleDeleteFolder}
                     onPublish={handlePublishProject}
                     onUnpublish={handleUnpublishProject}
                     onUpdateImages={handleUpdateImages}
@@ -1139,4 +1297,3 @@ export default function HomePage() {
     </div>
   );
 }
-

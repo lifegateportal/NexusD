@@ -11,6 +11,7 @@ export type ProjectSnapshot = {
   name: string;
   createdAt: string;
   updatedAt: string;
+  folderId?: string;
   academy: AcademyPackage | null;
   siteConfig: SiteConfig;
   deliveryInstructions: string;
@@ -34,6 +35,10 @@ export type ProjectSnapshot = {
 const DB_NAME  = "nexus-director-projects";
 const STORE    = "projects";
 const LS_KEY   = "nexus_projects"; // legacy localStorage key — used for migration only
+
+function validIsoDate(value: unknown): value is string {
+  return typeof value === "string" && Number.isFinite(Date.parse(value));
+}
 
 function openDB(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
@@ -85,7 +90,18 @@ export async function listProjects(): Promise<ProjectSnapshot[]> {
       const tx  = db.transaction(STORE, "readonly");
       const req = tx.objectStore(STORE).getAll();
       req.onsuccess = () => {
-        const items = (req.result as ProjectSnapshot[]).sort(
+        const items = (req.result as ProjectSnapshot[]).map((item) => {
+          const createdAt = validIsoDate(item.createdAt)
+            ? item.createdAt
+            : validIsoDate(item.updatedAt)
+              ? item.updatedAt
+              : new Date().toISOString();
+          return {
+            ...item,
+            createdAt,
+            updatedAt: validIsoDate(item.updatedAt) ? item.updatedAt : createdAt,
+          };
+        }).sort(
           (a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()
         );
         resolve(items);
@@ -97,11 +113,28 @@ export async function listProjects(): Promise<ProjectSnapshot[]> {
   }
 }
 
-export async function saveProject(snapshot: ProjectSnapshot): Promise<void> {
+export async function saveProject(
+  snapshot: ProjectSnapshot,
+  options: { touchUpdatedAt?: boolean } = {},
+): Promise<void> {
   const db = await openDB();
   return new Promise((resolve, reject) => {
     const tx = db.transaction(STORE, "readwrite");
-    tx.objectStore(STORE).put({ ...snapshot, updatedAt: new Date().toISOString() });
+    const store = tx.objectStore(STORE);
+    const getRequest = store.get(snapshot.id);
+    getRequest.onsuccess = () => {
+      const existing = getRequest.result as ProjectSnapshot | undefined;
+      const createdAt = validIsoDate(existing?.createdAt)
+        ? existing.createdAt
+        : validIsoDate(snapshot.createdAt)
+          ? snapshot.createdAt
+          : new Date().toISOString();
+      const updatedAt = options.touchUpdatedAt === false && validIsoDate(snapshot.updatedAt)
+        ? snapshot.updatedAt
+        : new Date().toISOString();
+      store.put({ ...snapshot, createdAt, updatedAt });
+    };
+    getRequest.onerror = () => reject(getRequest.error);
     tx.oncomplete = () => resolve();
     tx.onerror    = () => reject(tx.error);
   });
