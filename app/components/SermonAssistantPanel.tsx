@@ -593,7 +593,6 @@ export function SermonAssistantPanel() {
   const [bibleTranslation, setBibleTranslation] = useState<BibleTranslationCode>("kjv");
   const [lastDisplayRef, setLastDisplayRef] = useState("");
   const [manualRefInput, setManualRefInput] = useState("");
-  const [manualVerseInput, setManualVerseInput] = useState("");
   const [manualCastBusy, setManualCastBusy] = useState(false);
   const [manualRefFocused, setManualRefFocused] = useState(false);
 
@@ -635,7 +634,10 @@ export function SermonAssistantPanel() {
   const totalSpeechSecondsRef = useRef(0);
 
   const semanticTimerRef = useRef<number | null>(null);
+  const semanticMaxWaitTimerRef = useRef<number | null>(null);
   const semanticInFlightRef = useRef(false);
+  const semanticPendingContextRef = useRef("");
+  const semanticSignalSeenRef = useRef(false);
   const scriptureCardsRef = useRef<ScriptureCard[]>([]);
   const rangeCastTimersRef = useRef<number[]>([]);
 
@@ -1058,6 +1060,7 @@ export function SermonAssistantPanel() {
       if (volumeFrameRef.current) window.cancelAnimationFrame(volumeFrameRef.current);
       if (audioContextRef.current) void audioContextRef.current.close();
       if (semanticTimerRef.current) window.clearTimeout(semanticTimerRef.current);
+      if (semanticMaxWaitTimerRef.current) window.clearTimeout(semanticMaxWaitTimerRef.current);
       if (audioDownloadUrl) URL.revokeObjectURL(audioDownloadUrl);
       if (presentationWindowRef.current && !presentationWindowRef.current.closed) {
         presentationWindowRef.current.close();
@@ -1371,7 +1374,6 @@ export function SermonAssistantPanel() {
 
   const handleManualCast = useCallback(async (options?: { closeMobile?: boolean }) => {
     const rawRef = manualRefInput.trim();
-    const rawText = manualVerseInput.trim();
     if (!rawRef) {
       pushToast("Enter a scripture reference first.", "error");
       return;
@@ -1381,29 +1383,25 @@ export function SermonAssistantPanel() {
     try {
       const parsed = splitReferenceAndTranslation(rawRef, bibleTranslationRef.current);
       let ref = parsed.reference;
-      let text = rawText;
       bibleTranslationRef.current = parsed.translation;
       setBibleTranslation(parsed.translation);
 
-      // If only the reference is provided, fetch verse text automatically.
-      if (!text) {
-        const res = await fetch("/api/bible-verse", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ reference: ref, translation: parsed.translation }),
-        });
-        if (!res.ok) {
-          pushToast("Could not fetch that scripture. Add verse text manually.", "error");
-          return;
-        }
-        const data = await res.json() as { reference?: string; text?: string; error?: string };
-        if (data.error || !data.text) {
-          pushToast("Could not fetch that scripture. Add verse text manually.", "error");
-          return;
-        }
-        ref = data.reference ?? ref;
-        text = data.text.replace(/\n/g, " ").trim();
+      const res = await fetch("/api/bible-verse", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ reference: ref, translation: parsed.translation }),
+      });
+      if (!res.ok) {
+        pushToast("Could not fetch that scripture. Check the reference and try again.", "error");
+        return;
       }
+      const data = await res.json() as { reference?: string; text?: string; error?: string };
+      if (data.error || !data.text) {
+        pushToast("Could not fetch that scripture. Check the reference and try again.", "error");
+        return;
+      }
+      ref = data.reference ?? ref;
+      const text = data.text.replace(/\n/g, " ").trim();
 
       mergeScriptureCards([{ 
         id: `${ref}-manual-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
@@ -1415,7 +1413,6 @@ export function SermonAssistantPanel() {
       }]);
       pushToMonitor(ref, text);
       setManualRefInput(ref);
-      setManualVerseInput(text);
       if (options?.closeMobile) setMobileRefsOpen(false);
       pushToast(`Cast ${ref} to monitor.`, "success");
     } catch {
@@ -1423,7 +1420,7 @@ export function SermonAssistantPanel() {
     } finally {
       setManualCastBusy(false);
     }
-  }, [manualRefInput, manualVerseInput, mergeScriptureCards, pushToast, pushToMonitor]);
+  }, [manualRefInput, mergeScriptureCards, pushToast, pushToMonitor]);
 
   const fetchAndInjectScripture = useCallback(async (reference: string, translationOverride?: BibleTranslationCode) => {
     stopRangePlayback();
@@ -1713,19 +1710,37 @@ export function SermonAssistantPanel() {
   }, [mergeScriptureCards]);
 
   const scheduleSemanticSuggest = useCallback((contextText: string) => {
-    if (contextText.length < 70 || !looksTheological(contextText)) return;
+    const normalizedContext = contextText.trim().slice(-1600);
+    if (normalizedContext.length < 70) return;
 
-    if (semanticTimerRef.current) window.clearTimeout(semanticTimerRef.current);
+    if (looksTheological(normalizedContext)) {
+      semanticSignalSeenRef.current = true;
+    }
+    if (!semanticSignalSeenRef.current) return;
 
-    semanticTimerRef.current = window.setTimeout(async () => {
-      if (semanticInFlightRef.current) return;
+    semanticPendingContextRef.current = normalizedContext;
+
+    const execute = async () => {
+      const requestContext = semanticPendingContextRef.current;
+      semanticPendingContextRef.current = "";
+
+      if (!requestContext) return;
+      if (semanticInFlightRef.current) {
+        semanticPendingContextRef.current = requestContext;
+        return;
+      }
+
+      if (semanticMaxWaitTimerRef.current !== null) {
+        window.clearTimeout(semanticMaxWaitTimerRef.current);
+        semanticMaxWaitTimerRef.current = null;
+      }
       semanticInFlightRef.current = true;
       try {
         const res = await fetch("/api/sermon-assistant/scripture-suggest", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            context: contextText.slice(-1200),
+            context: requestContext,
             existingRefs: scriptureCardsRef.current.map((card) => card.ref),
             sermonAssistantModel: selectedSermonAssistantModel,
           }),
@@ -1749,12 +1764,40 @@ export function SermonAssistantPanel() {
           if (top) pushToMonitor(top.ref, top.text);
         }
       } catch {
-        // background suggestion should fail silently
+        // Background suggestion failures are retried when newer transcript context arrives.
       } finally {
         semanticInFlightRef.current = false;
+        if (semanticPendingContextRef.current) {
+          if (semanticTimerRef.current) window.clearTimeout(semanticTimerRef.current);
+          semanticTimerRef.current = window.setTimeout(() => {
+            semanticTimerRef.current = null;
+            void execute();
+          }, 300);
+        }
       }
+    };
+
+    if (semanticTimerRef.current) window.clearTimeout(semanticTimerRef.current);
+    semanticTimerRef.current = window.setTimeout(() => {
+      semanticTimerRef.current = null;
+      if (semanticMaxWaitTimerRef.current) {
+        window.clearTimeout(semanticMaxWaitTimerRef.current);
+        semanticMaxWaitTimerRef.current = null;
+      }
+      void execute();
     }, 1200);
-}, [mergeScriptureCards, pushToMonitor, selectedSermonAssistantModel]);
+
+    if (!semanticMaxWaitTimerRef.current) {
+      semanticMaxWaitTimerRef.current = window.setTimeout(() => {
+        semanticMaxWaitTimerRef.current = null;
+        if (semanticTimerRef.current) {
+          window.clearTimeout(semanticTimerRef.current);
+          semanticTimerRef.current = null;
+        }
+        void execute();
+      }, 5000);
+    }
+  }, [mergeScriptureCards, pushToMonitor, selectedSermonAssistantModel]);
 
   const appendTranscript = useCallback((text: string) => {
     setRawTranscript((prev) => {
@@ -3486,13 +3529,6 @@ export function SermonAssistantPanel() {
                       </div>
                     )}
                   </div>
-                  <textarea
-                    value={manualVerseInput}
-                    onChange={(e) => setManualVerseInput(e.target.value)}
-                    rows={2}
-                    placeholder="Optional verse text. Leave blank to auto-fetch."
-                    className="focus-ring rounded-md border border-slate-700/70 bg-slate-950/70 px-3 py-2 text-base text-slate-100 placeholder:text-slate-500"
-                  />
                   <button
                     type="button"
                     onClick={() => void handleManualCast()}
@@ -3774,13 +3810,6 @@ export function SermonAssistantPanel() {
                     </div>
                   )}
                 </div>
-                <textarea
-                  value={manualVerseInput}
-                  onChange={(e) => setManualVerseInput(e.target.value)}
-                  rows={2}
-                  placeholder="Optional verse text. Leave blank to auto-fetch."
-                  className="focus-ring rounded-md border border-slate-700/70 bg-slate-950/70 px-3 py-2 text-base text-slate-100 placeholder:text-slate-500"
-                />
                 <button
                   type="button"
                   onClick={() => void handleManualCast({ closeMobile: true })}
