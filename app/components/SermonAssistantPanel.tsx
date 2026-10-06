@@ -570,6 +570,7 @@ export function SermonAssistantPanel() {
   const [historyItems, setHistoryItems] = useState<SermonProjectRecord[]>([]);
   const historyRevisionRef = useRef(0);
   const historyLoadGenerationRef = useRef(0);
+  const [storageHydrated, setStorageHydrated] = useState(false);
   const [selectedFolderId, setSelectedFolderId] = useState<string | null>(null);
   const [folders, setFolders] = useState<ProjectFolder[]>([]);
   const [folderSyncError, setFolderSyncError] = useState<string | null>(null);
@@ -648,6 +649,7 @@ export function SermonAssistantPanel() {
   const pulpitRangeIndexRef = useRef(0);
   const readingQueueRef = useRef<Array<{ ref: string; text: string }>>([]);
   const readingQueueIndexRef = useRef(0);
+  const storedOrganizedRef = useRef("");
   const liveModeRef = useRef(false);
   const bibleTranslationRef = useRef<BibleTranslationCode>("kjv");
   const lastMonitorRefRef = useRef<string>("");
@@ -688,13 +690,19 @@ export function SermonAssistantPanel() {
   useEffect(() => {
     const storedRaw = localStorage.getItem(STORAGE_KEYS.raw) ?? "";
     const storedOrganized = localStorage.getItem(STORAGE_KEYS.organized) ?? "";
+    storedOrganizedRef.current = storedOrganized;
     setRawTranscript(storedRaw);
     setOrganizedMarkdown(storedOrganized);
     setManualNotes(localStorage.getItem(STORAGE_KEYS.notes) ?? "");
     setCurrentProjectId(localStorage.getItem(STORAGE_KEYS.projectId) ?? "");
     setProjectName(localStorage.getItem(STORAGE_KEYS.projectName) ?? "");
-    setActiveTab(getPreferredLandingTab(storedOrganized));
-  }, [getPreferredLandingTab]);
+    setStorageHydrated(true);
+  }, []);
+
+  useEffect(() => {
+    if (!storageHydrated) return;
+    setActiveTab(getPreferredLandingTab(storedOrganizedRef.current));
+  }, [getPreferredLandingTab, storageHydrated]);
 
   useEffect(() => {
     let cancelled = false;
@@ -898,24 +906,29 @@ export function SermonAssistantPanel() {
   }, []);
 
   useEffect(() => {
+    if (!storageHydrated) return;
     localStorage.setItem(STORAGE_KEYS.raw, rawTranscript);
-  }, [rawTranscript]);
+  }, [rawTranscript, storageHydrated]);
 
   useEffect(() => {
+    if (!storageHydrated) return;
     localStorage.setItem(STORAGE_KEYS.organized, organizedMarkdown);
-  }, [organizedMarkdown]);
+  }, [organizedMarkdown, storageHydrated]);
 
   useEffect(() => {
+    if (!storageHydrated) return;
     localStorage.setItem(STORAGE_KEYS.notes, manualNotes);
-  }, [manualNotes]);
+  }, [manualNotes, storageHydrated]);
 
   useEffect(() => {
+    if (!storageHydrated) return;
     if (currentProjectId) localStorage.setItem(STORAGE_KEYS.projectId, currentProjectId);
-  }, [currentProjectId]);
+  }, [currentProjectId, storageHydrated]);
 
   useEffect(() => {
+    if (!storageHydrated) return;
     if (projectName) localStorage.setItem(STORAGE_KEYS.projectName, projectName);
-  }, [projectName]);
+  }, [projectName, storageHydrated]);
 
   useEffect(() => {
     if (!currentProjectId || (!rawTranscript.trim() && !organizedMarkdown.trim() && !manualNotes.trim())) return;
