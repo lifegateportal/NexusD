@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { generateObject } from "ai";
 import { z } from "zod";
-import { createHash } from "crypto";
 import { deepSeekModel, deepSeekReasonerModel } from "@/lib/ai-providers";
 import {
   EbookManifestSchema,
@@ -20,6 +19,7 @@ import {
 } from "@/lib/editorial-style-bible";
 import { SCRIPTURE_FORMATTING_RULES } from "@/lib/scripture-formatter";
 import { NexusLMResponseLengthSchema, NEXUSLM_RESPONSE_LENGTHS } from "@/lib/nexuslm-response";
+import { computeEbookManifestVersion } from "@/lib/ebook-manifest-version";
 
 export const runtime = "nodejs";
 export const maxDuration = 120;
@@ -161,13 +161,7 @@ export async function POST(req: NextRequest) {
   // ── Optimistic locking ───────────────────────────────────────────────
   // Hash the mutable content fields so concurrent edits from multiple tabs
   // are detected and rejected with 409 instead of silently stomping each other.
-  function computeManifestVersion(m: typeof manifest): string {
-    return createHash("sha256")
-      .update(JSON.stringify({ bookTitle: m.bookTitle, subtitle: m.subtitle, authorName: m.authorName, chapters: m.chapters, frontMatter: m.frontMatter, backMatter: m.backMatter }))
-      .digest("hex")
-      .slice(0, 12);
-  }
-  const currentVersion = computeManifestVersion(manifest);
+  const currentVersion = computeEbookManifestVersion(manifest);
   if (input.manifestVersion && input.manifestVersion !== currentVersion) {
     return NextResponse.json(
       { error: "Conflict: the book has been modified since you last loaded it. Please reload before editing.", code: "VERSION_CONFLICT" },
@@ -551,20 +545,6 @@ ${isChapterWideEdit ? "- This is a chapter-wide edit. For each explicitly named 
       ].join("\n"),
     });
 
-    // ── Dry-run: return the AI patch without applying it ────────────────────────
-    // The client can diff this against the current manifest and show a preview
-    // before the user confirms the change.
-    if (dryRun) {
-      return NextResponse.json({
-        dryRun: true,
-        patch:  object,
-        summary: object.summary,
-        confidence: object.confidence,
-        ...(object.clarificationNeeded && { clarificationNeeded: object.clarificationNeeded }),
-        manifestVersion: currentVersion,
-      }, { status: 200 });
-    }
-
     // ── Confidence gate ───────────────────────────────────────────────────
     // When the AI flags low confidence and provides a clarifying question,
     // surface it to the client without applying any changes. The user can
@@ -854,7 +834,9 @@ ${isChapterWideEdit ? "- This is a chapter-wide edit. For each explicitly named 
     const normalizedManifest = {
       ...harmonized,
       totalWordCount: harmonized.chapters.reduce((sum, chapter) => sum + chapter.totalWordCount, 0),
-      changeLog: [...existingLog, changeLogEntry].slice(-50),
+      ...(dryRun
+        ? (existingLog.length > 0 ? { changeLog: existingLog } : {})
+        : { changeLog: [...existingLog, changeLogEntry].slice(-50) }),
     };
 
     const validated = EbookManifestSchema.safeParse(normalizedManifest);
@@ -866,10 +848,12 @@ ${isChapterWideEdit ? "- This is a chapter-wide edit. For each explicitly named 
     }
 
     return NextResponse.json({
+      dryRun,
       manifest:        validated.data,
+      patch:            dryRun ? object : undefined,
       summary:         object.summary,
       confidence:      object.confidence,
-      manifestVersion: computeManifestVersion(validated.data!),
+      manifestVersion: dryRun ? currentVersion : computeEbookManifestVersion(validated.data),
       ...(object.clarificationNeeded && { clarificationNeeded: object.clarificationNeeded }),
       ...(object.libraryPatch !== undefined && { libraryPatch: object.libraryPatch }),
     }, { status: 200 });
