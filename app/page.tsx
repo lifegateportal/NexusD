@@ -43,7 +43,8 @@ import {
   makeProjectFolder,
   createProjectOrganization,
   saveProjectOrganization,
-  restoreMissingProjectFolders,
+  normalizeProjectFolderId,
+  removeSyntheticRecoveredFolders,
   storeProjectOrganization,
   fetchProjectOrganizationFromCloud,
   syncProjectOrganizationToCloud,
@@ -110,6 +111,16 @@ export default function HomePage() {
         } catch (error) {
           setFolderSyncError(error instanceof Error ? error.message : "Could not synchronize folders.");
         }
+        const cleanedFolders = removeSyntheticRecoveredFolders(organization.folders);
+        if (cleanedFolders.length !== organization.folders.length) {
+          organization = await saveProjectOrganization(cleanedFolders);
+          try {
+            organization = await syncProjectOrganizationToCloud(organization);
+            await storeProjectOrganization(organization);
+          } catch (error) {
+            setFolderSyncError(error instanceof Error ? error.message : "Could not synchronize cleaned folders.");
+          }
+        }
         setFolders(organization.folders);
 
         const main = await listProjects();
@@ -139,10 +150,11 @@ export default function HomePage() {
         const mergedLocal = [...main, ...ebookOnly];
         const normalizedLocal = mergedLocal.map((project) => ({
           ...project,
-          folderId: project.folderId ?? UNFILED_FOLDER_ID,
+          folderId: normalizeProjectFolderId(project.folderId, organization.folders),
         }));
         for (const project of normalizedLocal) {
-          if (!mergedLocal.find((existing) => existing.id === project.id)?.folderId) {
+          const storedProject = mergedLocal.find((existing) => existing.id === project.id);
+          if (storedProject?.folderId !== project.folderId) {
             if (mainIds.has(project.id)) {
               await saveProject(project, { touchUpdatedAt: false }).catch(() => {});
             } else {
@@ -156,21 +168,6 @@ export default function HomePage() {
             }
           }
         }
-        const projectFolderIds = normalizedLocal.map((project) => project.folderId);
-        const foldersWithRecoveredRecords = restoreMissingProjectFolders(
-          organization.folders,
-          projectFolderIds,
-        );
-        if (foldersWithRecoveredRecords.length !== organization.folders.length) {
-          organization = await saveProjectOrganization(foldersWithRecoveredRecords);
-          try {
-            organization = await syncProjectOrganizationToCloud(organization);
-            await storeProjectOrganization(organization);
-          } catch (error) {
-            setFolderSyncError(error instanceof Error ? error.message : "Could not synchronize recovered folders.");
-          }
-        }
-        setFolders(organization.folders);
         setProjects(normalizedLocal);
 
         // ── Background R2 bidirectional sync ──────────────────────────────
@@ -211,7 +208,7 @@ export default function HomePage() {
               if (!local || new Date(r2p.updatedAt) > new Date(local.updatedAt)) {
                 toPullLocal.push({
                   ...r2p,
-                  folderId: r2p.folderId ?? UNFILED_FOLDER_ID,
+                  folderId: normalizeProjectFolderId(r2p.folderId, organization.folders),
                 } as ProjectSnapshot);
               }
             }

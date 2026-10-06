@@ -26,7 +26,8 @@ import {
   makeProjectFolder,
   createProjectOrganization,
   saveProjectOrganization,
-  restoreMissingProjectFolders,
+  normalizeProjectFolderId,
+  removeSyntheticRecoveredFolders,
   storeProjectOrganization,
   fetchProjectOrganizationFromCloud,
   syncProjectOrganizationToCloud,
@@ -208,28 +209,26 @@ function EbookPageClient() {
       } catch (error) {
         setFolderSyncError(error instanceof Error ? error.message : "Could not synchronize folders.");
       }
+      const cleanedFolders = removeSyntheticRecoveredFolders(organization.folders);
+      if (cleanedFolders.length !== organization.folders.length) {
+        organization = await saveProjectOrganization(cleanedFolders);
+        try {
+          organization = await syncProjectOrganizationToCloud(organization);
+          await storeProjectOrganization(organization);
+        } catch (error) {
+          setFolderSyncError(error instanceof Error ? error.message : "Could not synchronize cleaned folders.");
+        }
+      }
 
       const localProjects = await listEbookProjects().catch(() => []);
       const normalizedLocal = localProjects.map((project) => ({
-      ...project,
-      folderId: project.folderId ?? UNFILED_FOLDER_ID,
+        ...project,
+        folderId: normalizeProjectFolderId(project.folderId, organization.folders),
       }));
-      const foldersWithRecoveredRecords = restoreMissingProjectFolders(
-      organization.folders,
-      normalizedLocal.map((project) => project.folderId),
-      );
-      if (foldersWithRecoveredRecords.length !== organization.folders.length) {
-      organization = await saveProjectOrganization(foldersWithRecoveredRecords);
-      try {
-        organization = await syncProjectOrganizationToCloud(organization);
-        await storeProjectOrganization(organization);
-      } catch (error) {
-        setFolderSyncError(error instanceof Error ? error.message : "Could not synchronize recovered folders.");
-      }
-      }
       setFolders(organization.folders);
       for (const project of normalizedLocal) {
-        if (!localProjects.find((existing) => existing.id === project.id)?.folderId) {
+        const storedProject = localProjects.find((existing) => existing.id === project.id);
+        if (storedProject?.folderId !== project.folderId) {
           await saveEbookProject(project, { touchUpdatedAt: false }).catch(() => {});
         }
       }
@@ -328,7 +327,10 @@ function EbookPageClient() {
             publishedSlug: item.publishedSlug ?? existing?.publishedSlug,
             coverImageUrl: item.coverImageUrl ?? existing?.coverImageUrl,
             authorImageUrl: item.authorImageUrl ?? existing?.authorImageUrl,
-            folderId: item.folderId ?? existing?.folderId ?? UNFILED_FOLDER_ID,
+            folderId: normalizeProjectFolderId(
+              item.folderId ?? existing?.folderId,
+              organization.folders,
+            ),
           };
 
           await saveEbookProject(normalized, { touchUpdatedAt: false }).catch(() => {});

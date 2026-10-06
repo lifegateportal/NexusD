@@ -9,9 +9,11 @@ import {
   flattenProjectFolders,
   loadProjectOrganization,
   makeProjectFolder,
+  normalizeProjectFolderId,
   saveProjectOrganization,
   storeProjectOrganization,
   syncProjectOrganizationToCloud,
+  SERMON_ORGANIZATION_SCOPE,
   UNFILED_FOLDER_ID,
   type ProjectFolder,
 } from "@/lib/project-organization-store";
@@ -694,16 +696,17 @@ export function SermonAssistantPanel() {
   useEffect(() => {
     let cancelled = false;
     void (async () => {
-      let organization = await loadProjectOrganization().catch(() => (
+      let organization = await loadProjectOrganization(SERMON_ORGANIZATION_SCOPE).catch(() => (
         createProjectOrganization([], new Date(0).toISOString())
       ));
       try {
-        const remoteOrganization = await fetchProjectOrganizationFromCloud();
+        const remoteOrganization = await fetchProjectOrganizationFromCloud(SERMON_ORGANIZATION_SCOPE);
         if (remoteOrganization && Date.parse(remoteOrganization.updatedAt) > Date.parse(organization.updatedAt)) {
-          await storeProjectOrganization(remoteOrganization);
+          await storeProjectOrganization(remoteOrganization, SERMON_ORGANIZATION_SCOPE);
           organization = remoteOrganization;
         } else if (!remoteOrganization || Date.parse(organization.updatedAt) > Date.parse(remoteOrganization.updatedAt)) {
-          await syncProjectOrganizationToCloud(organization);
+          organization = await syncProjectOrganizationToCloud(organization, SERMON_ORGANIZATION_SCOPE);
+          await storeProjectOrganization(organization, SERMON_ORGANIZATION_SCOPE);
         }
       } catch (error) {
         if (!cancelled) setFolderSyncError(error instanceof Error ? error.message : "Could not synchronize folders.");
@@ -712,10 +715,20 @@ export function SermonAssistantPanel() {
       setFolders(organization.folders);
 
       const localProjects = await listSermonProjects().catch(() => []);
+      const normalizedProjects = localProjects.map((project) => ({
+        ...project,
+        folderId: normalizeProjectFolderId(project.folderId, organization.folders),
+      }));
+      for (const project of normalizedProjects) {
+        const storedProject = localProjects.find((item) => item.id === project.id);
+        if (storedProject?.folderId !== project.folderId) {
+          await saveSermonProject(project, { touchUpdatedAt: false }).catch(() => {});
+        }
+      }
       const storedId = localStorage.getItem(STORAGE_KEYS.projectId);
       const current = storedId
-        ? localProjects.find((project) => project.id === storedId)
-        : localProjects[0];
+        ? normalizedProjects.find((project) => project.id === storedId)
+        : normalizedProjects[0];
       if (current) {
         setCurrentProjectId(current.id);
         setProjectName(current.name);
@@ -726,7 +739,7 @@ export function SermonAssistantPanel() {
         setChatEntries(current.sermonAssistant.chatEntries);
         setActiveTab(getPreferredLandingTab(current.sermonAssistant.organizedMarkdown));
       }
-      setHistoryItems(localProjects);
+      setHistoryItems(normalizedProjects);
     })();
 
     return () => {
@@ -2275,8 +2288,19 @@ export function SermonAssistantPanel() {
           await saveSermonProjectToCloud(localProject);
         }
       }
-      const items = [...merged.values()]
-        .sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt));
+      const items: SermonProjectRecord[] = [];
+      for (const item of merged.values()) {
+        const normalized = {
+          ...item,
+          folderId: normalizeProjectFolderId(item.folderId, folders),
+        };
+        if (normalized.folderId !== item.folderId) {
+          await saveSermonProject(normalized, { touchUpdatedAt: false });
+          await saveSermonProjectToCloud(normalized);
+        }
+        items.push(normalized);
+      }
+      items.sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt));
 
       // Fallback: include current local sermon state if cloud has no valid entries.
       if (items.length === 0 && (rawTranscript.trim() || organizedMarkdown.trim() || manualNotes.trim())) {
@@ -2285,6 +2309,7 @@ export function SermonAssistantPanel() {
           name: deriveProjectName(),
           createdAt: new Date().toISOString(),
           updatedAt: new Date().toISOString(),
+          folderId: normalizeProjectFolderId(currentProjectFolderId, folders),
           sermonAssistant: {
             rawTranscript,
             organizedMarkdown,
@@ -2297,15 +2322,19 @@ export function SermonAssistantPanel() {
       setHistoryItems(items);
     } catch (error) {
       const localItems = await listSermonProjects().catch(() => []);
-      const fallbackItems = localItems.length > 0
-        ? localItems
+      const normalizedLocalItems = localItems.map((item) => ({
+        ...item,
+        folderId: normalizeProjectFolderId(item.folderId, folders),
+      }));
+      const fallbackItems = normalizedLocalItems.length > 0
+        ? normalizedLocalItems
         : (rawTranscript.trim() || organizedMarkdown.trim() || manualNotes.trim())
         ? [{
             id: currentProjectId || `local-sermon-${Date.now()}`,
             name: deriveProjectName(),
             createdAt: new Date().toISOString(),
             updatedAt: new Date().toISOString(),
-            folderId: currentProjectFolderId,
+            folderId: normalizeProjectFolderId(currentProjectFolderId, folders),
             sermonAssistant: {
               rawTranscript,
               organizedMarkdown,
@@ -2323,6 +2352,7 @@ export function SermonAssistantPanel() {
     currentProjectFolderId,
     currentProjectId,
     deriveProjectName,
+    folders,
     manualNotes,
     organizedMarkdown,
     pushToast,
@@ -2364,7 +2394,7 @@ export function SermonAssistantPanel() {
 
   const handleCreateFolder = useCallback(async (name: string, parentId: string | null) => {
     try {
-      const organization = await loadProjectOrganization();
+      const organization = await loadProjectOrganization(SERMON_ORGANIZATION_SCOPE);
       if (organization.folders.some((folder) => (
         folder.parentId === parentId && folder.name.toLowerCase() === name.toLowerCase()
       ))) {
@@ -2377,9 +2407,10 @@ export function SermonAssistantPanel() {
           parentId,
           organization.folders.filter((folder) => folder.parentId === parentId).length,
         ),
-      ]);
-      await syncProjectOrganizationToCloud(next);
-      setFolders(next.folders);
+      ], SERMON_ORGANIZATION_SCOPE);
+      const confirmed = await syncProjectOrganizationToCloud(next, SERMON_ORGANIZATION_SCOPE);
+      await storeProjectOrganization(confirmed, SERMON_ORGANIZATION_SCOPE);
+      setFolders(confirmed.folders);
       setFolderSyncError(null);
       pushToast("Folder created.", "success");
     } catch (error) {
@@ -2392,7 +2423,7 @@ export function SermonAssistantPanel() {
   const handleRenameFolder = useCallback(async (id: string, name: string) => {
     if (id === UNFILED_FOLDER_ID) return;
     try {
-      const organization = await loadProjectOrganization();
+      const organization = await loadProjectOrganization(SERMON_ORGANIZATION_SCOPE);
       const folder = organization.folders.find((item) => item.id === id);
       if (!folder) return;
       if (organization.folders.some((item) => (
@@ -2405,9 +2436,10 @@ export function SermonAssistantPanel() {
       const now = new Date().toISOString();
       const next = await saveProjectOrganization(organization.folders.map((item) => (
         item.id === id ? { ...item, name: name.trim(), updatedAt: now } : item
-      )));
-      await syncProjectOrganizationToCloud(next);
-      setFolders(next.folders);
+      )), SERMON_ORGANIZATION_SCOPE);
+      const confirmed = await syncProjectOrganizationToCloud(next, SERMON_ORGANIZATION_SCOPE);
+      await storeProjectOrganization(confirmed, SERMON_ORGANIZATION_SCOPE);
+      setFolders(confirmed.folders);
       setFolderSyncError(null);
       pushToast("Folder renamed.", "success");
     } catch (error) {
@@ -2439,7 +2471,7 @@ export function SermonAssistantPanel() {
   const handleDeleteFolder = useCallback(async (id: string) => {
     if (id === UNFILED_FOLDER_ID || !window.confirm("Delete this folder? Sermons inside it will move to Unfiled.")) return;
     try {
-      const organization = await loadProjectOrganization();
+      const organization = await loadProjectOrganization(SERMON_ORGANIZATION_SCOPE);
       const folder = organization.folders.find((item) => item.id === id);
       if (!folder) return;
       const now = new Date().toISOString();
@@ -2449,6 +2481,7 @@ export function SermonAssistantPanel() {
           .map((item) => item.parentId === id
             ? { ...item, parentId: folder.parentId, updatedAt: now }
             : item),
+        SERMON_ORGANIZATION_SCOPE,
       );
       const moved = historyItems.map((item) => (
         item.folderId === id ? { ...item, folderId: UNFILED_FOLDER_ID } : item
@@ -2457,8 +2490,9 @@ export function SermonAssistantPanel() {
         const saved = await saveSermonProject(item, { touchUpdatedAt: false });
         await saveSermonProjectToCloud(saved);
       }
-      await syncProjectOrganizationToCloud(next);
-      setFolders(next.folders);
+      const confirmed = await syncProjectOrganizationToCloud(next, SERMON_ORGANIZATION_SCOPE);
+      await storeProjectOrganization(confirmed, SERMON_ORGANIZATION_SCOPE);
+      setFolders(confirmed.folders);
       setHistoryItems(moved);
       setCurrentProjectFolderId((current) => current === id ? UNFILED_FOLDER_ID : current);
       setSelectedFolderId((current) => current === id ? null : current);

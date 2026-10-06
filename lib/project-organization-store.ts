@@ -2,7 +2,15 @@ import { z } from "zod";
 
 export const UNFILED_FOLDER_ID = "folder-unfiled";
 const ORGANIZATION_ID = "organization";
-const DB_NAME = "nexus-project-organization";
+export const PROJECT_ORGANIZATION_SCOPE = "projects";
+export const SERMON_ORGANIZATION_SCOPE = "sermons";
+export type ProjectOrganizationScope =
+  | typeof PROJECT_ORGANIZATION_SCOPE
+  | typeof SERMON_ORGANIZATION_SCOPE;
+const DB_NAMES: Record<ProjectOrganizationScope, string> = {
+  [PROJECT_ORGANIZATION_SCOPE]: "nexus-project-organization",
+  [SERMON_ORGANIZATION_SCOPE]: "nexus-sermon-organization",
+};
 const STORE = "organization";
 
 export const ProjectFolderSchema = z.object({
@@ -23,9 +31,9 @@ export const ProjectOrganizationSchema = z.object({
 export type ProjectFolder = z.infer<typeof ProjectFolderSchema>;
 export type ProjectOrganization = z.infer<typeof ProjectOrganizationSchema>;
 
-function openDB(): Promise<IDBDatabase> {
+function openDB(scope: ProjectOrganizationScope): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
-    const req = indexedDB.open(DB_NAME, 1);
+    const req = indexedDB.open(DB_NAMES[scope], 1);
     req.onupgradeneeded = () => {
       if (!req.result.objectStoreNames.contains(STORE)) {
         req.result.createObjectStore(STORE, { keyPath: "id" });
@@ -52,32 +60,6 @@ export function ensureUnfiledFolder(folders: ProjectFolder[]): ProjectFolder[] {
   return [makeUnfiledFolder(), ...folders];
 }
 
-export function restoreMissingProjectFolders(
-  folders: ProjectFolder[],
-  projectFolderIds: Iterable<string>,
-): ProjectFolder[] {
-  const restored = [...folders];
-  const knownIds = new Set(restored.map((folder) => folder.id));
-  const missingIds = [...new Set(projectFolderIds)]
-    .filter((id) => id && id !== UNFILED_FOLDER_ID && !knownIds.has(id))
-    .sort();
-
-  missingIds.forEach((id, index) => {
-    const now = new Date().toISOString();
-    const suffix = missingIds.length > 1 ? ` ${index + 1}` : "";
-    restored.push({
-      id,
-      name: `Recovered folder${suffix}`,
-      parentId: null,
-      createdAt: now,
-      updatedAt: now,
-      sortOrder: restored.length,
-    });
-  });
-
-  return restored;
-}
-
 export function createProjectOrganization(
   folders: ProjectFolder[] = [],
   updatedAt = new Date().toISOString(),
@@ -89,9 +71,35 @@ export function createProjectOrganization(
   };
 }
 
-export async function loadProjectOrganization(): Promise<ProjectOrganization> {
+export function normalizeProjectFolderId(
+  folderId: string | undefined,
+  folders: ProjectFolder[],
+): string {
+  return folderId && folders.some((folder) => folder.id === folderId)
+    ? folderId
+    : UNFILED_FOLDER_ID;
+}
+
+export function removeSyntheticRecoveredFolders(folders: ProjectFolder[]): ProjectFolder[] {
+  const removedIds = new Set(
+    folders
+      .filter((folder) => /^Recovered folder(?: \d+)?$/i.test(folder.name.trim()))
+      .map((folder) => folder.id),
+  );
+  if (removedIds.size === 0) return folders;
+  const now = new Date().toISOString();
+  return folders
+    .filter((folder) => !removedIds.has(folder.id))
+    .map((folder) => removedIds.has(folder.parentId ?? "")
+      ? { ...folder, parentId: null, updatedAt: now }
+      : folder);
+}
+
+export async function loadProjectOrganization(
+  scope: ProjectOrganizationScope = PROJECT_ORGANIZATION_SCOPE,
+): Promise<ProjectOrganization> {
   if (typeof window === "undefined") return createProjectOrganization([], new Date(0).toISOString());
-  const db = await openDB();
+  const db = await openDB(scope);
   return new Promise((resolve, reject) => {
     const tx = db.transaction(STORE, "readonly");
     const req = tx.objectStore(STORE).get(ORGANIZATION_ID);
@@ -103,12 +111,15 @@ export async function loadProjectOrganization(): Promise<ProjectOrganization> {
   });
 }
 
-export async function storeProjectOrganization(organization: ProjectOrganization): Promise<void> {
+export async function storeProjectOrganization(
+  organization: ProjectOrganization,
+  scope: ProjectOrganizationScope = PROJECT_ORGANIZATION_SCOPE,
+): Promise<void> {
   const parsed = ProjectOrganizationSchema.parse({
     ...organization,
     folders: ensureUnfiledFolder(organization.folders),
   });
-  const db = await openDB();
+  const db = await openDB(scope);
   return new Promise((resolve, reject) => {
     const tx = db.transaction(STORE, "readwrite");
     tx.objectStore(STORE).put(parsed);
@@ -117,14 +128,19 @@ export async function storeProjectOrganization(organization: ProjectOrganization
   });
 }
 
-export async function saveProjectOrganization(folders: ProjectFolder[]): Promise<ProjectOrganization> {
+export async function saveProjectOrganization(
+  folders: ProjectFolder[],
+  scope: ProjectOrganizationScope = PROJECT_ORGANIZATION_SCOPE,
+): Promise<ProjectOrganization> {
   const organization = createProjectOrganization(folders);
-  await storeProjectOrganization(organization);
+  await storeProjectOrganization(organization, scope);
   return organization;
 }
 
-export async function fetchProjectOrganizationFromCloud(): Promise<ProjectOrganization | null> {
-  const response = await fetch("/api/project-folders", {
+export async function fetchProjectOrganizationFromCloud(
+  scope: ProjectOrganizationScope = PROJECT_ORGANIZATION_SCOPE,
+): Promise<ProjectOrganization | null> {
+  const response = await fetch(`/api/project-folders?scope=${scope}`, {
     cache: "no-store",
     credentials: "same-origin",
   });
@@ -141,8 +157,9 @@ export async function fetchProjectOrganizationFromCloud(): Promise<ProjectOrgani
 
 export async function syncProjectOrganizationToCloud(
   organization: ProjectOrganization,
+  scope: ProjectOrganizationScope = PROJECT_ORGANIZATION_SCOPE,
 ): Promise<ProjectOrganization> {
-  const response = await fetch("/api/project-folders", {
+  const response = await fetch(`/api/project-folders?scope=${scope}`, {
     method: "PUT",
     cache: "no-store",
     credentials: "same-origin",

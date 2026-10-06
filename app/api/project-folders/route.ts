@@ -14,10 +14,19 @@ import {
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-const ORGANIZATION_KEY = "project-organization/folders.json";
+const OrganizationScopeSchema = z.enum(["projects", "sermons"]);
+const ORGANIZATION_KEYS = {
+  projects: "project-organization/folders.json",
+  sermons: "sermon-organization/folders.json",
+} as const;
 const PutOrganizationSchema = z.object({
   organization: ProjectOrganizationSchema,
 }).strict();
+
+function parseScope(value: string | null) {
+  const parsed = OrganizationScopeSchema.safeParse(value ?? "projects");
+  return parsed.success ? parsed.data : null;
+}
 
 function makeS3() {
   const { R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_BUCKET_NAME } = env;
@@ -48,7 +57,12 @@ function jsonNoStore(body: unknown, init?: ResponseInit) {
   });
 }
 
-export async function GET() {
+export async function GET(req: NextRequest) {
+  const scope = parseScope(req.nextUrl.searchParams.get("scope"));
+  if (!scope) {
+    return jsonNoStore({ error: "Invalid folder organization scope." }, { status: 400 });
+  }
+  const organizationKey = ORGANIZATION_KEYS[scope];
   const r2 = makeS3();
   if (!r2) {
     return jsonNoStore(
@@ -58,7 +72,7 @@ export async function GET() {
   }
 
   try {
-    const result = await r2.s3.send(new GetObjectCommand({ Bucket: r2.bucket, Key: ORGANIZATION_KEY }));
+    const result = await r2.s3.send(new GetObjectCommand({ Bucket: r2.bucket, Key: organizationKey }));
     const raw = await result.Body?.transformToString();
     if (!raw) return jsonNoStore({ organization: null });
     const parsed = ProjectOrganizationSchema.safeParse(JSON.parse(raw) as unknown);
@@ -77,6 +91,11 @@ export async function GET() {
 }
 
 export async function PUT(req: NextRequest) {
+  const scope = parseScope(req.nextUrl.searchParams.get("scope"));
+  if (!scope) {
+    return jsonNoStore({ error: "Invalid folder organization scope." }, { status: 400 });
+  }
+  const organizationKey = ORGANIZATION_KEYS[scope];
   const r2 = makeS3();
   if (!r2) {
     return jsonNoStore(
@@ -103,7 +122,7 @@ export async function PUT(req: NextRequest) {
   try {
     let currentOrganization: ReturnType<typeof createProjectOrganization> | null = null;
     try {
-      const current = await r2.s3.send(new GetObjectCommand({ Bucket: r2.bucket, Key: ORGANIZATION_KEY }));
+      const current = await r2.s3.send(new GetObjectCommand({ Bucket: r2.bucket, Key: organizationKey }));
       const raw = await current.Body?.transformToString();
       if (raw) {
         const parsed = ProjectOrganizationSchema.safeParse(JSON.parse(raw) as unknown);
@@ -124,7 +143,7 @@ export async function PUT(req: NextRequest) {
 
     await r2.s3.send(new PutObjectCommand({
       Bucket: r2.bucket,
-      Key: ORGANIZATION_KEY,
+      Key: organizationKey,
       Body: JSON.stringify(organization),
       ContentType: "application/json",
       CacheControl: "private, no-cache",
