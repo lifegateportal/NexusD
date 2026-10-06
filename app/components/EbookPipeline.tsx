@@ -25,8 +25,13 @@ import type {
   BackMatter,
   EbookJobState,
   EbookManifest,
+  EbookTranscriptImport,
 } from "@/lib/schemas/ebook";
-import { SectionAssignmentSchema, EbookJobStateSchema } from "@/lib/schemas/ebook";
+import {
+  EbookJobStateSchema,
+  EbookTranscriptImportSchema,
+  SectionAssignmentSchema,
+} from "@/lib/schemas/ebook";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -1886,26 +1891,57 @@ function readTextFile(file: File): Promise<string> {
   });
 }
 
+function createTranscriptFile(label: string, text: string): File {
+  const safeFileName = label
+    .replace(/[^a-z0-9_-]+/gi, "_")
+    .replace(/^_+|_+$/g, "")
+    .slice(0, 80) || "sermon-transcript";
+  return new File([text], `${safeFileName}.txt`, { type: "text/plain" });
+}
+
+function restoreTranscriptFiles(transcripts: Array<{ label: string; text: string }>): (File | null)[] {
+  const files: (File | null)[] = Array.from({ length: 10 }, () => null);
+  for (const transcript of transcripts) {
+    const match = /^Slot-(\d+)$/.exec(transcript.label);
+    const slotIndex = match ? Number(match[1]) - 1 : -1;
+    if (slotIndex < 0 || slotIndex >= files.length) continue;
+    files[slotIndex] = createTranscriptFile(transcript.label, transcript.text);
+  }
+  return files;
+}
+
+function restoreTranscriptStatuses(files: (File | null)[]): Array<"idle" | "transcribing" | "complete" | "error" | "regenerating"> {
+  return files.map((file) => file ? "complete" : "idle");
+}
+
 const JOB_STORAGE_KEY = "nexus_ebook_current_job"; // stores jobId (for IndexedDB)
 const JOB_STATE_KEY = "nexus_ebook_job_state";    // stores full state as JSON (primary)
 
 export function EbookPipeline({
   ebookManifest,
+  transcriptImport,
   onManifestReady,
   onPipelineSnapshotChange,
   onJobStateChange,
+  onTranscriptImportHandled,
   onSaveProject,
 }: {
   ebookManifest?: EbookManifest | null;
+  transcriptImport?: EbookTranscriptImport | null;
   onManifestReady?: (manifest: EbookManifest) => void;
   onPipelineSnapshotChange?: (snapshot: EbookPipelineSnapshot | null) => void;
   onJobStateChange?: (jobState: EbookJobState | null) => void;
+  onTranscriptImportHandled?: (
+    requestId: string,
+    result: { ok: boolean; message: string },
+  ) => void;
   /** Called when the user clicks Save inside the pipeline. Receives the chosen project name. */
   onSaveProject?: (name: string) => void;
 } = {}) {
   const [audioFiles, setAudioFiles] = useState<(File | null)[]>([null, null, null, null, null, null, null, null, null, null]);
   const [transcriptFiles, setTranscriptFiles] = useState<(File | null)[]>([null, null, null, null, null, null, null, null, null, null]);
   const [stage, setStage] = useState<PipelineStage>("idle");
+  const [pipelineRestoreReady, setPipelineRestoreReady] = useState(false);
   const [authorInstructions, setAuthorInstructions] = useState("");
   const [targetAudience, setTargetAudience] = useState("");
   const [useSimpleDirectBookMode, setUseSimpleDirectBookMode] = useState(false);
@@ -1951,6 +1987,7 @@ export function EbookPipeline({
   const [audioSourceStatuses, setAudioSourceStatuses] = useState<Array<"idle" | "transcribing" | "complete" | "error" | "regenerating">>(["idle", "idle", "idle", "idle", "idle", "idle", "idle", "idle", "idle", "idle"]);
   const sourceMapImportRef = useRef<HTMLInputElement | null>(null);
   const jobIdRef = useRef<string>(newJobId());
+  const handledTranscriptImportRef = useRef<string | null>(null);
   // Mirror of log in a ref so runPipeline (async) can read the current value for checkpoints
   const logRef = useRef<string[]>([]);
   // Full saved job (loaded on mount) — enables resume-from-failure
@@ -2472,7 +2509,10 @@ export function EbookPipeline({
         job.status === "complete" ||
         job.status === "failed"
       );
-      if (!hasRecoverableState) return;
+      if (!hasRecoverableState) {
+        setPipelineRestoreReady(true);
+        return;
+      }
       jobIdRef.current = job.jobId;
       setStage(restoredStage);
       logRef.current = job.errorLog ?? [];
@@ -2483,7 +2523,11 @@ export function EbookPipeline({
         ? (job.sectionAssignments ?? [])
         : deriveSectionAssignmentsFromSavedJob(job);
       setSectionAssignments(restoredAssignments);
-      setSourceTranscripts(job.transcripts ?? []);
+      const restoredTranscripts = job.transcripts ?? [];
+      const restoredTranscriptFiles = restoreTranscriptFiles(restoredTranscripts);
+      setSourceTranscripts(restoredTranscripts);
+      setTranscriptFiles(restoredTranscriptFiles);
+      setAudioSourceStatuses(restoreTranscriptStatuses(restoredTranscriptFiles));
       // Restore error so the Resume button is visible after refresh
       if (job.status === "failed") {
         const lastErr = (job.errorLog ?? []).findLast?.((e) => e.includes("✗"));
@@ -2553,6 +2597,7 @@ export function EbookPipeline({
 
       const words = (job.chapters ?? []).reduce((a, c) => a + (c.totalWordCount ?? 0), 0);
       if (words > 0) setTotalWords(words);
+      setPipelineRestoreReady(true);
     };
 
     const fromLocal = tryLocalStorage();
@@ -2560,7 +2605,10 @@ export function EbookPipeline({
 
     // IndexedDB fallback
     const savedId = localStorage.getItem(JOB_STORAGE_KEY);
-    if (!savedId) return;
+    if (!savedId) {
+      setPipelineRestoreReady(true);
+      return;
+    }
     void getEbookJob(savedId).then((job) => {
       if (!job) return;
       // Populate savedJobRef immediately so resume button shows even if normalization fails
@@ -2574,9 +2622,91 @@ export function EbookPipeline({
       }
     }).catch((err) => {
       console.warn("[EbookPipeline] Failed to load job from IndexedDB:", err);
+    }).finally(() => {
+      setPipelineRestoreReady(true);
     });
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  useEffect(() => {
+    if (!pipelineRestoreReady || !transcriptImport) return;
+    if (handledTranscriptImportRef.current === transcriptImport.requestId) return;
+
+    handledTranscriptImportRef.current = transcriptImport.requestId;
+    const report = (result: { ok: boolean; message: string }) => {
+      onTranscriptImportHandled?.(transcriptImport.requestId, result);
+    };
+    const parsed = EbookTranscriptImportSchema.safeParse(transcriptImport);
+
+    if (!parsed.success) {
+      const message = "The Sermon Assistant transcript could not be imported.";
+      addLog(`✗ ${message}`);
+      report({ ok: false, message });
+      return;
+    }
+
+    if (stage !== "idle") {
+      const message = "Start a fresh or idle ebook pipeline before importing a sermon transcript.";
+      addLog(`✗ ${message}`);
+      report({ ok: false, message });
+      return;
+    }
+
+    const occupiedLabels = new Set(sourceTranscripts.map((transcript) => transcript.label));
+    const slotIndex = parsed.data.slotIndex;
+    const slotLabel = `Slot-${slotIndex + 1}`;
+
+    if (
+      audioFiles[slotIndex] ||
+      transcriptFiles[slotIndex] ||
+      occupiedLabels.has(slotLabel)
+    ) {
+      const message = `Ebook transcript ${slotIndex + 1} is already occupied. Remove that source before importing this sermon transcript.`;
+      addLog(`✗ ${message}`);
+      report({ ok: false, message });
+      return;
+    }
+
+    const transcriptFile = createTranscriptFile(parsed.data.label, parsed.data.text);
+    const nextTranscriptFiles = [...transcriptFiles];
+    nextTranscriptFiles[slotIndex] = transcriptFile;
+    setTranscriptFiles(nextTranscriptFiles);
+
+    const nextTranscripts = [
+      ...sourceTranscripts.filter((transcript) => transcript.label !== slotLabel),
+      { label: slotLabel, text: parsed.data.text },
+    ];
+    setSourceTranscripts(nextTranscripts);
+    setAudioSourceStatuses((previous) => {
+      const next = [...previous];
+      next[slotIndex] = "complete";
+      return next;
+    });
+    setError(null);
+
+    void persistSourceMapState(sectionAssignments, nextTranscripts)
+      .then(() => {
+        const message = `${parsed.data.label} imported into ${slotLabel}. Ready to begin ebook production.`;
+        addLog(`✓ ${message}`);
+        report({ ok: true, message });
+      })
+      .catch((error) => {
+        const message = `Transcript imported into ${slotLabel}, but the checkpoint could not be saved: ${error instanceof Error ? error.message : "unknown error"}`;
+        addLog(`✗ ${message}`);
+        report({ ok: false, message });
+      });
+  }, [
+    addLog,
+    audioFiles,
+    onTranscriptImportHandled,
+    persistSourceMapState,
+    pipelineRestoreReady,
+    sectionAssignments,
+    sourceTranscripts,
+    stage,
+    transcriptFiles,
+    transcriptImport,
+  ]);
 
   const setAudio = useCallback((i: number, f: File | null) => {
     setAudioFiles((prev) => { const next = [...prev]; next[i] = f; return next; });

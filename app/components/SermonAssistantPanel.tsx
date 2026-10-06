@@ -26,8 +26,15 @@ import {
   saveSermonProject,
   saveSermonProjectToCloud,
 } from "@/lib/sermon-project-store";
+import type { EbookTranscriptSource } from "@/lib/schemas/ebook";
 
 type TabId = "raw" | "organized" | "assistant";
+
+type SermonAssistantPanelProps = {
+  onSermonTranscriptSelectionChange?: (sources: EbookTranscriptSource[]) => void;
+  onOpenEbookPipeline?: () => void;
+  pendingEbookTranscriptCount?: number;
+};
 
 type ScriptureCard = {
   id: string;
@@ -549,7 +556,11 @@ function buildDocxParagraphs(markdown: string): Paragraph[] {
   return paragraphs;
 }
 
-export function SermonAssistantPanel() {
+export function SermonAssistantPanel({
+  onSermonTranscriptSelectionChange,
+  onOpenEbookPipeline,
+  pendingEbookTranscriptCount = 0,
+}: SermonAssistantPanelProps = {}) {
   const [activeTab, setActiveTab] = useState<TabId>("raw");
   const [rawTranscript, setRawTranscript] = useState("");
   const [organizedMarkdown, setOrganizedMarkdown] = useState("");
@@ -567,6 +578,7 @@ export function SermonAssistantPanel() {
   const [projectName, setProjectName] = useState("");
   const [currentProjectFolderId, setCurrentProjectFolderId] = useState(UNFILED_FOLDER_ID);
   const [historyOpen, setHistoryOpen] = useState(false);
+  const [selectedHistoryIds, setSelectedHistoryIds] = useState<string[]>([]);
   const [historyItems, setHistoryItems] = useState<SermonProjectRecord[]>([]);
   const historyRevisionRef = useRef(0);
   const historyLoadGenerationRef = useRef(0);
@@ -906,6 +918,10 @@ export function SermonAssistantPanel() {
   const pushToast = useCallback((text: string, type: "info" | "success" | "error" = "info") => {
     setToast({ text, type });
   }, []);
+
+  const openEbookPipeline = useCallback(() => {
+    onOpenEbookPipeline?.();
+  }, [onOpenEbookPipeline]);
 
   useEffect(() => {
     if (!storageHydrated) return;
@@ -2471,6 +2487,19 @@ export function SermonAssistantPanel() {
       await deleteSermonProject(id);
       historyRevisionRef.current += 1;
       setHistoryItems((prev) => prev.filter((item) => item.id !== id));
+      if (selectedHistoryIds.includes(id)) {
+        const nextSelectedHistoryIds = selectedHistoryIds.filter((itemId) => itemId !== id);
+        setSelectedHistoryIds(nextSelectedHistoryIds);
+        onSermonTranscriptSelectionChange?.(
+          nextSelectedHistoryIds
+            .map((selectedId) => historyItems.find((item) => item.id === selectedId))
+            .filter((item): item is SermonProjectRecord => Boolean(item?.sermonAssistant.rawTranscript.trim()))
+            .map((item) => ({
+              label: (item.name.trim() || "Sermon Assistant transcript").slice(0, 120),
+              text: item.sermonAssistant.rawTranscript.trim(),
+            })),
+        );
+      }
       if (currentProjectId === id) {
         setCurrentProjectId("");
         setProjectName("");
@@ -2482,7 +2511,7 @@ export function SermonAssistantPanel() {
     } catch (error) {
       pushToast(error instanceof Error ? error.message : "Delete failed.", "error");
     }
-  }, [currentProjectId, pushToast]);
+  }, [currentProjectId, historyItems, onSermonTranscriptSelectionChange, pushToast, selectedHistoryIds]);
 
   const handleCreateFolder = useCallback(async (name: string, parentId: string | null) => {
     try {
@@ -2709,6 +2738,52 @@ export function SermonAssistantPanel() {
   const visibleHistoryItems = selectedFolderId === null
     ? historyItems
     : historyItems.filter((item) => (item.folderId ?? UNFILED_FOLDER_ID) === selectedFolderId);
+  const selectableHistoryIds = useMemo(
+    () => visibleHistoryItems
+      .filter((item) => item.sermonAssistant.rawTranscript.trim())
+      .map((item) => item.id),
+    [visibleHistoryItems],
+  );
+  const allVisibleHistorySelected = selectableHistoryIds.length > 0 &&
+    selectableHistoryIds.every((id) => selectedHistoryIds.includes(id));
+
+  const getSelectedHistorySources = useCallback((ids: string[]) => {
+    return ids
+      .map((id) => historyItems.find((item) => item.id === id))
+      .filter((item): item is SermonProjectRecord => Boolean(item?.sermonAssistant.rawTranscript.trim()))
+      .map((item) => ({
+        label: (item.name.trim() || "Sermon Assistant transcript").slice(0, 120),
+        text: item.sermonAssistant.rawTranscript.trim(),
+      }));
+  }, [historyItems]);
+
+  const notifyHistorySelection = useCallback((ids: string[]) => {
+    onSermonTranscriptSelectionChange?.(getSelectedHistorySources(ids));
+  }, [getSelectedHistorySources, onSermonTranscriptSelectionChange]);
+
+  const toggleHistorySelection = useCallback((id: string, selected: boolean) => {
+    if (selected) {
+      if (selectedHistoryIds.includes(id) || selectedHistoryIds.length >= 10) return;
+      const next = [...selectedHistoryIds, id];
+      setSelectedHistoryIds(next);
+      notifyHistorySelection(next);
+      return;
+    }
+    const next = selectedHistoryIds.filter((currentId) => currentId !== id);
+    setSelectedHistoryIds(next);
+    notifyHistorySelection(next);
+  }, [notifyHistorySelection, selectedHistoryIds]);
+
+  const toggleSelectAllHistory = useCallback(() => {
+    const next = allVisibleHistorySelected
+      ? selectedHistoryIds.filter((id) => !new Set(selectableHistoryIds).has(id))
+      : [
+          ...selectedHistoryIds,
+          ...selectableHistoryIds.filter((id) => !selectedHistoryIds.includes(id)),
+        ].slice(0, 10);
+    setSelectedHistoryIds(next);
+    notifyHistorySelection(next);
+  }, [allVisibleHistorySelected, notifyHistorySelection, selectableHistoryIds, selectedHistoryIds]);
 
   const monitorDisplayControls = (compact: boolean) => {
     const isOpen = compact ? mobileDisplayStyleOpen : desktopDisplayStyleOpen;
@@ -2874,6 +2949,11 @@ export function SermonAssistantPanel() {
               <div className="min-w-0">
                 <h2 className="truncate text-lg font-bold text-slate-100">Sermon Assistant</h2>
                 <p className="text-xs font-semibold uppercase tracking-wider text-slate-400">{statusText}</p>
+                {pendingEbookTranscriptCount > 0 && (
+                  <p className="mt-1 text-[11px] font-semibold text-emerald-300">
+                    {pendingEbookTranscriptCount} transcript{pendingEbookTranscriptCount === 1 ? "" : "s"} queued for Ebook
+                  </p>
+                )}
               </div>
             </div>
 
@@ -2903,6 +2983,20 @@ export function SermonAssistantPanel() {
               >
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} className="h-4 w-4"><path d="M12 16V4"/><path d="m7 9 5-5 5 5"/><path d="M4 20h16"/></svg>
               </button>
+              {onOpenEbookPipeline && (
+                <button
+                  type="button"
+                  onClick={openEbookPipeline}
+                  title="Open Ebook Pipeline"
+                  className="focus-ring flex min-h-12 items-center gap-1.5 rounded-xl border border-emerald-500/50 bg-emerald-500/10 px-3 text-xs font-bold text-emerald-300 transition hover:bg-emerald-500/20 disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} className="h-4 w-4">
+                    <path d="M4 5.5A2.5 2.5 0 0 1 6.5 3H20v18H6.5A2.5 2.5 0 0 1 4 18.5z" />
+                    <path d="M8 7h8M8 11h8M8 15h5" strokeLinecap="round" />
+                  </svg>
+                  Open Ebook
+                </button>
+              )}
               <button
                 type="button"
                 onClick={openHistory}
@@ -2984,39 +3078,51 @@ export function SermonAssistantPanel() {
 
           {mobileToolsOpen && (
             <div className="w-full max-w-full overflow-hidden pb-1 sm:hidden">
-              <div className="grid grid-cols-5 gap-2">
+              <div className="grid grid-cols-2 gap-2">
                 <button
                   type="button"
                   onClick={() => fileRef.current?.click()}
-                  className="focus-ring min-h-10 min-w-0 rounded-xl border border-slate-700/80 px-2 text-[11px] font-semibold text-slate-300"
+                  className="focus-ring min-h-12 min-w-0 rounded-xl border border-slate-700/80 px-2 text-[11px] font-semibold text-slate-300"
                 >
                   Upload
                 </button>
+                {onOpenEbookPipeline && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      openEbookPipeline();
+                      setMobileToolsOpen(false);
+                    }}
+                    className="focus-ring min-h-12 min-w-0 rounded-xl border border-emerald-500/50 bg-emerald-500/10 px-2 text-[11px] font-semibold text-emerald-300 disabled:cursor-not-allowed disabled:opacity-40"
+                  >
+                    Open Ebook
+                  </button>
+                )}
                 <button
                   type="button"
                   onClick={openHistory}
-                  className="focus-ring min-h-10 min-w-0 rounded-xl border border-slate-700/80 px-2 text-[11px] font-semibold text-slate-300"
+                  className="focus-ring min-h-12 min-w-0 rounded-xl border border-slate-700/80 px-2 text-[11px] font-semibold text-slate-300"
                 >
                   History
                 </button>
                 <button
                   type="button"
                   onClick={startNewBlankProject}
-                  className="focus-ring min-h-10 min-w-0 rounded-xl border border-slate-700/80 px-2 text-[11px] font-semibold text-slate-300"
+                  className="focus-ring min-h-12 min-w-0 rounded-xl border border-slate-700/80 px-2 text-[11px] font-semibold text-slate-300"
                 >
                   New
                 </button>
                 <button
                   type="button"
                   onClick={() => void saveToCloud("update")}
-                  className="focus-ring min-h-10 min-w-0 rounded-xl border border-cyan-500/50 bg-cyan-500/15 px-2 text-[11px] font-semibold text-cyan-300"
+                  className="focus-ring min-h-12 min-w-0 rounded-xl border border-cyan-500/50 bg-cyan-500/15 px-2 text-[11px] font-semibold text-cyan-300"
                 >
                   Save
                 </button>
                 <button
                   type="button"
                   onClick={() => void saveToCloud("new")}
-                  className="focus-ring min-h-10 min-w-0 rounded-xl border border-emerald-500/50 bg-emerald-500/15 px-2 text-[11px] font-semibold text-emerald-300"
+                  className="focus-ring min-h-12 min-w-0 rounded-xl border border-emerald-500/50 bg-emerald-500/15 px-2 text-[11px] font-semibold text-emerald-300"
                 >
                   Save+
                 </button>
@@ -3938,14 +4044,32 @@ export function SermonAssistantPanel() {
           <div className="absolute inset-0 z-20 flex items-center justify-center bg-slate-950/80 p-4 backdrop-blur-sm">
             <div className="flex max-h-[80dvh] w-full max-w-5xl flex-col overflow-hidden rounded-2xl border border-cyan-500/30 bg-slate-900">
               <div className="flex items-center justify-between border-b border-cyan-500/20 px-4 py-3">
-                <h3 className="text-base font-bold text-slate-100">Sermon History</h3>
-                <button
-                  type="button"
-                  onClick={() => setHistoryOpen(false)}
-                  className="focus-ring min-h-10 rounded-lg px-3 text-sm text-slate-400 hover:text-slate-100"
-                >
-                  Close
-                </button>
+                <div>
+                  <h3 className="text-base font-bold text-slate-100">Sermon History</h3>
+                  {onSermonTranscriptSelectionChange && selectedHistoryIds.length > 0 && (
+                    <p className="mt-1 text-xs text-emerald-300">
+                      {selectedHistoryIds.length} transcript{selectedHistoryIds.length === 1 ? "" : "s"} selected in click order
+                    </p>
+                  )}
+                </div>
+                <div className="flex items-center gap-2">
+                  {onOpenEbookPipeline && (
+                    <button
+                      type="button"
+                      onClick={openEbookPipeline}
+                      className="focus-ring min-h-12 rounded-xl border border-emerald-500/50 bg-emerald-500/15 px-3 text-xs font-semibold text-emerald-300"
+                    >
+                      Open Ebook Pipeline
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => setHistoryOpen(false)}
+                    className="focus-ring min-h-12 rounded-xl px-3 text-sm text-slate-400 hover:text-slate-100"
+                  >
+                    Close
+                  </button>
+                </div>
               </div>
               <div className="grid min-h-0 flex-1 gap-3 overflow-y-auto p-3 lg:grid-cols-[300px_minmax(0,1fr)]">
                 <ProjectFolderTree
@@ -3960,6 +4084,19 @@ export function SermonAssistantPanel() {
                   syncError={folderSyncError}
                 />
                 <div className="min-h-0 space-y-2 overflow-y-auto">
+                  {onSermonTranscriptSelectionChange && (
+                    <div className="flex items-center justify-between gap-2 rounded-xl border border-emerald-500/20 bg-emerald-500/5 px-3 py-2">
+                      <button
+                        type="button"
+                        onClick={toggleSelectAllHistory}
+                        disabled={selectableHistoryIds.length === 0}
+                        className="focus-ring min-h-12 rounded-lg border border-emerald-500/40 px-3 text-xs font-semibold text-emerald-300 disabled:cursor-not-allowed disabled:opacity-40"
+                      >
+                        {allVisibleHistorySelected ? "Clear visible selection" : "Select visible transcripts"}
+                      </button>
+                      <span className="text-xs text-slate-400">{selectedHistoryIds.length}/10 selected</span>
+                    </div>
+                  )}
                   {visibleHistoryItems.length === 0 ? (
                     <p className="p-4 text-sm text-slate-500">
                       {historyItems.length === 0 ? "No saved sermons yet." : "No sermons in this folder."}
@@ -3967,6 +4104,29 @@ export function SermonAssistantPanel() {
                   ) : (
                     visibleHistoryItems.map((item) => (
                       <div key={item.id} className="flex items-center justify-between gap-3 rounded-xl border border-slate-700/70 bg-slate-950/70 px-3 py-3">
+                        {onSermonTranscriptSelectionChange && (
+                          <label className={`flex min-h-12 min-w-12 shrink-0 items-center justify-center gap-1 rounded-lg border border-slate-700/80 px-1 ${
+                            item.sermonAssistant.rawTranscript.trim()
+                              ? "cursor-pointer"
+                              : "cursor-not-allowed opacity-40"
+                          }`}>
+                            <input
+                              type="checkbox"
+                              checked={selectedHistoryIds.includes(item.id)}
+                              onChange={(event) => toggleHistorySelection(item.id, event.target.checked)}
+                              disabled={!item.sermonAssistant.rawTranscript.trim() || (
+                                !selectedHistoryIds.includes(item.id) && selectedHistoryIds.length >= 10
+                              )}
+                              aria-label={`Select ${item.name} for Ebook Pipeline`}
+                              className="h-5 w-5 accent-emerald-400"
+                            />
+                            {selectedHistoryIds.includes(item.id) && (
+                              <span className="text-[10px] font-bold text-emerald-300">
+                                {selectedHistoryIds.indexOf(item.id) + 1}
+                              </span>
+                            )}
+                          </label>
+                        )}
                         <button
                           type="button"
                           onClick={() => loadHistoryItem(item)}
@@ -3976,6 +4136,9 @@ export function SermonAssistantPanel() {
                           <p className="text-xs text-slate-500">
                             {new Date(item.updatedAt).toLocaleString()}
                           </p>
+                          {!item.sermonAssistant.rawTranscript.trim() && (
+                            <p className="mt-1 text-[11px] text-amber-400">No raw transcript available</p>
+                          )}
                         </button>
                         <select
                           value={item.folderId ?? UNFILED_FOLDER_ID}

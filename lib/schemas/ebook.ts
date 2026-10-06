@@ -1,5 +1,15 @@
 import { z } from "zod";
 
+export const EbookTranscriptSourceSchema = z.object({
+  label: z.string().trim().min(1).max(120),
+  text: z.string().trim().min(1),
+}).strict();
+
+export const EbookTranscriptImportSchema = EbookTranscriptSourceSchema.extend({
+  requestId: z.string().trim().min(1).max(200),
+  slotIndex: z.number().int().min(0).max(9),
+}).strict();
+
 // ─── Quote / Scripture Reference ────────────────────────────────────────────
 
 export const QuoteSchema = z.object({
@@ -547,6 +557,8 @@ export const WriteChapterOutputSchema = z.object({
 // ─── TypeScript exports ────────────────────────────────────────────────────────
 
 export type Quote = z.infer<typeof QuoteSchema>;
+export type EbookTranscriptSource = z.infer<typeof EbookTranscriptSourceSchema>;
+export type EbookTranscriptImport = z.infer<typeof EbookTranscriptImportSchema>;
 export type VoiceDNA = z.infer<typeof VoiceDNASchema>;
 export type PrintSpec = z.infer<typeof PrintSpecSchema>;
 export type ContentSegment = z.infer<typeof ContentSegmentSchema>;

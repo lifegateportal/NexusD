@@ -14,8 +14,16 @@ import { ProjectsPanel } from "@/app/components/ProjectsPanel";
 import { EbookPipeline } from "@/app/components/EbookPipeline";
 import { SermonAssistantPanel } from "@/app/components/SermonAssistantPanel";
 import type { EbookPipelineSnapshot } from "@/app/components/EbookPipeline";
-import { EbookJobStateSchema } from "@/lib/schemas/ebook";
-import type { EbookManifest } from "@/lib/schemas/ebook";
+import {
+  EbookJobStateSchema,
+  EbookTranscriptImportSchema,
+  EbookTranscriptSourceSchema,
+} from "@/lib/schemas/ebook";
+import type {
+  EbookManifest,
+  EbookTranscriptImport,
+  EbookTranscriptSource,
+} from "@/lib/schemas/ebook";
 import { LogicTransformResultSchema } from "@/lib/schemas/blueprint";
 import { UiManifestResultSchema } from "@/lib/schemas/ui-manifest";
 import { AcademyPackageSchema } from "@/lib/schemas/academy";
@@ -82,6 +90,8 @@ export default function HomePage() {
   // Ebook pipeline state — lifted so the AI assistant can read and edit the book
   const [ebookManifest, setEbookManifest] = useState<EbookManifest | null>(null);
   const [ebookSnapshot, setEbookSnapshot] = useState<EbookPipelineSnapshot | null>(null);
+  const [ebookTranscriptImports, setEbookTranscriptImports] = useState<EbookTranscriptImport[]>([]);
+  const [ebookImportNotice, setEbookImportNotice] = useState<{ type: "success" | "error"; text: string } | null>(null);
   // Incrementing this remounts <EbookPipeline> so it re-reads localStorage after a project load
   const [ebookPipelineKey, setEbookPipelineKey] = useState(0);
 
@@ -1234,9 +1244,63 @@ export default function HomePage() {
   const isBookView = activeNav === "ebook";
   const showActivityPanel = !isSermonView && !isBookView;
 
+  const handleSermonTranscriptSelectionChange = useCallback((sources: EbookTranscriptSource[]) => {
+    const parsed = EbookTranscriptSourceSchema.array().safeParse(sources);
+    if (!parsed.success || (parsed.success && parsed.data.length > 10)) {
+      const message = parsed.success && parsed.data.length > 10
+        ? "Select no more than 10 sermon transcripts for the Ebook Pipeline."
+        : "The sermon transcripts are not ready to import.";
+      setEbookImportNotice({ type: "error", text: message });
+      addLog({ level: "error", message });
+      return;
+    }
+
+    if (parsed.data.length === 0) {
+      setEbookTranscriptImports([]);
+      setEbookImportNotice(null);
+      return;
+    }
+
+    const imports = parsed.data.map((source, index) => ({
+      ...source,
+      requestId: `sermon-${Date.now()}-${index}-${Math.random().toString(36).slice(2, 8)}`,
+      slotIndex: index,
+    }));
+    const validatedImports = EbookTranscriptImportSchema.array().safeParse(imports);
+    if (!validatedImports.success) {
+      const message = "The sermon transcript selection could not be queued.";
+      setEbookImportNotice({ type: "error", text: message });
+      addLog({ level: "error", message });
+      return;
+    }
+
+    setEbookImportNotice(null);
+    setEbookTranscriptImports(validatedImports.data);
+  }, [addLog]);
+
+  const handleOpenEbookPipeline = useCallback(() => {
+    setEbookImportNotice(null);
+    setActiveNav("ebook");
+  }, []);
+
+  const handleEbookTranscriptImportHandled = useCallback((
+    requestId: string,
+    result: { ok: boolean; message: string },
+  ) => {
+    setEbookTranscriptImports((current) => current.filter((item) => item.requestId !== requestId));
+    setEbookImportNotice({
+      type: result.ok ? "success" : "error",
+      text: result.message,
+    });
+    addLog({
+      level: result.ok ? "success" : "error",
+      message: result.message,
+    });
+  }, [addLog]);
+
   const handleNavSelect = useCallback((id: string) => {
     if (id === "ebook") {
-      router.push("/ebook?tab=pipeline");
+      setActiveNav("ebook");
       return;
     }
     if (id === "translate") {
@@ -1305,16 +1369,35 @@ export default function HomePage() {
                   />
                 ) : activeNav === "ebook" ? (
                   <div className="flex min-h-0 flex-1 flex-col overflow-y-auto rounded-2xl border border-cyan-500/20 glass">
+                    {ebookImportNotice && (
+                      <div
+                        role={ebookImportNotice.type === "error" ? "alert" : "status"}
+                        aria-live="polite"
+                        className={`mx-3 mt-3 rounded-xl border px-4 py-3 text-sm ${
+                          ebookImportNotice.type === "error"
+                            ? "border-red-500/40 bg-red-500/10 text-red-200"
+                            : "border-emerald-500/40 bg-emerald-500/10 text-emerald-200"
+                        }`}
+                      >
+                        {ebookImportNotice.text}
+                      </div>
+                    )}
                     <EbookPipeline
                       key={ebookPipelineKey}
                       ebookManifest={ebookManifest}
+                      transcriptImport={ebookTranscriptImports[0] ?? null}
                       onManifestReady={handleEbookManifestReady}
                       onPipelineSnapshotChange={setEbookSnapshot}
+                      onTranscriptImportHandled={handleEbookTranscriptImportHandled}
                       onSaveProject={handleSaveProject}
                     />
                   </div>
                 ) : activeNav === "sermon" ? (
-                  <SermonAssistantPanel />
+                  <SermonAssistantPanel
+                    onSermonTranscriptSelectionChange={handleSermonTranscriptSelectionChange}
+                    onOpenEbookPipeline={handleOpenEbookPipeline}
+                    pendingEbookTranscriptCount={ebookTranscriptImports.length}
+                  />
                 ) : activeNav === "deploy" ? (
                   <div className="flex h-full flex-col gap-4 overflow-y-auto rounded-2xl border border-cyan-500/20 glass p-5">
                     <p className="text-[10px] font-bold uppercase tracking-widest text-cyan-500">Deploy</p>
