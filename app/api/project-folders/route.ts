@@ -50,7 +50,12 @@ function jsonNoStore(body: unknown, init?: ResponseInit) {
 
 export async function GET() {
   const r2 = makeS3();
-  if (!r2) return jsonNoStore({ organization: null });
+  if (!r2) {
+    return jsonNoStore(
+      { error: "Cloud folder storage is not configured." },
+      { status: 503 },
+    );
+  }
 
   try {
     const result = await r2.s3.send(new GetObjectCommand({ Bucket: r2.bucket, Key: ORGANIZATION_KEY }));

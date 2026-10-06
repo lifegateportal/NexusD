@@ -16,6 +16,7 @@ type ProjectFolderTreeProps = {
   onCreate: (name: string, parentId: string | null) => void | Promise<void>;
   onRename: (folderId: string, name: string) => void | Promise<void>;
   onDelete: (folderId: string) => void | Promise<void>;
+  syncError?: string | null;
 };
 
 export function ProjectFolderTree({
@@ -27,6 +28,7 @@ export function ProjectFolderTree({
   onCreate,
   onRename,
   onDelete,
+  syncError,
 }: ProjectFolderTreeProps) {
   const [creating, setCreating] = useState(false);
   const [newName, setNewName] = useState("");
@@ -76,6 +78,11 @@ export function ProjectFolderTree({
           New
         </button>
       </div>
+      {syncError && (
+        <p role="alert" className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-2 py-2 text-xs leading-5 text-amber-200">
+          Folder sync: {syncError}
+        </p>
+      )}
 
       {creating && (
         <div className="flex flex-col gap-2 rounded-lg border border-cyan-500/20 bg-cyan-500/5 p-2">

@@ -160,6 +160,7 @@ function EbookPageClient() {
   const [currentProjectId, setCurrentProjectId] = useState<string>("");
   const [hasContinueState, setHasContinueState] = useState(false);
   const [folders, setFolders] = useState<ProjectFolder[]>([]);
+  const [folderSyncError, setFolderSyncError] = useState<string | null>(null);
   // Incrementing this key remounts <EbookPipeline> so it re-reads localStorage on load
   const [pipelineKey, setPipelineKey] = useState(0);
   const hydratedLoadRef = useRef<string | null>(null);
@@ -200,10 +201,10 @@ function EbookPageClient() {
           await storeProjectOrganization(remoteOrganization);
           organization = remoteOrganization;
         } else if (!remoteOrganization || new Date(organization.updatedAt).getTime() > new Date(remoteOrganization.updatedAt).getTime()) {
-          await syncProjectOrganizationToCloud(organization).catch(() => {});
+          await syncProjectOrganizationToCloud(organization);
         }
-      } catch {
-        // Organization sync is best-effort; local folders remain usable offline.
+      } catch (error) {
+        setFolderSyncError(error instanceof Error ? error.message : "Could not synchronize folders.");
       }
       setFolders(organization.folders);
 
@@ -679,7 +680,9 @@ function EbookPageClient() {
       ]);
       setFolders(next.folders);
       await syncProjectOrganizationToCloud(next);
+      setFolderSyncError(null);
     } catch (error) {
+      setFolderSyncError(error instanceof Error ? error.message : "Could not create folder.");
       setStatusMsg({ type: "error", text: error instanceof Error ? error.message : "Could not create folder." });
     }
   }, []);
@@ -697,7 +700,9 @@ function EbookPageClient() {
       )));
       setFolders(next.folders);
       await syncProjectOrganizationToCloud(next);
+      setFolderSyncError(null);
     } catch (error) {
+      setFolderSyncError(error instanceof Error ? error.message : "Could not rename folder.");
       setStatusMsg({ type: "error", text: error instanceof Error ? error.message : "Could not rename folder." });
     }
   }, []);
@@ -722,7 +727,9 @@ function EbookPageClient() {
       }, {});
       await persistProjectFolderChanges(changes);
       await syncProjectOrganizationToCloud(next);
+      setFolderSyncError(null);
     } catch (error) {
+      setFolderSyncError(error instanceof Error ? error.message : "Could not delete folder.");
       setStatusMsg({ type: "error", text: error instanceof Error ? error.message : "Could not delete folder." });
     }
   }, [persistProjectFolderChanges, projects]);
@@ -1268,6 +1275,7 @@ function EbookPageClient() {
                   onCreateFolder={handleCreateFolder}
                   onRenameFolder={handleRenameFolder}
                   onDeleteFolder={handleDeleteFolder}
+                  folderSyncError={folderSyncError}
                   onImportManifestJson={buildManifestFromJob}
                   onPublish={handlePublish}
                   onUnpublish={handleUnpublish}

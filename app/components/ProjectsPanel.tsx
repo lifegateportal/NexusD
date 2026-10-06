@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useRef, useState, useEffect } from "react";
 import { SiteConfigSchema } from "@/lib/schemas/site-config";
 import type { ProjectSnapshot } from "@/lib/project-store";
 import type { EbookProject } from "@/lib/ebook-project-store";
@@ -24,6 +24,7 @@ type ProjectsPanelProps = {
   onCreateFolder: (name: string, parentId: string | null) => void | Promise<void>;
   onRenameFolder: (id: string, name: string) => void | Promise<void>;
   onDeleteFolder: (id: string) => void | Promise<void>;
+  folderSyncError?: string | null;
   /** Publish an ebook project to the Library — returns the slug on success */
   onPublish?: (project: ProjectSnapshot) => Promise<string | null>;
   /** Unpublish (remove from library) a published project */
@@ -56,11 +57,14 @@ export function ProjectsPanel({
   onCreateFolder,
   onRenameFolder,
   onDeleteFolder,
+  folderSyncError,
   onPublish,
   onUnpublish,
   onUpdateImages,
 }: ProjectsPanelProps) {
+  const PROJECT_PAGE_SIZE = 20;
   const [selectedFolderId, setSelectedFolderId] = useState<string | null>(null);
+  const [visibleProjectCount, setVisibleProjectCount] = useState(PROJECT_PAGE_SIZE);
   const folderCounts = allProjects.reduce<Record<string, number>>((counts, project) => {
     const folderId = project.folderId ?? UNFILED_FOLDER_ID;
     counts[folderId] = (counts[folderId] ?? 0) + 1;
@@ -69,6 +73,7 @@ export function ProjectsPanel({
   const projects = selectedFolderId === null
     ? allProjects
     : allProjects.filter((project) => (project.folderId ?? UNFILED_FOLDER_ID) === selectedFolderId);
+  const visibleProjects = projects.slice(0, visibleProjectCount);
   const folderOptions = flattenProjectFolders(folders);
   const [name, setName] = useState(suggestedName);
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
@@ -80,6 +85,10 @@ export function ProjectsPanel({
   const imageTargetRef = useRef<{ id: string; type: "cover" | "author" } | null>(null);
   const imageInputRef = useRef<HTMLInputElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    setVisibleProjectCount(PROJECT_PAGE_SIZE);
+  }, [selectedFolderId, allProjects.length]);
 
   async function handleImageFileChange(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
@@ -244,6 +253,7 @@ export function ProjectsPanel({
           onCreate={onCreateFolder}
           onRename={onRenameFolder}
           onDelete={onDeleteFolder}
+          syncError={folderSyncError}
         />
         <div className="min-w-0">
           {projects.length === 0 ? (
@@ -259,7 +269,7 @@ export function ProjectsPanel({
             </div>
           ) : (
         <div className="flex flex-col gap-2">
-          {projects.map((p) => (
+          {visibleProjects.map((p) => (
             <div key={p.id} className="rounded-xl border border-slate-700/50 bg-slate-800/40 p-4">
               <div className="mb-3 flex items-start justify-between gap-2">
                 <div className="min-w-0">
@@ -546,6 +556,15 @@ export function ProjectsPanel({
             </div>
           ))}
         </div>
+          )}
+          {visibleProjectCount < projects.length && (
+            <button
+              type="button"
+              onClick={() => setVisibleProjectCount((count) => count + PROJECT_PAGE_SIZE)}
+              className="mt-3 flex min-h-12 w-full items-center justify-center rounded-xl border border-slate-700/60 text-sm font-semibold text-slate-400 transition hover:border-cyan-500/50 hover:text-cyan-300"
+            >
+              Show more projects ({projects.length - visibleProjectCount} remaining)
+            </button>
           )}
         </div>
       </div>

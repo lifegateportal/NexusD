@@ -162,12 +162,13 @@ export function NexusNav({ active, onSelect }: NexusNavProps) {
                 style={{ boxShadow: "0 0 6px rgba(6,182,212,0.80)" }}
               />
             ) : null;
-            if (item.href) {
+            const href = item.href;
+            if (href) {
               return (
                 <button
                   key={item.id}
                   type="button"
-                  onClick={() => navigateTo(item.href)}
+                  onClick={() => navigateTo(href)}
                   aria-label={item.label}
                   aria-current={isActive ? "page" : undefined}
                   className={btnClass}
@@ -221,7 +222,6 @@ export function NexusNav({ active, onSelect }: NexusNavProps) {
         {/* Logo tap — goes to overview */}
         <button
           type="button"
-          onPointerDown={(e) => { e.preventDefault(); onSelect("overview"); }}
           onClick={() => onSelect("overview")}
           aria-label="Overview"
           className="flex min-h-[52px] min-w-[48px] touch-manipulation flex-col items-center justify-center gap-0.5 px-1 pt-2 active:bg-slate-800/40"
@@ -233,7 +233,7 @@ export function NexusNav({ active, onSelect }: NexusNavProps) {
         {/* Logout — far right of mobile bar */}
         <button
           type="button"
-          onPointerDown={(e) => { e.preventDefault(); void handleLogout(); }}
+          onClick={() => void handleLogout()}
           aria-label="Log out"
           className="relative flex min-h-[52px] min-w-[48px] touch-manipulation flex-col items-center justify-center gap-0.5 px-1 pt-2 text-slate-600 hover:text-rose-400 active:bg-slate-800/40"
           style={{ touchAction: "manipulation" }}
@@ -271,13 +271,6 @@ export function NexusNav({ active, onSelect }: NexusNavProps) {
             <button
               key={item.id}
               type="button"
-              onPointerDown={(e) => {
-                if (e.pointerType === "touch") {
-                  e.preventDefault();
-                  if (item.href) navigateTo(item.href);
-                  else onSelect(item.id);
-                }
-              }}
               onClick={() => {
                 if (item.href) navigateTo(item.href);
                 else onSelect(item.id);

@@ -26,6 +26,7 @@ type EbookProjectsPanelProps = {
   onCreateFolder: (name: string, parentId: string | null) => void | Promise<void>;
   onRenameFolder: (id: string, name: string) => void | Promise<void>;
   onDeleteFolder: (id: string) => void | Promise<void>;
+  folderSyncError?: string | null;
   /** Called with the parsed job state so the page can build a manifest from it */
   onImportManifestJson?: (job: EbookJobState) => EbookManifest | null;
   /** Called when a manifest/job JSON is successfully parsed from a device file */
@@ -88,13 +89,16 @@ export function EbookProjectsPanel({
   onCreateFolder,
   onRenameFolder,
   onDeleteFolder,
+  folderSyncError,
   onImportManifestJson,
   onManifestLoaded,
   onPublish,
   onUnpublish,
   onUpdateImages,
 }: EbookProjectsPanelProps) {
+  const PROJECT_PAGE_SIZE = 20;
   const [selectedFolderId, setSelectedFolderId] = useState<string | null>(null);
+  const [visibleProjectCount, setVisibleProjectCount] = useState(PROJECT_PAGE_SIZE);
   const folderCounts = projects.reduce<Record<string, number>>((counts, project) => {
     const folderId = project.folderId ?? UNFILED_FOLDER_ID;
     counts[folderId] = (counts[folderId] ?? 0) + 1;
@@ -103,6 +107,7 @@ export function EbookProjectsPanel({
   const visibleProjects = selectedFolderId === null
     ? projects
     : projects.filter((project) => (project.folderId ?? UNFILED_FOLDER_ID) === selectedFolderId);
+  const pagedProjects = visibleProjects.slice(0, visibleProjectCount);
   const folderOptions = flattenProjectFolders(folders);
   const [name, setName] = useState(suggestedName);
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
@@ -120,6 +125,10 @@ export function EbookProjectsPanel({
   const imageInputRef = useRef<HTMLInputElement>(null);
   const projectFileRef = useRef<HTMLInputElement>(null);
   const manifestFileRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    setVisibleProjectCount(PROJECT_PAGE_SIZE);
+  }, [selectedFolderId, projects.length]);
 
   // Live published catalog fetched from R2 via API
   const [liveBooks, setLiveBooks] = useState<PublishedBookEntry[]>([]);
@@ -411,6 +420,7 @@ export function EbookProjectsPanel({
           onCreate={onCreateFolder}
           onRename={onRenameFolder}
           onDelete={onDeleteFolder}
+          syncError={folderSyncError}
         />
         <div className="min-w-0">
         <p className="mb-2 text-[10px] font-bold uppercase tracking-widest text-slate-500">
@@ -429,7 +439,7 @@ export function EbookProjectsPanel({
           </div>
         ) : (
           <div className="flex flex-col gap-2">
-            {visibleProjects.map((p) => (
+            {pagedProjects.map((p) => (
               <div key={p.id} className="rounded-xl border border-slate-700/50 bg-slate-800/40 p-4">
                 <div className="mb-3 flex items-start justify-between gap-2">
                   <div className="min-w-0">
@@ -538,6 +548,15 @@ export function EbookProjectsPanel({
                           <span className="font-medium">Word</span>
                         </button>
                       </div>
+                    )}
+                    {visibleProjectCount < visibleProjects.length && (
+                      <button
+                        type="button"
+                        onClick={() => setVisibleProjectCount((count) => count + PROJECT_PAGE_SIZE)}
+                        className="mt-3 flex min-h-12 w-full items-center justify-center rounded-xl border border-slate-700/60 text-sm font-semibold text-slate-400 transition hover:border-cyan-500/50 hover:text-cyan-300"
+                      >
+                        Show more books ({visibleProjects.length - visibleProjectCount} remaining)
+                      </button>
                     )}
                   </div>
                   <label className="order-last flex min-h-12 basis-full items-center gap-2 rounded-lg border border-slate-700/50 bg-slate-900/30 px-3 text-xs text-slate-500">

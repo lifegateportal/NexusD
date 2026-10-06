@@ -102,7 +102,10 @@ export async function fetchProjectOrganizationFromCloud(): Promise<ProjectOrgani
     cache: "no-store",
     credentials: "same-origin",
   });
-  if (!response.ok) throw new Error("Could not load project folders from cloud.");
+  if (!response.ok) {
+    const payload = await response.json().catch(() => null) as { error?: string } | null;
+    throw new Error(payload?.error ?? "Could not load project folders from cloud.");
+  }
   const payload = await response.json() as { organization?: unknown | null };
   if (payload.organization === null || payload.organization === undefined) return null;
   const parsed = ProjectOrganizationSchema.safeParse(payload.organization);

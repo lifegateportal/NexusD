@@ -85,6 +85,7 @@ export default function HomePage() {
   const [chatHistory,     setChatHistory]     = useState<ChatMessage[]>([]);
   const [panelLoadKey,    setPanelLoadKey]    = useState<string>("");
   const [folders,         setFolders]         = useState<ProjectFolder[]>([]);
+  const [folderSyncError, setFolderSyncError] = useState<string | null>(null);
 
   // Load persisted state client-side only (avoids SSR hydration mismatch)
   useEffect(() => {
@@ -102,10 +103,10 @@ export default function HomePage() {
             await storeProjectOrganization(remoteOrganization);
             organization = remoteOrganization;
           } else if (!remoteOrganization || new Date(organization.updatedAt).getTime() > new Date(remoteOrganization.updatedAt).getTime()) {
-            await syncProjectOrganizationToCloud(organization).catch(() => {});
+            await syncProjectOrganizationToCloud(organization);
           }
-        } catch {
-          // Organization sync is best-effort; local folders remain usable offline.
+        } catch (error) {
+          setFolderSyncError(error instanceof Error ? error.message : "Could not synchronize folders.");
         }
         setFolders(organization.folders);
 
@@ -423,7 +424,9 @@ export default function HomePage() {
       ]);
       setFolders(next.folders);
       await syncProjectOrganizationToCloud(next);
+      setFolderSyncError(null);
     } catch (error) {
+      setFolderSyncError(error instanceof Error ? error.message : "Could not create folder.");
       addLog({ level: "error", message: error instanceof Error ? error.message : "Could not create folder." });
     }
   }, [addLog]);
@@ -442,7 +445,9 @@ export default function HomePage() {
       )));
       setFolders(next.folders);
       await syncProjectOrganizationToCloud(next);
+      setFolderSyncError(null);
     } catch (error) {
+      setFolderSyncError(error instanceof Error ? error.message : "Could not rename folder.");
       addLog({ level: "error", message: error instanceof Error ? error.message : "Could not rename folder." });
     }
   }, [addLog]);
@@ -466,7 +471,9 @@ export default function HomePage() {
       }, {});
       await persistProjectFolderChanges(changes);
       await syncProjectOrganizationToCloud(next);
+      setFolderSyncError(null);
     } catch (error) {
+      setFolderSyncError(error instanceof Error ? error.message : "Could not delete folder.");
       addLog({ level: "error", message: error instanceof Error ? error.message : "Could not delete folder." });
     }
   }, [addLog, persistProjectFolderChanges, projects]);
@@ -1148,6 +1155,7 @@ export default function HomePage() {
                     onCreateFolder={handleCreateFolder}
                     onRenameFolder={handleRenameFolder}
                     onDeleteFolder={handleDeleteFolder}
+                    folderSyncError={folderSyncError}
                     onPublish={handlePublishProject}
                     onUnpublish={handleUnpublishProject}
                     onUpdateImages={handleUpdateImages}
