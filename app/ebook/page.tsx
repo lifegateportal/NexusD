@@ -26,6 +26,7 @@ import {
   makeProjectFolder,
   createProjectOrganization,
   saveProjectOrganization,
+  restoreMissingProjectFolders,
   storeProjectOrganization,
   fetchProjectOrganizationFromCloud,
   syncProjectOrganizationToCloud,
@@ -201,18 +202,32 @@ function EbookPageClient() {
           await storeProjectOrganization(remoteOrganization);
           organization = remoteOrganization;
         } else if (!remoteOrganization || new Date(organization.updatedAt).getTime() > new Date(remoteOrganization.updatedAt).getTime()) {
-          await syncProjectOrganizationToCloud(organization);
+          organization = await syncProjectOrganizationToCloud(organization);
+          await storeProjectOrganization(organization);
         }
       } catch (error) {
         setFolderSyncError(error instanceof Error ? error.message : "Could not synchronize folders.");
       }
-      setFolders(organization.folders);
 
       const localProjects = await listEbookProjects().catch(() => []);
       const normalizedLocal = localProjects.map((project) => ({
-        ...project,
-        folderId: project.folderId ?? UNFILED_FOLDER_ID,
+      ...project,
+      folderId: project.folderId ?? UNFILED_FOLDER_ID,
       }));
+      const foldersWithRecoveredRecords = restoreMissingProjectFolders(
+      organization.folders,
+      normalizedLocal.map((project) => project.folderId),
+      );
+      if (foldersWithRecoveredRecords.length !== organization.folders.length) {
+      organization = await saveProjectOrganization(foldersWithRecoveredRecords);
+      try {
+        organization = await syncProjectOrganizationToCloud(organization);
+        await storeProjectOrganization(organization);
+      } catch (error) {
+        setFolderSyncError(error instanceof Error ? error.message : "Could not synchronize recovered folders.");
+      }
+      }
+      setFolders(organization.folders);
       for (const project of normalizedLocal) {
         if (!localProjects.find((existing) => existing.id === project.id)?.folderId) {
           await saveEbookProject(project, { touchUpdatedAt: false }).catch(() => {});
@@ -679,7 +694,9 @@ function EbookPageClient() {
         makeProjectFolder(name, parentId, organization.folders.filter((folder) => folder.parentId === parentId).length),
       ]);
       setFolders(next.folders);
-      await syncProjectOrganizationToCloud(next);
+      const confirmed = await syncProjectOrganizationToCloud(next);
+      await storeProjectOrganization(confirmed);
+      setFolders(confirmed.folders);
       setFolderSyncError(null);
     } catch (error) {
       setFolderSyncError(error instanceof Error ? error.message : "Could not create folder.");
@@ -699,7 +716,9 @@ function EbookPageClient() {
         item.id === id ? { ...item, name: name.trim(), updatedAt: new Date().toISOString() } : item
       )));
       setFolders(next.folders);
-      await syncProjectOrganizationToCloud(next);
+      const confirmed = await syncProjectOrganizationToCloud(next);
+      await storeProjectOrganization(confirmed);
+      setFolders(confirmed.folders);
       setFolderSyncError(null);
     } catch (error) {
       setFolderSyncError(error instanceof Error ? error.message : "Could not rename folder.");
@@ -726,7 +745,9 @@ function EbookPageClient() {
         return result;
       }, {});
       await persistProjectFolderChanges(changes);
-      await syncProjectOrganizationToCloud(next);
+      const confirmed = await syncProjectOrganizationToCloud(next);
+      await storeProjectOrganization(confirmed);
+      setFolders(confirmed.folders);
       setFolderSyncError(null);
     } catch (error) {
       setFolderSyncError(error instanceof Error ? error.message : "Could not delete folder.");

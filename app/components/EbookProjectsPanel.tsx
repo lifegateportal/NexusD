@@ -98,7 +98,6 @@ export function EbookProjectsPanel({
 }: EbookProjectsPanelProps) {
   const PROJECT_PAGE_SIZE = 20;
   const [selectedFolderId, setSelectedFolderId] = useState<string | null>(null);
-  const [visibleProjectCount, setVisibleProjectCount] = useState(PROJECT_PAGE_SIZE);
   const folderCounts = projects.reduce<Record<string, number>>((counts, project) => {
     const folderId = project.folderId ?? UNFILED_FOLDER_ID;
     counts[folderId] = (counts[folderId] ?? 0) + 1;
@@ -107,7 +106,7 @@ export function EbookProjectsPanel({
   const visibleProjects = selectedFolderId === null
     ? projects
     : projects.filter((project) => (project.folderId ?? UNFILED_FOLDER_ID) === selectedFolderId);
-  const pagedProjects = visibleProjects.slice(0, visibleProjectCount);
+  const [visibleProjectCount, setVisibleProjectCount] = useState(PROJECT_PAGE_SIZE);
   const folderOptions = flattenProjectFolders(folders);
   const [name, setName] = useState(suggestedName);
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
@@ -125,10 +124,26 @@ export function EbookProjectsPanel({
   const imageInputRef = useRef<HTMLInputElement>(null);
   const projectFileRef = useRef<HTMLInputElement>(null);
   const manifestFileRef = useRef<HTMLInputElement>(null);
+  const loadMoreRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     setVisibleProjectCount(PROJECT_PAGE_SIZE);
   }, [selectedFolderId, projects.length]);
+
+  useEffect(() => {
+    const sentinel = loadMoreRef.current;
+    if (!sentinel || visibleProjectCount >= visibleProjects.length || typeof IntersectionObserver === "undefined") return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((entry) => entry.isIntersecting)) {
+          setVisibleProjectCount((count) => Math.min(count + PROJECT_PAGE_SIZE, visibleProjects.length));
+        }
+      },
+      { rootMargin: "0px 0px 480px" },
+    );
+    observer.observe(sentinel);
+    return () => observer.disconnect();
+  }, [visibleProjectCount, visibleProjects.length]);
 
   // Live published catalog fetched from R2 via API
   const [liveBooks, setLiveBooks] = useState<PublishedBookEntry[]>([]);
@@ -439,7 +454,7 @@ export function EbookProjectsPanel({
           </div>
         ) : (
           <div className="flex flex-col gap-2">
-            {pagedProjects.map((p) => (
+            {visibleProjects.slice(0, visibleProjectCount).map((p) => (
               <div key={p.id} className="rounded-xl border border-slate-700/50 bg-slate-800/40 p-4">
                 <div className="mb-3 flex items-start justify-between gap-2">
                   <div className="min-w-0">
@@ -548,15 +563,6 @@ export function EbookProjectsPanel({
                           <span className="font-medium">Word</span>
                         </button>
                       </div>
-                    )}
-                    {visibleProjectCount < visibleProjects.length && (
-                      <button
-                        type="button"
-                        onClick={() => setVisibleProjectCount((count) => count + PROJECT_PAGE_SIZE)}
-                        className="mt-3 flex min-h-12 w-full items-center justify-center rounded-xl border border-slate-700/60 text-sm font-semibold text-slate-400 transition hover:border-cyan-500/50 hover:text-cyan-300"
-                      >
-                        Show more books ({visibleProjects.length - visibleProjectCount} remaining)
-                      </button>
                     )}
                   </div>
                   <label className="order-last flex min-h-12 basis-full items-center gap-2 rounded-lg border border-slate-700/50 bg-slate-900/30 px-3 text-xs text-slate-500">
@@ -776,6 +782,7 @@ export function EbookProjectsPanel({
             ))}
           </div>
         )}
+      {visibleProjectCount < visibleProjects.length && <div ref={loadMoreRef} className="h-1" aria-hidden="true" />}
       </div>
       </div>
 

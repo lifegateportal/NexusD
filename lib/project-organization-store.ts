@@ -52,6 +52,32 @@ export function ensureUnfiledFolder(folders: ProjectFolder[]): ProjectFolder[] {
   return [makeUnfiledFolder(), ...folders];
 }
 
+export function restoreMissingProjectFolders(
+  folders: ProjectFolder[],
+  projectFolderIds: Iterable<string>,
+): ProjectFolder[] {
+  const restored = [...folders];
+  const knownIds = new Set(restored.map((folder) => folder.id));
+  const missingIds = [...new Set(projectFolderIds)]
+    .filter((id) => id && id !== UNFILED_FOLDER_ID && !knownIds.has(id))
+    .sort();
+
+  missingIds.forEach((id, index) => {
+    const now = new Date().toISOString();
+    const suffix = missingIds.length > 1 ? ` ${index + 1}` : "";
+    restored.push({
+      id,
+      name: `Recovered folder${suffix}`,
+      parentId: null,
+      createdAt: now,
+      updatedAt: now,
+      sortOrder: restored.length,
+    });
+  });
+
+  return restored;
+}
+
 export function createProjectOrganization(
   folders: ProjectFolder[] = [],
   updatedAt = new Date().toISOString(),
@@ -113,7 +139,9 @@ export async function fetchProjectOrganizationFromCloud(): Promise<ProjectOrgani
   return createProjectOrganization(parsed.data.folders, parsed.data.updatedAt);
 }
 
-export async function syncProjectOrganizationToCloud(organization: ProjectOrganization): Promise<void> {
+export async function syncProjectOrganizationToCloud(
+  organization: ProjectOrganization,
+): Promise<ProjectOrganization> {
   const response = await fetch("/api/project-folders", {
     method: "PUT",
     cache: "no-store",
@@ -130,9 +158,10 @@ export async function syncProjectOrganizationToCloud(organization: ProjectOrgani
   const saved = savedPayload?.organization
     ? ProjectOrganizationSchema.safeParse(savedPayload.organization)
     : null;
-  if (!saved?.success || saved.data.updatedAt !== organization.updatedAt) {
+  if (!saved?.success) {
     throw new Error("Cloud folder storage did not confirm the saved organization.");
   }
+  return createProjectOrganization(saved.data.folders, saved.data.updatedAt);
 }
 
 export function makeProjectFolder(name: string, parentId: string | null, sortOrder: number): ProjectFolder {

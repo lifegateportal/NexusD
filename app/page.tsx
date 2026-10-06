@@ -43,6 +43,7 @@ import {
   makeProjectFolder,
   createProjectOrganization,
   saveProjectOrganization,
+  restoreMissingProjectFolders,
   storeProjectOrganization,
   fetchProjectOrganizationFromCloud,
   syncProjectOrganizationToCloud,
@@ -103,7 +104,8 @@ export default function HomePage() {
             await storeProjectOrganization(remoteOrganization);
             organization = remoteOrganization;
           } else if (!remoteOrganization || new Date(organization.updatedAt).getTime() > new Date(remoteOrganization.updatedAt).getTime()) {
-            await syncProjectOrganizationToCloud(organization);
+            organization = await syncProjectOrganizationToCloud(organization);
+            await storeProjectOrganization(organization);
           }
         } catch (error) {
           setFolderSyncError(error instanceof Error ? error.message : "Could not synchronize folders.");
@@ -154,6 +156,21 @@ export default function HomePage() {
             }
           }
         }
+        const projectFolderIds = normalizedLocal.map((project) => project.folderId);
+        const foldersWithRecoveredRecords = restoreMissingProjectFolders(
+          organization.folders,
+          projectFolderIds,
+        );
+        if (foldersWithRecoveredRecords.length !== organization.folders.length) {
+          organization = await saveProjectOrganization(foldersWithRecoveredRecords);
+          try {
+            organization = await syncProjectOrganizationToCloud(organization);
+            await storeProjectOrganization(organization);
+          } catch (error) {
+            setFolderSyncError(error instanceof Error ? error.message : "Could not synchronize recovered folders.");
+          }
+        }
+        setFolders(organization.folders);
         setProjects(normalizedLocal);
 
         // ── Background R2 bidirectional sync ──────────────────────────────
@@ -423,7 +440,9 @@ export default function HomePage() {
         makeProjectFolder(name, parentId, sortOrder),
       ]);
       setFolders(next.folders);
-      await syncProjectOrganizationToCloud(next);
+      const confirmed = await syncProjectOrganizationToCloud(next);
+      await storeProjectOrganization(confirmed);
+      setFolders(confirmed.folders);
       setFolderSyncError(null);
     } catch (error) {
       setFolderSyncError(error instanceof Error ? error.message : "Could not create folder.");
@@ -444,7 +463,9 @@ export default function HomePage() {
         item.id === id ? { ...item, name: name.trim(), updatedAt: now } : item
       )));
       setFolders(next.folders);
-      await syncProjectOrganizationToCloud(next);
+      const confirmed = await syncProjectOrganizationToCloud(next);
+      await storeProjectOrganization(confirmed);
+      setFolders(confirmed.folders);
       setFolderSyncError(null);
     } catch (error) {
       setFolderSyncError(error instanceof Error ? error.message : "Could not rename folder.");
@@ -470,7 +491,9 @@ export default function HomePage() {
         return result;
       }, {});
       await persistProjectFolderChanges(changes);
-      await syncProjectOrganizationToCloud(next);
+      const confirmed = await syncProjectOrganizationToCloud(next);
+      await storeProjectOrganization(confirmed);
+      setFolders(confirmed.folders);
       setFolderSyncError(null);
     } catch (error) {
       setFolderSyncError(error instanceof Error ? error.message : "Could not delete folder.");

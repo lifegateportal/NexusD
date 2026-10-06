@@ -64,7 +64,6 @@ export function ProjectsPanel({
 }: ProjectsPanelProps) {
   const PROJECT_PAGE_SIZE = 20;
   const [selectedFolderId, setSelectedFolderId] = useState<string | null>(null);
-  const [visibleProjectCount, setVisibleProjectCount] = useState(PROJECT_PAGE_SIZE);
   const folderCounts = allProjects.reduce<Record<string, number>>((counts, project) => {
     const folderId = project.folderId ?? UNFILED_FOLDER_ID;
     counts[folderId] = (counts[folderId] ?? 0) + 1;
@@ -73,7 +72,7 @@ export function ProjectsPanel({
   const projects = selectedFolderId === null
     ? allProjects
     : allProjects.filter((project) => (project.folderId ?? UNFILED_FOLDER_ID) === selectedFolderId);
-  const visibleProjects = projects.slice(0, visibleProjectCount);
+  const [visibleProjectCount, setVisibleProjectCount] = useState(PROJECT_PAGE_SIZE);
   const folderOptions = flattenProjectFolders(folders);
   const [name, setName] = useState(suggestedName);
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
@@ -85,10 +84,28 @@ export function ProjectsPanel({
   const imageTargetRef = useRef<{ id: string; type: "cover" | "author" } | null>(null);
   const imageInputRef = useRef<HTMLInputElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
+  const loadMoreRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     setVisibleProjectCount(PROJECT_PAGE_SIZE);
-  }, [selectedFolderId, allProjects.length]);
+  }, [selectedFolderId, projects.length]);
+
+  useEffect(() => {
+    const panel = panelRef.current;
+    const sentinel = loadMoreRef.current;
+    if (!panel || !sentinel || visibleProjectCount >= projects.length || typeof IntersectionObserver === "undefined") return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((entry) => entry.isIntersecting)) {
+          setVisibleProjectCount((count) => Math.min(count + PROJECT_PAGE_SIZE, projects.length));
+        }
+      },
+      { root: panel, rootMargin: "0px 0px 480px" },
+    );
+    observer.observe(sentinel);
+    return () => observer.disconnect();
+  }, [projects.length, visibleProjectCount]);
 
   async function handleImageFileChange(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
@@ -198,7 +215,7 @@ export function ProjectsPanel({
   }
 
   return (
-    <div className="flex h-full flex-col gap-4 overflow-y-auto rounded-2xl border border-slate-700/60 glass p-5">
+    <div ref={panelRef} className="flex h-full flex-col gap-4 overflow-y-auto rounded-2xl border border-slate-700/60 glass p-5">
       <div className="flex items-center justify-between gap-2">
         <div>
           <p className="text-[10px] font-bold uppercase tracking-widest text-slate-500">Projects</p>
@@ -269,7 +286,7 @@ export function ProjectsPanel({
             </div>
           ) : (
         <div className="flex flex-col gap-2">
-          {visibleProjects.map((p) => (
+          {projects.slice(0, visibleProjectCount).map((p) => (
             <div key={p.id} className="rounded-xl border border-slate-700/50 bg-slate-800/40 p-4">
               <div className="mb-3 flex items-start justify-between gap-2">
                 <div className="min-w-0">
@@ -557,15 +574,7 @@ export function ProjectsPanel({
           ))}
         </div>
           )}
-          {visibleProjectCount < projects.length && (
-            <button
-              type="button"
-              onClick={() => setVisibleProjectCount((count) => count + PROJECT_PAGE_SIZE)}
-              className="mt-3 flex min-h-12 w-full items-center justify-center rounded-xl border border-slate-700/60 text-sm font-semibold text-slate-400 transition hover:border-cyan-500/50 hover:text-cyan-300"
-            >
-              Show more projects ({projects.length - visibleProjectCount} remaining)
-            </button>
-          )}
+          {visibleProjectCount < projects.length && <div ref={loadMoreRef} className="h-1" aria-hidden="true" />}
         </div>
       </div>
     </div>

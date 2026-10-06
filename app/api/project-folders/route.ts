@@ -101,6 +101,27 @@ export async function PUT(req: NextRequest) {
   );
 
   try {
+    let currentOrganization: ReturnType<typeof createProjectOrganization> | null = null;
+    try {
+      const current = await r2.s3.send(new GetObjectCommand({ Bucket: r2.bucket, Key: ORGANIZATION_KEY }));
+      const raw = await current.Body?.transformToString();
+      if (raw) {
+        const parsed = ProjectOrganizationSchema.safeParse(JSON.parse(raw) as unknown);
+        if (parsed.success) {
+          currentOrganization = createProjectOrganization(parsed.data.folders, parsed.data.updatedAt);
+        }
+      }
+    } catch (error) {
+      if (!noSuchObject(error)) throw error;
+    }
+
+    if (
+      currentOrganization &&
+      new Date(currentOrganization.updatedAt).getTime() > new Date(organization.updatedAt).getTime()
+    ) {
+      return jsonNoStore({ ok: true, organization: currentOrganization });
+    }
+
     await r2.s3.send(new PutObjectCommand({
       Bucket: r2.bucket,
       Key: ORGANIZATION_KEY,
