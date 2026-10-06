@@ -568,6 +568,8 @@ export function SermonAssistantPanel() {
   const [currentProjectFolderId, setCurrentProjectFolderId] = useState(UNFILED_FOLDER_ID);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [historyItems, setHistoryItems] = useState<SermonProjectRecord[]>([]);
+  const historyRevisionRef = useRef(0);
+  const historyLoadGenerationRef = useRef(0);
   const [selectedFolderId, setSelectedFolderId] = useState<string | null>(null);
   const [folders, setFolders] = useState<ProjectFolder[]>([]);
   const [folderSyncError, setFolderSyncError] = useState<string | null>(null);
@@ -696,6 +698,8 @@ export function SermonAssistantPanel() {
 
   useEffect(() => {
     let cancelled = false;
+    const loadGeneration = ++historyLoadGenerationRef.current;
+    const loadRevision = historyRevisionRef.current;
     void (async () => {
       let organization = await loadProjectOrganization(SERMON_ORGANIZATION_SCOPE).catch(() => (
         createProjectOrganization([], new Date(0).toISOString())
@@ -712,10 +716,19 @@ export function SermonAssistantPanel() {
       } catch (error) {
         if (!cancelled) setFolderSyncError(error instanceof Error ? error.message : "Could not synchronize folders.");
       }
-      if (cancelled) return;
+      if (
+        cancelled ||
+        historyLoadGenerationRef.current !== loadGeneration ||
+        historyRevisionRef.current !== loadRevision
+      ) return;
       setFolders(organization.folders);
 
       const localProjects = await listSermonProjects().catch(() => []);
+      if (
+        cancelled ||
+        historyLoadGenerationRef.current !== loadGeneration ||
+        historyRevisionRef.current !== loadRevision
+      ) return;
       const normalizedProjects = localProjects.map((project) => ({
         ...project,
         folderId: normalizeProjectFolderId(project.folderId, organization.folders),
@@ -726,6 +739,11 @@ export function SermonAssistantPanel() {
           await saveSermonProject(project, { touchUpdatedAt: false }).catch(() => {});
         }
       }
+      if (
+        cancelled ||
+        historyLoadGenerationRef.current !== loadGeneration ||
+        historyRevisionRef.current !== loadRevision
+      ) return;
       const storedId = localStorage.getItem(STORAGE_KEYS.projectId);
       const current = storedId
         ? normalizedProjects.find((project) => project.id === storedId)
@@ -740,6 +758,11 @@ export function SermonAssistantPanel() {
         setChatEntries(current.sermonAssistant.chatEntries);
         setActiveTab(getPreferredLandingTab(current.sermonAssistant.organizedMarkdown));
       }
+      if (
+        cancelled ||
+        historyLoadGenerationRef.current !== loadGeneration ||
+        historyRevisionRef.current !== loadRevision
+      ) return;
       setHistoryItems(normalizedProjects);
     })();
 
@@ -2189,14 +2212,15 @@ export function SermonAssistantPanel() {
 
     try {
       const saved = await saveSermonProject(project);
-      await saveSermonProjectToCloud(saved);
-      setCurrentProjectId(saved.id);
-      setProjectName(nextName);
-      setCurrentProjectFolderId(saved.folderId ?? UNFILED_FOLDER_ID);
+      historyRevisionRef.current += 1;
       setHistoryItems((prev) => [
         saved,
         ...prev.filter((item) => item.id !== saved.id),
       ]);
+      await saveSermonProjectToCloud(saved);
+      setCurrentProjectId(saved.id);
+      setProjectName(nextName);
+      setCurrentProjectFolderId(saved.folderId ?? UNFILED_FOLDER_ID);
       pushToast(mode === "new" ? "Saved as new sermon." : "Sermon updated in cloud.", "success");
     } catch (error) {
       pushToast(error instanceof Error ? error.message : "Sermon save failed.", "error");
@@ -2268,6 +2292,8 @@ export function SermonAssistantPanel() {
 
   const openHistory = useCallback(async () => {
     setHistoryOpen(true);
+    const loadGeneration = ++historyLoadGenerationRef.current;
+    const loadRevision = historyRevisionRef.current;
     try {
       const localProjects = await listSermonProjects().catch(() => []);
       const cloud = await fetchSermonProjectsFromCloud();
@@ -2302,6 +2328,10 @@ export function SermonAssistantPanel() {
         items.push(normalized);
       }
       items.sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt));
+      if (
+        historyLoadGenerationRef.current !== loadGeneration ||
+        historyRevisionRef.current !== loadRevision
+      ) return;
 
       // Fallback: include current local sermon state if cloud has no valid entries.
       if (items.length === 0 && (rawTranscript.trim() || organizedMarkdown.trim() || manualNotes.trim())) {
@@ -2345,6 +2375,10 @@ export function SermonAssistantPanel() {
             },
           }]
         : [];
+      if (
+        historyLoadGenerationRef.current !== loadGeneration ||
+        historyRevisionRef.current !== loadRevision
+      ) return;
       setHistoryItems(fallbackItems);
       pushToast(error instanceof Error ? `${error.message} Showing local sermon history.` : "Cloud history failed. Showing local sermon history.", "error");
     }
@@ -2379,6 +2413,7 @@ export function SermonAssistantPanel() {
     try {
       await deleteSermonProjectFromCloud(id);
       await deleteSermonProject(id);
+      historyRevisionRef.current += 1;
       setHistoryItems((prev) => prev.filter((item) => item.id !== id));
       if (currentProjectId === id) {
         setCurrentProjectId("");
@@ -2461,6 +2496,7 @@ export function SermonAssistantPanel() {
       };
       await saveSermonProjectToCloud(next);
       const saved = await saveSermonProject(next, { touchUpdatedAt: false });
+      historyRevisionRef.current += 1;
       setHistoryItems((prev) => prev.map((item) => item.id === id ? saved : item));
       if (currentProjectId === id) setCurrentProjectFolderId(folderId);
       pushToast("Sermon moved.", "success");
@@ -2494,6 +2530,7 @@ export function SermonAssistantPanel() {
       const confirmed = await syncProjectOrganizationToCloud(next, SERMON_ORGANIZATION_SCOPE);
       await storeProjectOrganization(confirmed, SERMON_ORGANIZATION_SCOPE);
       setFolders(confirmed.folders);
+      historyRevisionRef.current += 1;
       setHistoryItems(moved);
       setCurrentProjectFolderId((current) => current === id ? UNFILED_FOLDER_ID : current);
       setSelectedFolderId((current) => current === id ? null : current);
