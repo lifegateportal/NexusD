@@ -8,6 +8,7 @@ import {
 } from "@aws-sdk/client-s3";
 import { env } from "@/lib/env";
 import { z } from "zod";
+import { SermonProjectRecordSchema } from "@/lib/sermon-project-store";
 
 export const runtime    = "nodejs";
 export const maxDuration = 30;
@@ -32,9 +33,14 @@ function r2Ready() {
 
 // ── GET /api/projects — return all saved ProjectSnapshots from R2 ─────────────
 
-export async function GET() {
+export async function GET(req: NextRequest) {
+  const kind = new URL(req.url).searchParams.get("kind");
   const r2 = r2Ready();
-  if (!r2) return NextResponse.json({ projects: [] });
+  if (!r2) {
+    return kind === "sermon"
+      ? NextResponse.json({ error: "Cloud sermon storage is not configured." }, { status: 503 })
+      : NextResponse.json({ projects: [] });
+  }
 
   try {
     // List all objects under projects/
@@ -71,11 +77,20 @@ export async function GET() {
       .map((key) => key.slice(DELETED_PREFIX.length, -".json".length));
     const deletedIds = new Set(deletedProjectIds);
 
-    return NextResponse.json({
-      projects: projects.filter((project) => {
+    const activeProjects = projects.filter((project) => {
         if (!project || typeof project !== "object" || !("id" in project)) return true;
         return typeof project.id !== "string" || !deletedIds.has(project.id);
-      }),
+      });
+    const filteredProjects = kind === "sermon"
+      ? activeProjects.filter((project) => (
+          !!project &&
+          typeof project === "object" &&
+          "sermonAssistant" in project
+        ))
+      : activeProjects;
+
+    return NextResponse.json({
+      projects: filteredProjects,
       deletedProjectIds,
     });
   } catch (err) {
@@ -91,8 +106,13 @@ const UpsertSchema = z.object({
 });
 
 export async function POST(req: NextRequest) {
+  const kind = new URL(req.url).searchParams.get("kind");
   const r2 = r2Ready();
-  if (!r2) return NextResponse.json({ ok: true }); // no-op when R2 not configured
+  if (!r2) {
+    return kind === "sermon"
+      ? NextResponse.json({ error: "Cloud sermon storage is not configured." }, { status: 503 })
+      : NextResponse.json({ ok: true });
+  }
 
   let input;
   try {
@@ -104,7 +124,17 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  const { project } = input;
+  let project: z.infer<typeof UpsertSchema>["project"];
+  try {
+    project = "sermonAssistant" in input.project
+      ? SermonProjectRecordSchema.parse(input.project)
+      : input.project;
+  } catch (err) {
+    return NextResponse.json(
+      { error: err instanceof Error ? err.message : "Invalid sermon project" },
+      { status: 400 },
+    );
+  }
   try {
     await r2.s3.send(
       new PutObjectCommand({
@@ -135,8 +165,13 @@ export async function POST(req: NextRequest) {
 const DeleteSchema = z.object({ id: z.string().min(1) });
 
 export async function DELETE(req: NextRequest) {
+  const kind = new URL(req.url).searchParams.get("kind");
   const r2 = r2Ready();
-  if (!r2) return NextResponse.json({ ok: true });
+  if (!r2) {
+    return kind === "sermon"
+      ? NextResponse.json({ error: "Cloud sermon storage is not configured." }, { status: 503 })
+      : NextResponse.json({ ok: true });
+  }
 
   let input;
   try {
