@@ -11,6 +11,7 @@ import { z } from "zod";
 
 export const runtime    = "nodejs";
 export const maxDuration = 30;
+const DELETED_PREFIX = "project-deletions/";
 
 function makeS3(accountId: string, accessKey: string, secretKey: string) {
   return new S3Client({
@@ -37,9 +38,14 @@ export async function GET() {
 
   try {
     // List all objects under projects/
-    const list = await r2.s3.send(
+    const [list, deletedList] = await Promise.all([
+      r2.s3.send(
       new ListObjectsV2Command({ Bucket: r2.bucket, Prefix: "projects/" }),
-    );
+      ),
+      r2.s3.send(
+        new ListObjectsV2Command({ Bucket: r2.bucket, Prefix: DELETED_PREFIX }),
+      ),
+    ]);
     const keys = (list.Contents ?? [])
       .map((o) => o.Key)
       .filter((k): k is string => !!k && k.endsWith(".json"));
@@ -59,8 +65,19 @@ export async function GET() {
     const projects = settled
       .filter((r): r is PromiseFulfilledResult<unknown> => r.status === "fulfilled" && r.value !== null)
       .map((r) => r.value);
+    const deletedProjectIds = (deletedList.Contents ?? [])
+      .map((object) => object.Key)
+      .filter((key): key is string => !!key && key.startsWith(DELETED_PREFIX) && key.endsWith(".json"))
+      .map((key) => key.slice(DELETED_PREFIX.length, -".json".length));
+    const deletedIds = new Set(deletedProjectIds);
 
-    return NextResponse.json({ projects });
+    return NextResponse.json({
+      projects: projects.filter((project) => {
+        if (!project || typeof project !== "object" || !("id" in project)) return true;
+        return typeof project.id !== "string" || !deletedIds.has(project.id);
+      }),
+      deletedProjectIds,
+    });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Failed to load projects";
     return NextResponse.json({ error: message }, { status: 500 });
@@ -98,6 +115,12 @@ export async function POST(req: NextRequest) {
         CacheControl: "private, no-cache",
       }),
     );
+    await r2.s3.send(
+      new DeleteObjectCommand({
+        Bucket: r2.bucket,
+        Key: `${DELETED_PREFIX}${project.id}.json`,
+      }),
+    );
     return NextResponse.json({ ok: true });
   } catch (err) {
     return NextResponse.json(
@@ -128,6 +151,15 @@ export async function DELETE(req: NextRequest) {
   try {
     await r2.s3.send(
       new DeleteObjectCommand({ Bucket: r2.bucket, Key: `projects/${input.id}.json` }),
+    );
+    await r2.s3.send(
+      new PutObjectCommand({
+        Bucket: r2.bucket,
+        Key: `${DELETED_PREFIX}${input.id}.json`,
+        Body: JSON.stringify({ id: input.id, deletedAt: new Date().toISOString() }),
+        ContentType: "application/json",
+        CacheControl: "private, no-cache",
+      }),
     );
     return NextResponse.json({ ok: true });
   } catch (err) {

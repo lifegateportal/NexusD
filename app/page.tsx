@@ -164,10 +164,22 @@ export default function HomePage() {
           try {
             const r2res = await fetch("/api/projects");
             if (!r2res.ok) return;
-            const { projects: r2projects } = await r2res.json() as { projects: ProjectSnapshot[] };
+            const {
+              projects: r2projects,
+              deletedProjectIds = [],
+            } = await r2res.json() as { projects: ProjectSnapshot[]; deletedProjectIds?: string[] };
+            const deletedIds = new Set(deletedProjectIds);
+            if (deletedIds.size > 0) {
+              for (const id of deletedIds) {
+                await deleteProject(id).catch(() => {});
+                await deleteEbookProject(id).catch(() => {});
+              }
+            }
+            const activeLocal = mergedLocal.filter((project) => !deletedIds.has(project.id));
+            if (deletedIds.size > 0) setProjects(activeLocal);
             if (!Array.isArray(r2projects) || r2projects.length === 0) {
               // R2 is empty — push all local projects up (initial upload)
-              for (const p of mergedLocal) {
+              for (const p of activeLocal) {
                 await fetch("/api/projects", {
                   method: "POST", headers: { "Content-Type": "application/json" },
                   body: JSON.stringify({ project: p }),
@@ -176,7 +188,7 @@ export default function HomePage() {
               return;
             }
             const r2ById  = new Map(r2projects.map((p: ProjectSnapshot) => [p.id, p]));
-            const localById = new Map(mergedLocal.map((p) => [p.id, p]));
+            const localById = new Map(activeLocal.map((p) => [p.id, p]));
             const toPullLocal: ProjectSnapshot[] = [];
             const toPushR2: ProjectSnapshot[] = [];
             // Pull: R2 has newer or unknown project
@@ -190,7 +202,7 @@ export default function HomePage() {
               }
             }
             // Push: local has newer or unknown project
-            for (const localP of mergedLocal) {
+            for (const localP of activeLocal) {
               const r2p = r2ById.get(localP.id);
               if (!r2p || new Date(localP.updatedAt) > new Date((r2p as ProjectSnapshot).updatedAt)) {
                 toPushR2.push(localP);
@@ -627,12 +639,23 @@ export default function HomePage() {
       }));
     setProjects([...main, ...ebookOnly]);
     if (currentProjectId === id) setCurrentProjectId("");
-    // Remove from R2 (fire-and-forget)
-    fetch("/api/projects", {
-      method: "DELETE", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ id }),
-    }).catch(() => {});
-  }, [currentProjectId]);
+    try {
+      const response = await fetch("/api/projects", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id }),
+      });
+      if (!response.ok) {
+        const payload = await response.json().catch(() => null) as { error?: string } | null;
+        throw new Error(payload?.error ?? "Cloud deletion failed.");
+      }
+    } catch (error) {
+      addLog({
+        level: "error",
+        message: `Project removed locally, but cloud deletion failed: ${error instanceof Error ? error.message : "try again before reloading."}`,
+      });
+    }
+  }, [addLog, currentProjectId]);
 
   const handleImportProject = useCallback(async (snapshot: ProjectSnapshot) => {
     const importedSnapshot = {

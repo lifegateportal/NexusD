@@ -240,10 +240,19 @@ function EbookPageClient() {
             authorImageUrl?: string;
             folderId?: string;
           }>;
+          deletedProjectIds?: string[];
         };
 
         const remote = Array.isArray(payload.projects) ? payload.projects : [];
-        const localById = new Map(localProjects.map((p) => [p.id, p]));
+        const deletedIds = new Set(payload.deletedProjectIds ?? []);
+        if (deletedIds.size > 0) {
+          for (const id of deletedIds) {
+            await deleteEbookProject(id).catch(() => {});
+          }
+        }
+        const activeLocal = localProjects.filter((project) => !deletedIds.has(project.id));
+        if (deletedIds.size > 0) setProjects(activeLocal);
+        const localById = new Map(activeLocal.map((p) => [p.id, p]));
         let changed = false;
 
         for (const item of remote) {
@@ -762,11 +771,22 @@ function EbookPageClient() {
     await deleteEbookProject(id);
     setProjects(await listEbookProjects());
     if (currentProjectId === id) setCurrentProjectId("");
-    // Remove from R2 (fire-and-forget)
-    fetch("/api/projects", {
-      method: "DELETE", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ id }),
-    }).catch(() => {});
+    try {
+      const response = await fetch("/api/projects", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id }),
+      });
+      if (!response.ok) {
+        const payload = await response.json().catch(() => null) as { error?: string } | null;
+        throw new Error(payload?.error ?? "Cloud deletion failed.");
+      }
+    } catch (error) {
+      setStatusMsg({
+        type: "error",
+        text: `Book removed locally, but cloud deletion failed: ${error instanceof Error ? error.message : "try again before reloading."}`,
+      });
+    }
   }, [currentProjectId]);
 
   // ── Unpublish handler ─────────────────────────────────────────────────────

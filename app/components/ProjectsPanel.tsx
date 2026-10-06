@@ -234,7 +234,7 @@ export function ProjectsPanel({
         </div>
       )}
 
-      <div className="grid min-h-0 gap-4 lg:grid-cols-[220px_minmax(0,1fr)]">
+      <div className="grid min-h-0 gap-4 lg:grid-cols-[300px_minmax(0,1fr)]">
         <ProjectFolderTree
           folders={folders}
           selectedFolderId={selectedFolderId}

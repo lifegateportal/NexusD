@@ -154,9 +154,12 @@ export function ProjectFolderTree({
                   type="button"
                   onClick={() => void submitRename()}
                   aria-label={`Save ${folder.name}`}
+                  title="Save folder name"
                   className="flex min-h-12 min-w-12 items-center justify-center rounded-lg text-emerald-300 transition hover:bg-emerald-500/10"
                 >
-                  Save
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} className="h-5 w-5" aria-hidden="true">
+                    <path d="m5 12 4 4L19 6" strokeLinecap="round" strokeLinejoin="round" />
+                  </svg>
                 </button>
               </div>
             );
@@ -179,17 +182,25 @@ export function ProjectFolderTree({
                       setEditingName(folder.name);
                     }}
                     aria-label={`Rename ${folder.name}`}
+                    title="Rename folder"
                     className="flex min-h-12 min-w-12 items-center justify-center rounded-lg text-slate-500 transition hover:bg-slate-700/50 hover:text-cyan-300"
                   >
-                    Rename
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} className="h-5 w-5" aria-hidden="true">
+                      <path d="M12 20h9" strokeLinecap="round" strokeLinejoin="round" />
+                      <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L8 18l-4 1 1-4L16.5 3.5z" strokeLinecap="round" strokeLinejoin="round" />
+                    </svg>
                   </button>
                   <button
                     type="button"
                     onClick={() => void onDelete(folder.id)}
                     aria-label={`Delete ${folder.name}`}
+                    title="Delete folder"
                     className="flex min-h-12 min-w-12 items-center justify-center rounded-lg text-slate-500 transition hover:bg-red-500/10 hover:text-red-300"
                   >
-                    Delete
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} className="h-5 w-5" aria-hidden="true">
+                      <polyline points="3 6 5 6 21 6" strokeLinecap="round" strokeLinejoin="round" />
+                      <path d="m19 6-1 14H6L5 6m3 0V4h8v2M10 11v5M14 11v5" strokeLinecap="round" strokeLinejoin="round" />
+                    </svg>
                   </button>
                 </>
               )}
