@@ -105,10 +105,30 @@ export async function loadProjectOrganization(
     const req = tx.objectStore(STORE).get(ORGANIZATION_ID);
     req.onsuccess = () => {
       const parsed = ProjectOrganizationSchema.safeParse(req.result);
-      resolve(parsed.success ? createProjectOrganization(parsed.data.folders, parsed.data.updatedAt) : createProjectOrganization());
+      resolve(
+        parsed.success
+          ? createProjectOrganization(parsed.data.folders, parsed.data.updatedAt)
+          : createProjectOrganization([], new Date(0).toISOString()),
+      );
     };
     req.onerror = () => reject(req.error);
   });
+}
+
+export async function loadLatestProjectOrganization(
+  scope: ProjectOrganizationScope = PROJECT_ORGANIZATION_SCOPE,
+): Promise<ProjectOrganization> {
+  const local = await loadProjectOrganization(scope);
+  try {
+    const remote = await fetchProjectOrganizationFromCloud(scope);
+    if (remote && Date.parse(remote.updatedAt) > Date.parse(local.updatedAt)) {
+      await storeProjectOrganization(remote, scope);
+      return remote;
+    }
+  } catch {
+    // Mutations can continue locally; the following cloud write reports sync failures.
+  }
+  return local;
 }
 
 export async function storeProjectOrganization(

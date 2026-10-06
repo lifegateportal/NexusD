@@ -29,6 +29,31 @@ export type ProjectSnapshot = {
   coverImageUrl?: string;
   /** R2 public URL for the author's photo */
   authorImageUrl?: string;
+  /** Lightweight fields used by project-list views without loading full content. */
+  hasAcademy?: boolean;
+  hasEbookContent?: boolean;
+  ebookChapterCount?: number;
+  ebookTotalWordCount?: number;
+  ebookStatus?: string;
+};
+
+export type ProjectCloudSummary = Pick<
+  ProjectSnapshot,
+  | "id"
+  | "name"
+  | "createdAt"
+  | "updatedAt"
+  | "folderId"
+  | "publishedSlug"
+  | "coverImageUrl"
+  | "authorImageUrl"
+  | "hasAcademy"
+  | "hasEbookContent"
+  | "ebookChapterCount"
+  | "ebookTotalWordCount"
+  | "ebookStatus"
+> & {
+  isSermon?: boolean;
 };
 
 // ── IndexedDB storage (no 5MB quota limit) ───────────────────────────────────
@@ -111,6 +136,101 @@ export async function listProjects(): Promise<ProjectSnapshot[]> {
   } catch {
     return [];
   }
+}
+
+function normalizedProjectDates(item: ProjectSnapshot): ProjectSnapshot {
+    const createdAt = validIsoDate(item.createdAt)
+      ? item.createdAt
+      : validIsoDate(item.updatedAt)
+        ? item.updatedAt
+        : new Date().toISOString();
+    return {
+      ...item,
+      createdAt,
+      updatedAt: validIsoDate(item.updatedAt) ? item.updatedAt : createdAt,
+    };
+  }
+
+function makeProjectListSnapshot(item: ProjectSnapshot): ProjectSnapshot {
+    const normalized = normalizedProjectDates(item);
+    const chapterCount = normalized.ebookManifest?.chapters.length
+      ?? normalized.ebookJobState?.chapters.length;
+    const totalWordCount = normalized.ebookManifest?.totalWordCount
+      ?? normalized.ebookJobState?.chapters.reduce((sum, chapter) => sum + (chapter.totalWordCount ?? 0), 0);
+    return {
+      id: normalized.id,
+      name: normalized.name,
+      createdAt: normalized.createdAt,
+      updatedAt: normalized.updatedAt,
+      folderId: normalized.folderId,
+      academy: null,
+      siteConfig: normalized.siteConfig,
+      deliveryInstructions: "",
+      chatHistory: [],
+      blueprint: null,
+      logicResult: null,
+      uiResult: null,
+      ebookManifest: null,
+      ebookJobState: null,
+      publishedSlug: normalized.publishedSlug,
+      coverImageUrl: normalized.coverImageUrl,
+      authorImageUrl: normalized.authorImageUrl,
+      hasAcademy: Boolean(normalized.academy),
+      hasEbookContent: Boolean(normalized.ebookManifest || normalized.ebookJobState),
+      ebookChapterCount: chapterCount,
+      ebookTotalWordCount: totalWordCount,
+      ebookStatus: normalized.ebookJobState?.status,
+    };
+  }
+
+export async function listProjectSummaries(): Promise<ProjectSnapshot[]> {
+    if (typeof window === "undefined") return [];
+    await migrateFromLocalStorage();
+    const db = await openDB();
+    return new Promise((resolve, reject) => {
+      const transaction = db.transaction(STORE, "readonly");
+      const request = transaction.objectStore(STORE).openCursor();
+      const summaries: ProjectSnapshot[] = [];
+      request.onsuccess = () => {
+        const cursor = request.result;
+        if (!cursor) {
+          summaries.sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt));
+          resolve(summaries);
+          return;
+        }
+        summaries.push(makeProjectListSnapshot(cursor.value as ProjectSnapshot));
+        cursor.continue();
+      };
+      request.onerror = () => reject(request.error);
+    });
+  }
+
+export async function getProject(id: string): Promise<ProjectSnapshot | null> {
+    if (typeof window === "undefined") return null;
+    const db = await openDB();
+    return new Promise((resolve, reject) => {
+      const request = db.transaction(STORE, "readonly").objectStore(STORE).get(id);
+      request.onsuccess = () => {
+        const item = request.result as ProjectSnapshot | undefined;
+        resolve(item ? normalizedProjectDates(item) : null);
+      };
+      request.onerror = () => reject(request.error);
+    });
+  }
+
+export async function fetchProjectFromCloud(id: string): Promise<ProjectSnapshot | null> {
+    const response = await fetch(`/api/projects?id=${encodeURIComponent(id)}`, {
+      cache: "no-store",
+      credentials: "same-origin",
+    });
+    const payload = await response.json().catch(() => null) as {
+      project?: unknown;
+      error?: string;
+    } | null;
+    if (response.status === 404) return null;
+    if (!response.ok) throw new Error(payload?.error ?? "Could not load the project from cloud.");
+    if (!payload?.project || typeof payload.project !== "object") return null;
+    return payload.project as ProjectSnapshot;
 }
 
 export async function saveProject(

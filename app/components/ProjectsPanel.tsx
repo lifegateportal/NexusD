@@ -18,6 +18,7 @@ type ProjectsPanelProps = {
   canSave: boolean;
   onSave: (name: string, folderId?: string) => void;
   onLoad: (id: string) => void;
+  onExport?: (id: string) => Promise<ProjectSnapshot | null>;
   onDelete: (id: string) => void;
   onImport: (snapshot: ProjectSnapshot) => void;
   onMoveProject: (id: string, folderId: string) => void | Promise<void>;
@@ -51,6 +52,7 @@ export function ProjectsPanel({
   canSave,
   onSave,
   onLoad,
+  onExport,
   onDelete,
   onImport,
   onMoveProject,
@@ -292,12 +294,12 @@ export function ProjectsPanel({
                 <div className="min-w-0">
                   <p className="truncate font-semibold text-slate-100">{p.name}</p>
                   <p className="mt-0.5 text-xs text-slate-500">
-                    {p.ebookManifest
-                      ? `${p.ebookManifest.chapters.length} chapter${p.ebookManifest.chapters.length !== 1 ? "s" : ""} · ${p.ebookManifest.totalWordCount.toLocaleString()} words`
-                      : p.ebookJobState
-                        ? `Ebook in progress · ${p.ebookJobState.status ?? ""}`
-                        : p.academy
-                          ? `${p.academy.curriculum.length} module${p.academy.curriculum.length !== 1 ? "s" : ""} · ${p.academy.curriculum.flatMap((m) => m.lessons).length} lessons`
+                    {(p.ebookChapterCount !== undefined || p.ebookJobState || p.ebookManifest)
+                      ? `${p.ebookChapterCount ?? p.ebookManifest?.chapters.length ?? p.ebookJobState?.chapters.length ?? 0} chapter${(p.ebookChapterCount ?? p.ebookManifest?.chapters.length ?? p.ebookJobState?.chapters.length ?? 0) !== 1 ? "s" : ""} · ${(p.ebookTotalWordCount ?? p.ebookManifest?.totalWordCount ?? 0).toLocaleString()} words`
+                      : p.ebookStatus
+                        ? `Ebook in progress · ${p.ebookStatus}`
+                        : p.hasAcademy
+                          ? "Academy project"
                           : null}
                     {" · "}
                     <span>
@@ -362,7 +364,10 @@ export function ProjectsPanel({
                   Load
                 </button>
                 <button
-                  onClick={() => exportProject(p)}
+                  onClick={async () => {
+                    const fullProject = onExport ? await onExport(p.id) : p;
+                    if (fullProject) exportProject(fullProject);
+                  }}
                   title="Export project as JSON file"
                   className="flex min-h-10 min-w-[2.75rem] items-center justify-center rounded-lg border border-slate-600 text-slate-400 transition hover:border-cyan-500/50 hover:text-cyan-300"
                 >
@@ -391,7 +396,7 @@ export function ProjectsPanel({
               </label>
 
               {/* Book images — only for ebook projects */}
-              {onUpdateImages && (p.ebookJobState || p.ebookManifest) && (
+              {onUpdateImages && (p.hasEbookContent || p.ebookJobState || p.ebookManifest) && (
                 <div className="mt-2 flex items-center gap-3 rounded-xl border border-slate-700/40 bg-slate-800/30 p-3">
                   {/* Cover image slot */}
                   <button
@@ -459,7 +464,7 @@ export function ProjectsPanel({
               )}
 
               {/* Publish / Published row — shown when project has ebook content */}
-              {onPublish && (p.ebookJobState || p.ebookManifest) && (
+              {onPublish && (p.hasEbookContent || p.ebookJobState || p.ebookManifest) && (
                 <div className="mt-2 space-y-1.5">
                   {p.publishedSlug ? (
                     <>

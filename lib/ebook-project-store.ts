@@ -1,3 +1,4 @@
+import { EbookJobStateSchema } from "@/lib/schemas/ebook";
 import type { EbookJobState } from "@/lib/schemas/ebook";
 
 export type EbookProject = {
@@ -17,6 +18,7 @@ export type EbookProject = {
   coverImageUrl?: string;
   /** R2 public URL for the author's photo */
   authorImageUrl?: string;
+  summaryOnly?: boolean;
 };
 
 const DB_NAME = "nexus-ebook-projects";
@@ -68,6 +70,69 @@ export async function listEbookProjects(): Promise<EbookProject[]> {
   } catch {
     return [];
   }
+}
+
+function summaryJobState(project: EbookProject): EbookJobState {
+    const statuses = new Set([
+      "idle", "transcribing", "filtering", "analyzing", "mapping",
+      "architecting", "assigning", "writing", "polishing",
+      "frontmatter", "exporting", "complete", "failed",
+    ]);
+    const createdAt = validIsoDate(project.createdAt) ? project.createdAt : new Date().toISOString();
+    const updatedAt = validIsoDate(project.updatedAt) ? project.updatedAt : createdAt;
+    return EbookJobStateSchema.parse({
+      jobId: project.jobState?.jobId || project.id,
+      status: statuses.has(project.status) ? project.status : "idle",
+      createdAt,
+      updatedAt,
+    });
+  }
+
+export async function listEbookProjectSummaries(): Promise<EbookProject[]> {
+    if (typeof window === "undefined") return [];
+    const db = await openDB();
+    return new Promise((resolve, reject) => {
+      const transaction = db.transaction(STORE, "readonly");
+      const request = transaction.objectStore(STORE).openCursor();
+      const summaries: EbookProject[] = [];
+      request.onsuccess = () => {
+        const cursor = request.result;
+        if (!cursor) {
+          summaries.sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt));
+          resolve(summaries);
+          return;
+        }
+        const project = cursor.value as EbookProject;
+        summaries.push({
+          id: project.id,
+          name: project.name,
+          createdAt: project.createdAt,
+          updatedAt: project.updatedAt,
+          folderId: project.folderId,
+          bookTitle: project.bookTitle,
+          chapterCount: project.chapterCount,
+          totalWordCount: project.totalWordCount,
+          status: project.status,
+          jobState: summaryJobState(project),
+          publishedSlug: project.publishedSlug,
+          coverImageUrl: project.coverImageUrl,
+          authorImageUrl: project.authorImageUrl,
+          summaryOnly: true,
+        });
+        cursor.continue();
+      };
+      request.onerror = () => reject(request.error);
+    });
+  }
+
+export async function getEbookProject(id: string): Promise<EbookProject | null> {
+    if (typeof window === "undefined") return null;
+    const db = await openDB();
+    return new Promise((resolve, reject) => {
+      const request = db.transaction(STORE, "readonly").objectStore(STORE).get(id);
+      request.onsuccess = () => resolve((request.result as EbookProject | undefined) ?? null);
+      request.onerror = () => reject(request.error);
+    });
 }
 
 export async function saveEbookProject(

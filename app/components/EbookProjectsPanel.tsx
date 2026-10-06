@@ -20,6 +20,7 @@ type EbookProjectsPanelProps = {
   canSave: boolean;
   onSave: (name: string, folderId?: string) => void;
   onLoad: (id: string) => void;
+  onLoadFull?: (id: string) => Promise<EbookProject | null>;
   onDelete: (id: string) => void;
   onImport: (project: EbookProject) => void;
   onMoveProject: (id: string, folderId: string) => void | Promise<void>;
@@ -83,6 +84,7 @@ export function EbookProjectsPanel({
   canSave,
   onSave,
   onLoad,
+  onLoadFull,
   onDelete,
   onImport,
   onMoveProject,
@@ -175,7 +177,8 @@ export function EbookProjectsPanel({
     setShowFormats(null);
     
     try {
-      const manifest = buildManifest(p);
+      const sourceProject = onLoadFull ? await onLoadFull(p.id) ?? p : p;
+      const manifest = buildManifest(sourceProject);
 
       const exportRes = await fetch("/api/ebook/export", {
         method: "POST",
@@ -581,7 +584,10 @@ export function EbookProjectsPanel({
                     </select>
                   </label>
                   <button
-                    onClick={() => exportProject(p)}
+                    onClick={async () => {
+                      const sourceProject = onLoadFull ? await onLoadFull(p.id) ?? p : p;
+                      exportProject(sourceProject);
+                    }}
                     title="Download full project (all pipeline stages)"
                     className="flex min-h-10 min-w-[2.75rem] items-center justify-center rounded-lg border border-slate-600 text-slate-400 transition hover:border-cyan-500/50 hover:text-cyan-300"
                   >

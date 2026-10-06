@@ -31,10 +31,64 @@ function r2Ready() {
   };
 }
 
+function noSuchObject(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  const status = (error as Error & { $metadata?: { httpStatusCode?: number } }).$metadata?.httpStatusCode;
+  return error.name === "NoSuchKey" || error.name === "NotFound" || status === 404;
+}
+
+function projectSummary(project: Record<string, unknown>) {
+  const decodeObject = (value: unknown): Record<string, unknown> | null => {
+    if (value && typeof value === "object") return value as Record<string, unknown>;
+    if (typeof value !== "string") return null;
+    try {
+      const decoded = JSON.parse(value) as unknown;
+      return decoded && typeof decoded === "object" ? decoded as Record<string, unknown> : null;
+    } catch {
+      return null;
+    }
+  };
+  const jobState = decodeObject(project.ebookJobState);
+  const manifest = decodeObject(project.ebookManifest);
+  const chapters = Array.isArray(manifest?.chapters)
+    ? manifest.chapters
+    : Array.isArray(jobState?.chapters)
+      ? jobState.chapters
+      : [];
+  const totalWordCount = typeof manifest?.totalWordCount === "number"
+    ? manifest.totalWordCount
+    : chapters.reduce((sum, chapter) => (
+        sum + (
+          chapter && typeof chapter === "object" && typeof chapter.totalWordCount === "number"
+            ? chapter.totalWordCount
+            : 0
+        )
+      ), 0);
+  return {
+    id: project.id,
+    name: project.name,
+    createdAt: project.createdAt,
+    updatedAt: project.updatedAt,
+    folderId: project.folderId,
+    publishedSlug: project.publishedSlug,
+    coverImageUrl: project.coverImageUrl,
+    authorImageUrl: project.authorImageUrl,
+    hasAcademy: Boolean(project.academy),
+    hasEbookContent: Boolean(manifest || jobState),
+    ebookChapterCount: chapters.length,
+    ebookTotalWordCount: totalWordCount,
+    ebookStatus: typeof jobState?.status === "string" ? jobState.status : undefined,
+    isSermon: "sermonAssistant" in project,
+  };
+}
+
 // ── GET /api/projects — return all saved ProjectSnapshots from R2 ─────────────
 
 export async function GET(req: NextRequest) {
-  const kind = new URL(req.url).searchParams.get("kind");
+  const searchParams = new URL(req.url).searchParams;
+  const kind = searchParams.get("kind");
+  const requestedId = searchParams.get("id");
+  const summaryOnly = searchParams.get("summary") === "1";
   const r2 = r2Ready();
   if (!r2) {
     return kind === "sermon"
@@ -43,6 +97,30 @@ export async function GET(req: NextRequest) {
   }
 
   try {
+    if (requestedId) {
+      if (!/^[A-Za-z0-9._-]+$/.test(requestedId)) {
+        return NextResponse.json({ error: "Invalid project id." }, { status: 400 });
+      }
+      try {
+        const result = await r2.s3.send(new GetObjectCommand({
+          Bucket: r2.bucket,
+          Key: `projects/${requestedId}.json`,
+        }));
+        const raw = await result.Body?.transformToString();
+        if (!raw) return NextResponse.json({ error: "Project not found." }, { status: 404 });
+        const project = JSON.parse(raw) as unknown;
+        if (!project || typeof project !== "object") {
+          return NextResponse.json({ error: "Project not found." }, { status: 404 });
+        }
+        return NextResponse.json({ project });
+      } catch (error) {
+        if (noSuchObject(error)) {
+          return NextResponse.json({ error: "Project not found." }, { status: 404 });
+        }
+        throw error;
+      }
+    }
+
     // List all objects under projects/
     const [list, deletedList] = await Promise.all([
       r2.s3.send(
@@ -77,20 +155,21 @@ export async function GET(req: NextRequest) {
       .map((key) => key.slice(DELETED_PREFIX.length, -".json".length));
     const deletedIds = new Set(deletedProjectIds);
 
-    const activeProjects = projects.filter((project) => {
-        if (!project || typeof project !== "object" || !("id" in project)) return true;
-        return typeof project.id !== "string" || !deletedIds.has(project.id);
-      });
+    const activeProjects = projects.filter((project): project is Record<string, unknown> => (
+      !!project &&
+      typeof project === "object" &&
+      "id" in project &&
+      typeof project.id === "string" &&
+      !deletedIds.has(project.id)
+    ));
     const filteredProjects = kind === "sermon"
-      ? activeProjects.filter((project) => (
-          !!project &&
-          typeof project === "object" &&
-          "sermonAssistant" in project
-        ))
-      : activeProjects;
+      ? activeProjects.filter((project) => "sermonAssistant" in project)
+      : kind === "projects"
+        ? activeProjects.filter((project) => !("sermonAssistant" in project))
+        : activeProjects;
 
     return NextResponse.json({
-      projects: filteredProjects,
+      projects: summaryOnly ? filteredProjects.map(projectSummary) : filteredProjects,
       deletedProjectIds,
     });
   } catch (err) {

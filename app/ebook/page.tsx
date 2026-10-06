@@ -15,7 +15,8 @@ import type { EbookManifest, EbookJobState } from "@/lib/schemas/ebook";
 import type { SiteConfig } from "@/lib/schemas/site-config";
 import type { EbookPipelineSnapshot } from "@/app/components/EbookPipeline";
 import {
-  listEbookProjects,
+  listEbookProjectSummaries,
+  getEbookProject,
   saveEbookProject,
   deleteEbookProject,
   generateEbookProjectId,
@@ -23,6 +24,7 @@ import {
 import type { EbookProject } from "@/lib/ebook-project-store";
 import {
   loadProjectOrganization,
+  loadLatestProjectOrganization,
   makeProjectFolder,
   createProjectOrganization,
   saveProjectOrganization,
@@ -34,7 +36,7 @@ import {
   UNFILED_FOLDER_ID,
   type ProjectFolder,
 } from "@/lib/project-organization-store";
-import { listProjects, saveProject } from "@/lib/project-store";
+import { fetchProjectFromCloud, listProjects, saveProject } from "@/lib/project-store";
 import { getEbookJob } from "@/lib/ebook-job-store";
 
 const JOB_STATE_KEY = "nexus_ebook_job_state";
@@ -167,6 +169,47 @@ function EbookPageClient() {
   const [pipelineKey, setPipelineKey] = useState(0);
   const hydratedLoadRef = useRef<string | null>(null);
 
+  const loadFullEbookProject = useCallback(async (id: string): Promise<EbookProject | null> => {
+    const localProject = await getEbookProject(id);
+    const remoteSnapshot = await fetchProjectFromCloud(id).catch(() => null);
+    const remoteRaw = remoteSnapshot?.ebookJobState;
+    const remoteJob = EbookJobStateSchema.safeParse(
+      typeof remoteRaw === "string"
+        ? (() => {
+            try {
+              return JSON.parse(remoteRaw) as unknown;
+            } catch {
+              return null;
+            }
+          })()
+        : remoteRaw,
+    );
+    if (
+      remoteSnapshot &&
+      remoteJob.success &&
+      (!localProject || Date.parse(remoteSnapshot.updatedAt) > Date.parse(localProject.updatedAt))
+    ) {
+      const remoteProject: EbookProject = {
+        id: remoteSnapshot.id,
+        name: remoteSnapshot.name,
+        createdAt: remoteSnapshot.createdAt,
+        updatedAt: remoteSnapshot.updatedAt,
+        folderId: remoteSnapshot.folderId,
+        bookTitle: remoteJob.data.architecture?.bookTitle ?? remoteSnapshot.name,
+        chapterCount: remoteJob.data.chapters.length,
+        totalWordCount: remoteJob.data.chapters.reduce((sum, chapter) => sum + (chapter.totalWordCount ?? 0), 0),
+        status: remoteJob.data.status,
+        jobState: remoteJob.data,
+        publishedSlug: remoteSnapshot.publishedSlug,
+        coverImageUrl: remoteSnapshot.coverImageUrl,
+        authorImageUrl: remoteSnapshot.authorImageUrl,
+      };
+      await saveEbookProject(remoteProject, { touchUpdatedAt: false });
+      return remoteProject;
+    }
+    return localProject && !localProject.summaryOnly ? localProject : null;
+  }, []);
+
   useEffect(() => {
     void (async () => {
       try {
@@ -220,7 +263,7 @@ function EbookPageClient() {
         }
       }
 
-      const localProjects = await listEbookProjects().catch(() => []);
+      const localProjects = await listEbookProjectSummaries().catch(() => []);
       const normalizedLocal = localProjects.map((project) => ({
         ...project,
         folderId: normalizeProjectFolderId(project.folderId, organization.folders),
@@ -229,13 +272,19 @@ function EbookPageClient() {
       for (const project of normalizedLocal) {
         const storedProject = localProjects.find((existing) => existing.id === project.id);
         if (storedProject?.folderId !== project.folderId) {
-          await saveEbookProject(project, { touchUpdatedAt: false }).catch(() => {});
+          const fullProject = await getEbookProject(project.id).catch(() => null);
+          if (fullProject) {
+            await saveEbookProject({ ...fullProject, folderId: project.folderId }, { touchUpdatedAt: false }).catch(() => {});
+          }
         }
       }
       setProjects(normalizedLocal);
 
       try {
-        const res = await fetch("/api/projects");
+        const res = await fetch("/api/projects?kind=projects&summary=1", {
+          cache: "no-store",
+          credentials: "same-origin",
+        });
         if (!res.ok) return;
 
         const payload = await res.json() as {
@@ -250,11 +299,17 @@ function EbookPageClient() {
             coverImageUrl?: string;
             authorImageUrl?: string;
             folderId?: string;
+            hasEbookContent?: boolean;
+            ebookChapterCount?: number;
+            ebookTotalWordCount?: number;
+            ebookStatus?: string;
           }>;
           deletedProjectIds?: string[];
         };
 
-        const remote = Array.isArray(payload.projects) ? payload.projects : [];
+        const remote = Array.isArray(payload.projects)
+          ? payload.projects.filter((item) => item.hasEbookContent)
+          : [];
         const deletedIds = new Set(payload.deletedProjectIds ?? []);
         if (deletedIds.size > 0) {
           for (const id of deletedIds) {
@@ -262,68 +317,34 @@ function EbookPageClient() {
           }
         }
         const activeLocal = localProjects.filter((project) => !deletedIds.has(project.id));
-        if (deletedIds.size > 0) setProjects(activeLocal);
         const localById = new Map(activeLocal.map((p) => [p.id, p]));
-        let changed = false;
+        const mergedById = new Map(activeLocal.map((project) => [project.id, project]));
 
         for (const item of remote) {
           if (!item.id || !item.name) continue;
-          const sourceJobState = item.ebookJobState ?? item.jobState;
-          if (!sourceJobState) continue;
-
-          const rawState = typeof sourceJobState === "string"
-            ? (() => {
-                try {
-                  return JSON.parse(sourceJobState) as unknown;
-                } catch {
-                  return null;
-                }
-              })()
-            : sourceJobState;
-          if (!rawState || typeof rawState !== "object") continue;
-
-          const record = rawState as Record<string, unknown>;
-          const rawStatus = typeof record.status === "string" ? record.status : "idle";
-          const normalizedState = {
-            ...record,
-            jobId: typeof record.jobId === "string" && record.jobId ? record.jobId : item.id,
-            status: VALID_JOB_STATUSES.has(rawStatus) ? rawStatus : "idle",
-            createdAt: (() => {
-              const source = typeof record.createdAt === "string" ? record.createdAt : item.createdAt;
-              const ts = source ? Date.parse(source) : NaN;
-              return Number.isFinite(ts) ? new Date(ts).toISOString() : new Date().toISOString();
-            })(),
-            updatedAt: (() => {
-              const source = typeof record.updatedAt === "string" ? record.updatedAt : item.updatedAt;
-              const ts = source ? Date.parse(source) : NaN;
-              return Number.isFinite(ts) ? new Date(ts).toISOString() : new Date().toISOString();
-            })(),
-          };
-
-          const parsed = EbookJobStateSchema.safeParse(normalizedState);
-          if (!parsed.success) continue;
-
           const existing = localById.get(item.id);
-          const localTs = existing ? new Date(existing.updatedAt).getTime() : 0;
           const remoteTs = new Date(item.updatedAt ?? item.createdAt ?? 0).getTime();
-          const hasRemoteImageUpdates = Boolean(
-            (item.coverImageUrl && !existing?.coverImageUrl) ||
-            (item.authorImageUrl && !existing?.authorImageUrl) ||
-            (item.publishedSlug && !existing?.publishedSlug)
-          );
-          if (existing && localTs >= remoteTs && !hasRemoteImageUpdates) continue;
-
-          const job = parsed.data;
-          const normalized: EbookProject = {
+          if (existing && new Date(existing.updatedAt).getTime() > remoteTs) continue;
+          const createdAt = item.createdAt ?? new Date().toISOString();
+          const updatedAt = item.updatedAt ?? createdAt;
+          const status = item.ebookStatus && VALID_JOB_STATUSES.has(item.ebookStatus)
+            ? item.ebookStatus
+            : "idle";
+          const summaryProject: EbookProject = {
             id: item.id,
             name: item.name,
-            createdAt: item.createdAt ?? new Date().toISOString(),
-            updatedAt: item.updatedAt ?? new Date().toISOString(),
-            bookTitle: job.architecture?.bookTitle ?? item.name,
-            chapterCount: job.chapters?.length ?? 0,
-            totalWordCount: (job.chapters ?? []).reduce((sum, chapter) => sum + (chapter.totalWordCount ?? 0), 0),
-            status: job.status,
-            jobState: job,
+            createdAt,
+            updatedAt,
+            bookTitle: item.name,
+            chapterCount: item.ebookChapterCount ?? 0,
+            totalWordCount: item.ebookTotalWordCount ?? 0,
+            status,
+            jobState: EbookJobStateSchema.parse({
+              jobId: item.id,
+              status,
+              createdAt,
+              updatedAt,
+            }),
             publishedSlug: item.publishedSlug ?? existing?.publishedSlug,
             coverImageUrl: item.coverImageUrl ?? existing?.coverImageUrl,
             authorImageUrl: item.authorImageUrl ?? existing?.authorImageUrl,
@@ -331,15 +352,13 @@ function EbookPageClient() {
               item.folderId ?? existing?.folderId,
               organization.folders,
             ),
+            summaryOnly: true,
           };
-
-          await saveEbookProject(normalized, { touchUpdatedAt: false }).catch(() => {});
-          changed = true;
+          mergedById.set(item.id, summaryProject);
         }
-
-        if (changed) {
-          setProjects(await listEbookProjects());
-        }
+        setProjects(Array.from(mergedById.values()).sort(
+          (a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt),
+        ));
       } catch {
         // Cloud sync is best-effort; local projects remain usable offline.
       }
@@ -404,30 +423,34 @@ function EbookPageClient() {
   useEffect(() => {
     if (!requestedLoad || projects.length === 0) return;
     if (hydratedLoadRef.current === requestedLoad) return;
-    const project = projects.find((p) => p.id === requestedLoad);
-    if (!project) return;
+    const projectSummary = projects.find((p) => p.id === requestedLoad);
+    if (!projectSummary) return;
 
-    try {
-      localStorage.setItem(JOB_STATE_KEY, JSON.stringify(project.jobState));
-      localStorage.setItem(JOB_STORAGE_KEY, project.jobState.jobId);
-      setCurrentProjectId(project.id);
-      const job = project.jobState;
-      if (canBuildCompletedManifest(job)) {
-        setEbookManifest(buildManifestFromCompletedJob(job, {
-          fallbackTitle: project.bookTitle || project.name,
-          coverImageUrl: project.coverImageUrl ?? null,
-          authorImageUrl: project.authorImageUrl ?? null,
-        }));
+    void (async () => {
+      try {
+        const project = await loadFullEbookProject(requestedLoad);
+        if (!project) throw new Error("Project could not be loaded from local storage.");
+        localStorage.setItem(JOB_STATE_KEY, JSON.stringify(project.jobState));
+        localStorage.setItem(JOB_STORAGE_KEY, project.jobState.jobId);
+        setCurrentProjectId(project.id);
+        const job = project.jobState;
+        if (canBuildCompletedManifest(job)) {
+          setEbookManifest(buildManifestFromCompletedJob(job, {
+            fallbackTitle: project.bookTitle || project.name,
+            coverImageUrl: project.coverImageUrl ?? null,
+            authorImageUrl: project.authorImageUrl ?? null,
+          }));
+        }
+        setPipelineKey((k) => k + 1);
+        setActiveTab("pipeline");
+        hydratedLoadRef.current = requestedLoad;
+        setStatusMsg({ type: "success", text: `"${project.name}" mounted in standalone pipeline.` });
+        router.replace("/ebook?tab=pipeline");
+      } catch (err) {
+        setStatusMsg({ type: "error", text: err instanceof Error ? err.message : "Project mount failed." });
       }
-      setPipelineKey((k) => k + 1);
-      setActiveTab("pipeline");
-      hydratedLoadRef.current = requestedLoad;
-      setStatusMsg({ type: "success", text: `"${project.name}" mounted in standalone pipeline.` });
-      router.replace("/ebook?tab=pipeline");
-    } catch (err) {
-      setStatusMsg({ type: "error", text: err instanceof Error ? err.message : "Project mount failed." });
-    }
-  }, [requestedLoad, projects, router]);
+    })();
+  }, [loadFullEbookProject, requestedLoad, projects, router]);
 
   const suggestedName = ebookPipelineSnapshot?.bookTitle ?? ebookManifest?.bookTitle ?? "";
 
@@ -601,7 +624,7 @@ function EbookPageClient() {
       liveJobStateRef.current = project.jobState;
       setEbookJobState(project.jobState);
       setCurrentProjectId(id);
-      setProjects(await listEbookProjects());
+      setProjects(await listEbookProjectSummaries());
       setStatusMsg({ type: "success", text: `"${name}" saved.` });
       // Sync to R2 as a ProjectSnapshot (fire-and-forget)
       fetch("/api/projects", {
@@ -634,51 +657,50 @@ function EbookPageClient() {
   }, [currentProjectId, ebookManifest, normalizeJobStateForSave, projects]);
 
   const persistProjectFolderChanges = useCallback(async (changes: Record<string, string>) => {
-    const mainProjects = await listProjects();
-    const ebookProjects = await listEbookProjects();
-    for (const project of mainProjects) {
-      const folderId = changes[project.id];
-      if (!folderId) continue;
-      const updated = { ...project, folderId };
-      await saveProject(updated, { touchUpdatedAt: false });
-      fetch("/api/projects", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ project: updated }),
-      }).catch(() => {});
-    }
-    for (const project of ebookProjects) {
-      const folderId = changes[project.id];
-      if (!folderId) continue;
-      const updated = { ...project, folderId };
-      await saveEbookProject(updated, { touchUpdatedAt: false });
-      if (!mainProjects.some((item) => item.id === project.id)) {
-        fetch("/api/projects", {
+    for (const [id, folderId] of Object.entries(changes)) {
+      const mainProject = await listProjects().then((items) => items.find((item) => item.id === id));
+      if (mainProject) {
+        const updated = { ...mainProject, folderId };
+        await saveProject(updated, { touchUpdatedAt: false });
+        await fetch("/api/projects", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            project: {
-              id: updated.id,
-              name: updated.name,
-              createdAt: updated.createdAt,
-              updatedAt: updated.updatedAt,
-              folderId: updated.folderId,
-              academy: null,
-              siteConfig: {},
-              deliveryInstructions: "",
-              chatHistory: [],
-              blueprint: null,
-              logicResult: null,
-              uiResult: null,
-              ebookManifest: null,
-              ebookJobState: updated.jobState,
-              publishedSlug: updated.publishedSlug,
-              coverImageUrl: updated.coverImageUrl,
-              authorImageUrl: updated.authorImageUrl,
-            },
-          }),
-        }).catch(() => {});
+          body: JSON.stringify({ project: updated }),
+        });
+        const ebookProject = await getEbookProject(id);
+        if (ebookProject) await saveEbookProject({ ...ebookProject, folderId }, { touchUpdatedAt: false });
+        continue;
       }
+
+      const ebookProject = await getEbookProject(id);
+      if (!ebookProject) continue;
+      const updated = { ...ebookProject, folderId };
+      await saveEbookProject(updated, { touchUpdatedAt: false });
+      await fetch("/api/projects", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          project: {
+            id: updated.id,
+            name: updated.name,
+            createdAt: updated.createdAt,
+            updatedAt: updated.updatedAt,
+            folderId: updated.folderId,
+            academy: null,
+            siteConfig: {},
+            deliveryInstructions: "",
+            chatHistory: [],
+            blueprint: null,
+            logicResult: null,
+            uiResult: null,
+            ebookManifest: null,
+            ebookJobState: updated.jobState,
+            publishedSlug: updated.publishedSlug,
+            coverImageUrl: updated.coverImageUrl,
+            authorImageUrl: updated.authorImageUrl,
+          },
+        }),
+      });
     }
     setProjects((current) => current.map((project) => (
       changes[project.id] ? { ...project, folderId: changes[project.id] } : project
@@ -687,7 +709,7 @@ function EbookPageClient() {
 
   const handleCreateFolder = useCallback(async (name: string, parentId: string | null) => {
     try {
-      const organization = await loadProjectOrganization();
+      const organization = await loadLatestProjectOrganization();
       if (organization.folders.some((folder) => folder.parentId === parentId && folder.name.toLowerCase() === name.toLowerCase())) {
         throw new Error("A folder with that name already exists here.");
       }
@@ -708,7 +730,7 @@ function EbookPageClient() {
 
   const handleRenameFolder = useCallback(async (id: string, name: string) => {
     try {
-      const organization = await loadProjectOrganization();
+      const organization = await loadLatestProjectOrganization();
       const folder = organization.folders.find((item) => item.id === id);
       if (!folder || id === UNFILED_FOLDER_ID) return;
       if (organization.folders.some((item) => item.id !== id && item.parentId === folder.parentId && item.name.toLowerCase() === name.toLowerCase())) {
@@ -731,7 +753,7 @@ function EbookPageClient() {
   const handleDeleteFolder = useCallback(async (id: string) => {
     if (id === UNFILED_FOLDER_ID || !window.confirm("Delete this folder? Projects inside it will move to Unfiled.")) return;
     try {
-      const organization = await loadProjectOrganization();
+      const organization = await loadLatestProjectOrganization();
       const folder = organization.folders.find((item) => item.id === id);
       if (!folder) return;
       const now = new Date().toISOString();
@@ -741,8 +763,7 @@ function EbookPageClient() {
           .map((item) => item.parentId === id ? { ...item, parentId: folder.parentId, updatedAt: now } : item),
       );
       setFolders(next.folders);
-      const allProjects = [...projects, ...(await listProjects())];
-      const changes = allProjects.reduce<Record<string, string>>((result, project) => {
+      const changes = projects.reduce<Record<string, string>>((result, project) => {
         if ((project.folderId ?? UNFILED_FOLDER_ID) === id) result[project.id] = UNFILED_FOLDER_ID;
         return result;
       }, {});
@@ -766,10 +787,12 @@ function EbookPageClient() {
     }
   }, [folders, persistProjectFolderChanges]);
 
-  const handleLoadProject = useCallback((id: string) => {
-    const p = projects.find((proj) => proj.id === id);
-    if (!p) return;
+  const handleLoadProject = useCallback(async (id: string) => {
+    const summary = projects.find((proj) => proj.id === id);
+    if (!summary) return;
     try {
+      const p = await loadFullEbookProject(id);
+      if (!p) throw new Error("Project could not be loaded from local storage.");
       localStorage.setItem(JOB_STATE_KEY, JSON.stringify(p.jobState));
       localStorage.setItem(JOB_STORAGE_KEY, p.jobState.jobId);
       liveJobStateRef.current = p.jobState;
@@ -791,11 +814,11 @@ function EbookPageClient() {
     } catch (err) {
       setStatusMsg({ type: "error", text: err instanceof Error ? err.message : "Load failed." });
     }
-  }, [projects]);
+  }, [loadFullEbookProject, projects]);
 
   const handleDeleteProject = useCallback(async (id: string) => {
     await deleteEbookProject(id);
-    setProjects(await listEbookProjects());
+    setProjects(await listEbookProjectSummaries());
     if (currentProjectId === id) setCurrentProjectId("");
     try {
       const response = await fetch("/api/projects", {
@@ -818,12 +841,13 @@ function EbookPageClient() {
   // ── Unpublish handler ─────────────────────────────────────────────────────
 
   const handleUnpublish = useCallback(async (project: EbookProject): Promise<boolean> => {
-    if (!project.publishedSlug) return false;
+    const fullProject = await loadFullEbookProject(project.id);
+    if (!fullProject?.publishedSlug) return false;
     try {
       const res = await fetch("/api/ebook/publish", {
         method:  "DELETE",
         headers: { "Content-Type": "application/json" },
-        body:    JSON.stringify({ slug: project.publishedSlug }),
+        body:    JSON.stringify({ slug: fullProject.publishedSlug }),
       });
       if (!res.ok) {
         const err = await res.json() as { error?: string };
@@ -831,10 +855,10 @@ function EbookPageClient() {
         return false;
       }
       // Clear publishedSlug from local project record
-      const updated: EbookProject = { ...project, publishedSlug: undefined };
+      const updated: EbookProject = { ...fullProject, publishedSlug: undefined };
       await saveEbookProject(updated);
-      setProjects(await listEbookProjects());
-      setStatusMsg({ type: "success", text: `"${project.name}" removed from the library.` });
+      setProjects(await listEbookProjectSummaries());
+      setStatusMsg({ type: "success", text: `"${fullProject.name}" removed from the library.` });
       // Sync cleared slug to R2
       fetch("/api/projects", {
         method: "POST", headers: { "Content-Type": "application/json" },
@@ -854,7 +878,7 @@ function EbookPageClient() {
       setStatusMsg({ type: "error", text: err instanceof Error ? err.message : "Remove failed." });
       return false;
     }
-  }, []);
+  }, [loadFullEbookProject]);
 
   const handleImportProject = useCallback(async (project: EbookProject) => {
     const importedProject = {
@@ -864,7 +888,7 @@ function EbookPageClient() {
         : UNFILED_FOLDER_ID,
     };
     await saveEbookProject(importedProject);
-    setProjects(await listEbookProjects());
+    setProjects(await listEbookProjectSummaries());
     setCurrentProjectId(importedProject.id);
     localStorage.setItem(JOB_STATE_KEY, JSON.stringify(importedProject.jobState));
     localStorage.setItem(JOB_STORAGE_KEY, importedProject.jobState.jobId);
@@ -902,15 +926,20 @@ function EbookPageClient() {
   // ── Publish handler ───────────────────────────────────────────────────────
 
   const handlePublish = useCallback(async (project: EbookProject): Promise<string | null> => {
-    const job = project.jobState;
+    const fullProject = await loadFullEbookProject(project.id);
+    if (!fullProject) {
+      setStatusMsg({ type: "error", text: "Book could not be loaded for publishing." });
+      return null;
+    }
+    const job = fullProject.jobState;
     if (!canBuildCompletedManifest(job)) {
       setStatusMsg({ type: "error", text: "Book must be complete before publishing." });
       return null;
     }
     const manifest: EbookManifest = buildManifestFromCompletedJob(job, {
-      fallbackTitle: project.bookTitle || project.name,
-      coverImageUrl: project.coverImageUrl ?? null,
-      authorImageUrl: project.authorImageUrl ?? null,
+      fallbackTitle: fullProject.bookTitle || fullProject.name,
+      coverImageUrl: fullProject.coverImageUrl ?? null,
+      authorImageUrl: fullProject.authorImageUrl ?? null,
       narrationUrls: readNarrationUrls(job.jobId),
     });
     try {
@@ -925,23 +954,23 @@ function EbookPageClient() {
         return null;
       }
       const { slug } = await res.json() as { slug: string };
-      const updated: EbookProject = { ...project, publishedSlug: slug };
+      const updated: EbookProject = { ...fullProject, publishedSlug: slug };
       await saveEbookProject(updated);
-      setProjects(await listEbookProjects());
-      setStatusMsg({ type: "success", text: `"${project.name}" published to /library/${slug}` });
+      setProjects(await listEbookProjectSummaries());
+      setStatusMsg({ type: "success", text: `"${fullProject.name}" published to /library/${slug}` });
       return slug;
     } catch (err) {
       setStatusMsg({ type: "error", text: err instanceof Error ? err.message : "Publish failed." });
       return null;
     }
-  }, [readNarrationUrls]);
+  }, [loadFullEbookProject, readNarrationUrls]);
 
   const handleUpdateImages = useCallback(async (
     id: string,
     coverImageUrl?: string,
     authorImageUrl?: string,
   ) => {
-    const p = projects.find((proj) => proj.id === id);
+    const p = await loadFullEbookProject(id);
     if (!p) return;
     const updated: EbookProject = {
       ...p,
@@ -949,7 +978,7 @@ function EbookPageClient() {
       ...(authorImageUrl !== undefined ? { authorImageUrl } : {}),
     };
     await saveEbookProject(updated);
-    setProjects(await listEbookProjects());
+    setProjects(await listEbookProjectSummaries());
     // Sync to R2
     fetch("/api/projects", {
       method: "POST", headers: { "Content-Type": "application/json" },
@@ -971,7 +1000,7 @@ function EbookPageClient() {
     if (updated.publishedSlug) {
       handlePublish(updated).catch(() => {});
     }
-  }, [projects, handlePublish]);
+  }, [handlePublish, loadFullEbookProject]);
 
   // ── Manifest handlers ─────────────────────────────────────────────────────
 
@@ -1292,6 +1321,7 @@ function EbookPageClient() {
                   canSave
                   onSave={handleSaveProject}
                   onLoad={handleLoadProject}
+                  onLoadFull={loadFullEbookProject}
                   onDelete={handleDeleteProject}
                   onImport={handleImportProject}
                   onMoveProject={handleMoveProject}

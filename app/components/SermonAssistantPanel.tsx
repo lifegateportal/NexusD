@@ -8,6 +8,7 @@ import {
   fetchProjectOrganizationFromCloud,
   flattenProjectFolders,
   loadProjectOrganization,
+  loadLatestProjectOrganization,
   makeProjectFolder,
   normalizeProjectFolderId,
   saveProjectOrganization,
@@ -2394,7 +2395,7 @@ export function SermonAssistantPanel() {
 
   const handleCreateFolder = useCallback(async (name: string, parentId: string | null) => {
     try {
-      const organization = await loadProjectOrganization(SERMON_ORGANIZATION_SCOPE);
+      const organization = await loadLatestProjectOrganization(SERMON_ORGANIZATION_SCOPE);
       if (organization.folders.some((folder) => (
         folder.parentId === parentId && folder.name.toLowerCase() === name.toLowerCase()
       ))) {
@@ -2423,7 +2424,7 @@ export function SermonAssistantPanel() {
   const handleRenameFolder = useCallback(async (id: string, name: string) => {
     if (id === UNFILED_FOLDER_ID) return;
     try {
-      const organization = await loadProjectOrganization(SERMON_ORGANIZATION_SCOPE);
+      const organization = await loadLatestProjectOrganization(SERMON_ORGANIZATION_SCOPE);
       const folder = organization.folders.find((item) => item.id === id);
       if (!folder) return;
       if (organization.folders.some((item) => (
@@ -2471,7 +2472,7 @@ export function SermonAssistantPanel() {
   const handleDeleteFolder = useCallback(async (id: string) => {
     if (id === UNFILED_FOLDER_ID || !window.confirm("Delete this folder? Sermons inside it will move to Unfiled.")) return;
     try {
-      const organization = await loadProjectOrganization(SERMON_ORGANIZATION_SCOPE);
+      const organization = await loadLatestProjectOrganization(SERMON_ORGANIZATION_SCOPE);
       const folder = organization.folders.find((item) => item.id === id);
       if (!folder) return;
       const now = new Date().toISOString();
