@@ -12,6 +12,7 @@ import {
 } from "@/lib/project-organization-store";
 
 export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
 
 const ORGANIZATION_KEY = "project-organization/folders.json";
 const PutOrganizationSchema = z.object({
@@ -31,23 +32,39 @@ function makeS3() {
   };
 }
 
+function noSuchObject(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  const status = (error as Error & { $metadata?: { httpStatusCode?: number } }).$metadata?.httpStatusCode;
+  return error.name === "NoSuchKey" || error.name === "NotFound" || status === 404;
+}
+
+function jsonNoStore(body: unknown, init?: ResponseInit) {
+  return NextResponse.json(body, {
+    ...init,
+    headers: {
+      "Cache-Control": "no-store, max-age=0",
+      ...(init?.headers ?? {}),
+    },
+  });
+}
+
 export async function GET() {
   const r2 = makeS3();
-  if (!r2) return NextResponse.json({ organization: null });
+  if (!r2) return jsonNoStore({ organization: null });
 
   try {
     const result = await r2.s3.send(new GetObjectCommand({ Bucket: r2.bucket, Key: ORGANIZATION_KEY }));
     const raw = await result.Body?.transformToString();
-    if (!raw) return NextResponse.json({ organization: null });
+    if (!raw) return jsonNoStore({ organization: null });
     const parsed = ProjectOrganizationSchema.safeParse(JSON.parse(raw) as unknown);
     return parsed.success
-      ? NextResponse.json({ organization: createProjectOrganization(parsed.data.folders, parsed.data.updatedAt) })
-      : NextResponse.json({ organization: null });
+      ? jsonNoStore({ organization: createProjectOrganization(parsed.data.folders, parsed.data.updatedAt) })
+      : jsonNoStore({ organization: null });
   } catch (error) {
-    if (error instanceof Error && error.name === "NoSuchKey") {
-      return NextResponse.json({ organization: null });
+    if (noSuchObject(error)) {
+      return jsonNoStore({ organization: null });
     }
-    return NextResponse.json(
+    return jsonNoStore(
       { error: error instanceof Error ? error.message : "Failed to load project folders" },
       { status: 500 },
     );
@@ -56,13 +73,18 @@ export async function GET() {
 
 export async function PUT(req: NextRequest) {
   const r2 = makeS3();
-  if (!r2) return NextResponse.json({ ok: true });
+  if (!r2) {
+    return jsonNoStore(
+      { error: "Cloud folder storage is not configured." },
+      { status: 503 },
+    );
+  }
 
   let input: z.infer<typeof PutOrganizationSchema>;
   try {
     input = PutOrganizationSchema.parse(await req.json() as unknown);
   } catch (error) {
-    return NextResponse.json(
+    return jsonNoStore(
       { error: error instanceof Error ? error.message : "Invalid organization payload" },
       { status: 400 },
     );
@@ -81,9 +103,9 @@ export async function PUT(req: NextRequest) {
       ContentType: "application/json",
       CacheControl: "private, no-cache",
     }));
-    return NextResponse.json({ ok: true, organization });
+    return jsonNoStore({ ok: true, organization });
   } catch (error) {
-    return NextResponse.json(
+    return jsonNoStore(
       { error: error instanceof Error ? error.message : "Failed to save project folders" },
       { status: 500 },
     );

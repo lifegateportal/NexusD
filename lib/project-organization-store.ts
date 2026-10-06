@@ -98,7 +98,10 @@ export async function saveProjectOrganization(folders: ProjectFolder[]): Promise
 }
 
 export async function fetchProjectOrganizationFromCloud(): Promise<ProjectOrganization | null> {
-  const response = await fetch("/api/project-folders");
+  const response = await fetch("/api/project-folders", {
+    cache: "no-store",
+    credentials: "same-origin",
+  });
   if (!response.ok) throw new Error("Could not load project folders from cloud.");
   const payload = await response.json() as { organization?: unknown | null };
   if (payload.organization === null || payload.organization === undefined) return null;
@@ -110,10 +113,23 @@ export async function fetchProjectOrganizationFromCloud(): Promise<ProjectOrgani
 export async function syncProjectOrganizationToCloud(organization: ProjectOrganization): Promise<void> {
   const response = await fetch("/api/project-folders", {
     method: "PUT",
+    cache: "no-store",
+    credentials: "same-origin",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ organization: ProjectOrganizationSchema.parse(organization) }),
   });
-  if (!response.ok) throw new Error("Could not save project folders to cloud.");
+  if (!response.ok) {
+    const payload = await response.json().catch(() => null) as { error?: string } | null;
+    throw new Error(payload?.error ?? "Could not save project folders to cloud.");
+  }
+
+  const savedPayload = await response.json().catch(() => null) as { organization?: unknown } | null;
+  const saved = savedPayload?.organization
+    ? ProjectOrganizationSchema.safeParse(savedPayload.organization)
+    : null;
+  if (!saved?.success || saved.data.updatedAt !== organization.updatedAt) {
+    throw new Error("Cloud folder storage did not confirm the saved organization.");
+  }
 }
 
 export function makeProjectFolder(name: string, parentId: string | null, sortOrder: number): ProjectFolder {

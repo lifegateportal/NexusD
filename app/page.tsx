@@ -102,11 +102,7 @@ export default function HomePage() {
             await storeProjectOrganization(remoteOrganization);
             organization = remoteOrganization;
           } else if (!remoteOrganization || new Date(organization.updatedAt).getTime() > new Date(remoteOrganization.updatedAt).getTime()) {
-            await fetch("/api/project-folders", {
-              method: "PUT",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ organization }),
-            }).catch(() => {});
+            await syncProjectOrganizationToCloud(organization).catch(() => {});
           }
         } catch {
           // Organization sync is best-effort; local folders remain usable offline.
