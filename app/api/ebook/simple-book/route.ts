@@ -1,10 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { generateObject, generateText } from "ai";
 import { z } from "zod";
-import { DIRECT_CHAPTER_WRITING_RULES, EM_DASH_MINIMIZATION_RULES, READER_NORMALIZATION_RULES, SOURCE_LOCK_RULES } from "@/lib/editorial-style-bible";
-import { normalizeScriptureBlockquotes, SCRIPTURE_FORMATTING_RULES } from "@/lib/scripture-formatter";
+import { EM_DASH_MINIMIZATION_RULES } from "@/lib/editorial-style-bible";
+import { NEXUSLM_SCRIPTURE_FORMATTING_RULES } from "@/lib/scripture-formatter";
 import { getEbookModel, getEbookTemperature } from "@/lib/ebook-model-selector";
-import { completeScriptureBlockquotes } from "@/lib/scripture-verse";
+import { finalizeNexusLMScripture } from "@/lib/scripture-verse";
 import { NEXUSLM_WRITING_STYLES } from "@/lib/nexuslm-writing-styles";
 import { sanitizeNexusLMText } from "@/lib/nexuslm-response";
 
@@ -321,18 +321,20 @@ function normalizeSlotChapter(object: z.infer<typeof SlotChapterSchema>, chapter
 
 type GeneratedChapter = z.infer<typeof SlotChapterSchema> | z.infer<typeof ChapterSchema>;
 
-async function normalizeGeneratedText(value: string): Promise<string> {
-  return completeScriptureBlockquotes(
-    normalizeScriptureBlockquotes(sanitizeNexusLMText(value.trim()))
-  );
+async function normalizeGeneratedText(value: string, instruction: string): Promise<string> {
+  return finalizeNexusLMScripture(sanitizeNexusLMText(value.trim()), instruction);
 }
 
-async function normalizeGeneratedChapter(object: GeneratedChapter, chapterNumber: number): Promise<z.infer<typeof ChapterSchema>> {
+async function normalizeGeneratedChapter(
+  object: GeneratedChapter,
+  chapterNumber: number,
+  instruction: string,
+): Promise<z.infer<typeof ChapterSchema>> {
   const sections = await Promise.all((object.sections ?? []).map(async (section, sectionIndex) => ({
     ...section,
     sectionNumber: section.sectionNumber || sectionIndex + 1,
     heading: sanitizeNexusLMText(section.heading.trim()) || `Section ${sectionIndex + 1}`,
-    body: await normalizeGeneratedText(section.body),
+    body: await normalizeGeneratedText(section.body, instruction),
     keyClaims: section.keyClaims.map((claim) => sanitizeNexusLMText(claim)).filter(Boolean),
   })));
 
@@ -345,7 +347,7 @@ async function normalizeGeneratedChapter(object: GeneratedChapter, chapterNumber
 
 async function normalizeSimpleBook(object: z.infer<typeof SimpleBookSchema>, input: z.infer<typeof RequestSchema>) {
   const chapters = await Promise.all((object.chapters ?? []).map((chapter, chapterIndex) =>
-    normalizeGeneratedChapter(chapter, chapterIndex + 1)
+    normalizeGeneratedChapter(chapter, chapterIndex + 1, input.authorInstructions)
   ));
 
   return {
@@ -390,42 +392,23 @@ export async function POST(req: NextRequest) {
 
   const usingSlots = input.oneChapterPerSlot && slotBlocks.length > 0;
   const transcriptForPrompt = usingSlots ? "" : input.rawTranscript;
-  const maxTokens = usingSlots ? 22000 : 24000;
+  const maxTokens = 24000;
 
-  const system = `You are a bestselling nonfiction ghostwriter commissioned to transform sermon transcripts into a premium, publication-ready book manuscript.
-
-You must produce a clean, publication-ready book draft from sermon transcript material using one deterministic philosophy:
-- Simple and direct structure like Sermon Assistant
-- Strong chapter titles and section headings
-- Avoid redundant concept re-development across sections and chapters
-- Strict transcript grounding
-Write the strongest coherent, publication-ready nonfiction book supported by the source. Use your judgment about chapter architecture, section count, section length, titles, pacing, transitions, callbacks, and closure. Favor specific, vivid, reader-facing prose over a mechanical outline.
+  const system = `Return only one valid JSON object matching the active schema. Do not wrap it in markdown fences and do not include reasoning outside the JSON object.
+You are NexusLM, a professional book ghostwriter.
+Presentation form: ${NEXUSLM_WRITING_STYLES["book-prose"].label}. ${NEXUSLM_WRITING_STYLES["book-prose"].instruction}
+The source material constrains factual, theological, biographical, and scriptural truth, but it does not constrain your creative judgment about the chapter's title, introduction, section architecture, body prose, transitions, emphasis, or ending. Do not treat an existing outline, manuscript chapter, chapter premise, key point, or prior wording as mandatory. Choose the strongest material and shape a coherent chapter freely.
+You may create original framing, synthesis, transitions, imagery, rhetorical movement, and reader-facing introduction when these clarify and develop ideas supported by the sources. Do not invent concrete facts, quotations, scripture references, testimonies, doctrine, or claims that the sources do not support.
+Write polished reader-facing book prose and remove live-audience language. Trust your editorial judgment about what the chapter needs instead of mechanically preserving transcript order or filling a predetermined premise.
+CHAPTER OPENING PLACEMENT: Do not write a separate premise, overview, thesis summary, or chapter-preview block before the body. The actual chapter introduction belongs in the opening paragraphs of Section 1, written as finished reader-facing prose that enters the chapter's material directly. Section 1 must begin with the chapter body, not planning language or a summary of what the chapter will discuss.
+SERIES-SERMON TO BOOK TRANSFORMATION: Sermon transcripts may recap earlier messages. Treat that recap as source context, not as mandatory chapter-opening material. Do not open with "last week," "as we saw," "continuing this series," or a replay of an earlier chapter. If the recap helps orient the reader, compress it into the shortest useful bridge and pivot quickly to this chapter's new movement. Write for a reader who may not have attended the sermon, and do not make the book repeat live-series catch-up.
 
 NON-NEGOTIABLE BOOK RULE:
 4) Subtitle must be useful and reader-facing, never empty.
 
-${DIRECT_CHAPTER_WRITING_RULES}
-
-${SOURCE_LOCK_RULES}
-
-${READER_NORMALIZATION_RULES}
-
 ${EM_DASH_MINIMIZATION_RULES}
-
-NARRATIVE VOICE HARD BAN:
-- Never describe the source from outside the book with phrases such as "the speaker said," "the author said," "the preacher said," "the message says," or "in this sermon/message."
-- Write the teaching directly as reader-facing book prose. Preserve first-person language only when the transcript contains the author's own testimony or experience.
-- Before returning JSON, scan every chapter title, heading, premise, and section body for these narrator phrases and rewrite them.
-
-NEXUSLM BOOK-PROSE STANDARD:
-- ${NEXUSLM_WRITING_STYLES["book-prose"].instruction}
-- Use creative judgment for original framing, synthesis, transitions, imagery, rhetorical movement, emphasis, pacing, and closure when those choices clarify ideas supported by the transcript.
-- Do not mechanically preserve transcript order, copy transcript blocks, or fill a predetermined premise when a stronger source-grounded structure serves the reader.
-- Do not invent concrete facts, quotations, Scripture references, testimonies, doctrine, or applications that the transcript does not support.
-- Write for a reader who was not present at the recording. Convert live delivery into finished book prose without flattening the author's distinctive teaching.
-
-PROSE PRINCIPLES:
-- Do not mechanically remove words from finished prose.`;
+${NEXUSLM_SCRIPTURE_FORMATTING_RULES}
+Return a complete source-grounded book object. Its sections must contain readable prose in the body field, not planning notes, generic advice, transcript commentary, or a thin summary. Do not expose source IDs, slot labels, retrieval markers, or internal routing labels in any field.`;
 
   const chapterRoutingBlock = usingSlots
     ? `CHAPTER-SLOT ASSIGNMENT (HARD RULE):
@@ -443,7 +426,7 @@ PROSE PRINCIPLES:
     ).join("\n\n" + "=".repeat(64) + "\n\n")
     : `RAW TRANSCRIPT:\n${transcriptForPrompt}`;
 
-  const prompt = `Create a simple, sermon-assistant-style book in one pass.
+  const prompt = `Create a complete, source-grounded book draft with the same editorial freedom and finished-prose quality as a NexusLM chapter draft.
 
 DESIRED CHAPTER COUNT: ${input.desiredChapters}
 TARGET AUDIENCE: ${input.targetAudience || "(not provided)"}
@@ -455,10 +438,8 @@ AUTHOR CONFIGURATION APPLICATION:
 - Use TARGET AUDIENCE and AUTHOR INSTRUCTIONS as high-priority guidance for presentation choices.
 - Honor these directives in chapter flow, section voice, framing, and rhetorical delivery.
 - Do not invent new ideas, examples, facts, or theology to satisfy directives.
+- Treat transcript order, source blocks, and prior claims as source guidance rather than a mandatory outline when a stronger source-grounded structure serves the reader.
 ${chapterRoutingBlock}
-
-SCRIPTURE FORMATTING:
-${SCRIPTURE_FORMATTING_RULES}
 
 SOURCE MATERIAL:
 ${sourceBlock}`;
@@ -494,6 +475,7 @@ HARD ASSIGNMENT:
 - Produce exactly ONE chapter from this slot.
 - Use only this slot's transcript material.
 - Output ONLY a chapter object (not a full book object).
+- These source and output boundaries are the only hard constraints. Within them, choose the strongest title, section architecture, body prose, transitions, emphasis, pacing, and ending freely.
 
 CHAPTER CONTEXT:
 CHAPTER NUMBER: ${chapterNumber}
@@ -508,23 +490,23 @@ AUTHOR CONFIGURATION APPLICATION (HARD RULE):
 - Never invent source content to satisfy them; keep strict transcript grounding.
 
 TEACHING BLOCK COVERAGE GUIDANCE:
-- Use the significant teaching blocks as source guidance and prioritize material that serves the chapter's clearest argument.
-- Each section must declare coveredBlockIds.
-- Combine related blocks naturally; do not force minor or repetitive material into the chapter.
+- Use the significant teaching blocks as source guidance for coverage, not as a predetermined outline or checklist.
+- Each section must declare coveredBlockIds for source mapping.
+- Combine, sequence, and synthesize related blocks naturally. Do not force minor or repetitive material into the chapter.
 
 SIGNIFICANT TEACHING BLOCKS:
 ${teachingBlockManifest}
 
 ${storyIntegrationBlock}
 
-SCRIPTURE FORMATTING:
-${SCRIPTURE_FORMATTING_RULES}
-
 SECTION FLOW:
-- Begin section 1 directly with a concrete, reader-facing entrance drawn from the source. Do not add a premise summary, orientation paragraph, or "this chapter" introduction.
+- Begin section 1 directly with a concrete, reader-facing entrance drawn from the source. Do not add a separate premise summary, orientation paragraph, or "this chapter" introduction.
 - Let later sections advance from new material; do not repeatedly re-introduce the chapter premise or opening hook.
-- Let each section end according to its own material. Avoid manufactured bridges, previews, and recap paragraphs.
+- Use transitions, emphasis, and rhetorical movement when they clarify the chapter's argument. Avoid generic previews and recap padding.
 - Give the final section a satisfying closure without mechanically re-listing prior points.
+
+SCRIPTURE PRESENTATION:
+${NEXUSLM_SCRIPTURE_FORMATTING_RULES}
 
 SOURCE SLOT:
 SOURCE ID: ${slot.sourceId}
@@ -600,7 +582,7 @@ ${slot.text}${priorClaimsBlock}`;
           );
         }
 
-        const normalizedChapter = await normalizeGeneratedChapter(chapterObject, chapterNumber);
+        const normalizedChapter = await normalizeGeneratedChapter(chapterObject, chapterNumber, input.authorInstructions);
         if (normalizedChapter.sections.length === 0) {
           return NextResponse.json(
             { error: `Simple book generation failed: slot ${chapterNumber} produced no section content` },
