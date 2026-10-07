@@ -1580,38 +1580,41 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
                 void addFiles(event.dataTransfer.files);
               }}
             >
-              <div className="border-b border-slate-800 px-3 pb-3 pt-3">
-                <div className="flex min-w-0 flex-wrap items-center gap-2">
-                  <span className="shrink-0 px-1 text-[10px] font-bold uppercase tracking-widest text-slate-500">Context</span>
-                  <div className="flex min-w-0 max-w-full overflow-x-auto rounded-xl border border-slate-800 bg-slate-950/70 p-1" role="group" aria-label="Conversation context">
-                    {([
-                      ["auto", "Auto"],
-                      ["general", "General"],
-                      ["book", "Book"],
-                    ] as const).map(([value, label]) => (
-                      <button
-                        key={value}
-                        type="button"
-                        onClick={() => setContextMode(value)}
-                        className={`min-h-10 shrink-0 rounded-lg px-3 text-xs font-semibold ${contextMode === value ? "bg-cyan-400/15 text-cyan-200" : "text-slate-500"}`}
-                      >
-                        {label}
-                      </button>
-                    ))}
+              <div className="border-b border-slate-800 px-2 pb-2 pt-2 sm:px-3 sm:pb-3 sm:pt-3">
+                <div className="flex min-w-0 items-center gap-2">
+                  <div className="flex min-w-0 flex-1 items-center gap-2 overflow-x-auto">
+                    <span className="hidden shrink-0 px-1 text-[10px] font-bold uppercase tracking-widest text-slate-500 lg:block">Context</span>
+                    <div className="flex shrink-0 rounded-xl border border-slate-800 bg-slate-950/70 p-1" role="group" aria-label="Conversation context">
+                      {([
+                        ["auto", "Auto"],
+                        ["general", "General"],
+                        ["book", "Book"],
+                      ] as const).map(([value, label]) => (
+                        <button
+                          key={value}
+                          type="button"
+                          onClick={() => setContextMode(value)}
+                          className={`min-h-12 shrink-0 rounded-lg px-2.5 text-xs font-semibold sm:px-3 ${contextMode === value ? "bg-cyan-400/15 text-cyan-200" : "text-slate-500"}`}
+                        >
+                          {label}
+                        </button>
+                      ))}
+                    </div>
+                    <label className="sr-only" htmlFor="nexuslm-agent-composer">Nexus agent</label>
+                    <select
+                      id="nexuslm-agent-composer"
+                      value={agent}
+                      onChange={(event) => setAgent(event.target.value as NexusLMAgent)}
+                      aria-label="Nexus agent"
+                      className="min-h-12 w-[9rem] shrink-0 rounded-xl border border-slate-800 bg-slate-950/70 px-3 text-base text-slate-200 sm:w-[10rem]"
+                    >
+                      {Object.entries(NEXUSLM_AGENTS).map(([value, item]) => <option key={value} value={value}>{item.label}</option>)}
+                    </select>
                   </div>
-                  <label className="sr-only" htmlFor="nexuslm-agent-composer">Nexus agent</label>
-                  <select
-                    id="nexuslm-agent-composer"
-                    value={agent}
-                    onChange={(event) => setAgent(event.target.value as NexusLMAgent)}
-                    aria-label="Nexus agent"
-                    className="min-h-12 min-w-[10rem] flex-1 rounded-xl border border-slate-800 bg-slate-950/70 px-3 text-base text-slate-200 sm:flex-none"
-                  >
-                    {Object.entries(NEXUSLM_AGENTS).map(([value, item]) => <option key={value} value={value}>{item.label}</option>)}
-                  </select>
-                  <details className="relative min-w-0 flex-1 sm:flex-none">
-                    <summary className="flex min-h-12 cursor-pointer list-none items-center justify-center rounded-xl border border-slate-800 bg-slate-950/70 px-3 text-xs font-semibold text-slate-300">
-                      Customize
+                  <details className="relative shrink-0">
+                    <summary className="flex min-h-12 cursor-pointer list-none items-center justify-center whitespace-nowrap rounded-xl border border-slate-800 bg-slate-950/70 px-3 text-xs font-semibold text-slate-300">
+                      <span className="lg:hidden">More</span>
+                      <span className="hidden lg:inline">Customize</span>
                     </summary>
                     <div className="absolute bottom-full right-0 z-40 mb-2 w-[min(22rem,calc(100vw-2rem))] rounded-2xl border border-slate-700 bg-shell-950 p-4 shadow-2xl">
                       <div className="space-y-4">
@@ -1671,7 +1674,7 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
                     </div>
                   </details>
                 </div>
-                <p className="mt-2 truncate px-1 text-[11px] text-slate-500">
+                <p className="hidden truncate px-1 text-[11px] text-slate-500 lg:mt-2 lg:block">
                   {contextMode === "general"
                     ? "General conversation · book sources ignored"
                     : contextMode === "book" && hasBookContext
@@ -1731,34 +1734,32 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
               {attachmentError && (
                 <p className="px-3 pt-2 text-xs text-amber-300" role="alert">{attachmentError}</p>
               )}
-              <textarea
-                ref={inputRef}
-                value={input}
-                onChange={(event) => setInput(event.target.value)}
-                onPaste={(event) => {
-                  if (event.clipboardData.files.length > 0) {
-                    event.preventDefault();
-                    void addFiles(event.clipboardData.files);
-                  }
-                }}
-                onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void send(); } }}
-                placeholder={useBookContext ? "Ask NexusLM about your book, or switch to General..." : "Ask NexusLM anything..."}
-                disabled={loading}
-                rows={2}
-                className="block w-full resize-none rounded-t-2xl border-0 bg-transparent px-4 py-3 text-base leading-6 text-slate-100 outline-none placeholder:text-slate-600 focus:ring-0"
-              />
-              <div className="flex items-center justify-between gap-3 px-3 pb-2">
-                <div className="flex min-w-0 items-center gap-2">
-                  <button type="button" onClick={() => fileInputRef.current?.click()} disabled={loading} className="min-h-12 min-w-12 rounded-xl border border-slate-700 px-3 text-xs font-semibold text-slate-300 disabled:opacity-40" aria-label="Attach a document">
-                    +
-                  </button>
-                  <p className="truncate text-[11px] text-slate-500">Enter to send · Shift+Enter for a new line · add text, HTML, or PDF</p>
-                </div>
+              <div className="flex flex-wrap items-end gap-2 px-2 pb-2 lg:gap-3 lg:px-3">
+                <textarea
+                  ref={inputRef}
+                  value={input}
+                  onChange={(event) => setInput(event.target.value)}
+                  onPaste={(event) => {
+                    if (event.clipboardData.files.length > 0) {
+                      event.preventDefault();
+                      void addFiles(event.clipboardData.files);
+                    }
+                  }}
+                  onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void send(); } }}
+                  placeholder={useBookContext ? "Ask NexusLM about your book, or switch to General..." : "Ask NexusLM anything..."}
+                  disabled={loading}
+                  rows={1}
+                  className="order-2 min-h-12 min-w-0 flex-1 resize-none rounded-xl border-0 bg-transparent px-2 py-3 text-base leading-6 text-slate-100 outline-none placeholder:text-slate-600 focus:ring-0 lg:order-none lg:basis-full lg:rounded-t-2xl lg:px-4 lg:min-h-[4.5rem]"
+                />
+                <button type="button" onClick={() => fileInputRef.current?.click()} disabled={loading} className="order-1 min-h-12 min-w-12 shrink-0 rounded-xl border border-slate-700 px-3 text-xs font-semibold text-slate-300 disabled:opacity-40 lg:order-none" aria-label="Attach a document">
+                  +
+                </button>
+                <p className="order-4 hidden min-w-0 flex-1 truncate text-[11px] text-slate-500 lg:order-none lg:block">Enter to send · Shift+Enter for a new line · add text, HTML, or PDF</p>
                 <button
                   type="button"
                   onClick={() => (loading ? stopGenerating() : void send())}
                   disabled={loading ? !canAbort : !input.trim()}
-                  className={`min-h-12 rounded-xl px-4 text-sm font-bold disabled:cursor-not-allowed disabled:opacity-40 ${loading && canAbort ? "border border-rose-400/40 bg-rose-500/10 text-rose-200" : "bg-cyan-400 text-slate-950"}`}
+                  className={`order-3 min-h-12 shrink-0 rounded-xl px-4 text-sm font-bold disabled:cursor-not-allowed disabled:opacity-40 lg:order-none ${loading && canAbort ? "border border-rose-400/40 bg-rose-500/10 text-rose-200" : "bg-cyan-400 text-slate-950"}`}
                 >
                   {loading ? (canAbort ? "Stop" : "Working...") : "Send"}
                 </button>
