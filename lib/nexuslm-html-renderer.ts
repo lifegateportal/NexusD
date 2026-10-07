@@ -1,0 +1,246 @@
+import chromium from "@sparticuz/chromium";
+import { chromium as playwrightChromium, type Page } from "playwright-core";
+import {
+  AlignmentType,
+  Document as DocxDocument,
+  ImageRun,
+  Packer,
+  Paragraph,
+} from "docx";
+
+const CSS_PX_PER_INCH = 96;
+const DEFAULT_PAGE_SIZE = { widthInches: 8.27, heightInches: 11.69 };
+const DEFAULT_VIEWPORT = {
+  width: Math.round(DEFAULT_PAGE_SIZE.widthInches * CSS_PX_PER_INCH),
+  height: Math.round(DEFAULT_PAGE_SIZE.heightInches * CSS_PX_PER_INCH),
+};
+const MAX_RENDERED_HEIGHT_PX = 120_000;
+const RENDER_TIMEOUT_MS = 30_000;
+
+type PageSize = {
+  widthInches: number;
+  heightInches: number;
+};
+
+type RenderedHtmlPages = {
+  pages: Buffer[];
+  pageSize: PageSize;
+};
+
+const KNOWN_PAGE_SIZES: Record<string, PageSize> = {
+  a4: { widthInches: 8.27, heightInches: 11.69 },
+  letter: { widthInches: 8.5, heightInches: 11 },
+  legal: { widthInches: 8.5, heightInches: 14 },
+};
+
+function parseLength(value: string): number | null {
+  const match = value.trim().match(/^([\d.]+)\s*(in|cm|mm|px|pt)$/i);
+  if (!match) return null;
+  const amount = Number.parseFloat(match[1]);
+  if (!Number.isFinite(amount) || amount <= 0) return null;
+  switch (match[2].toLowerCase()) {
+    case "in": return amount;
+    case "cm": return amount / 2.54;
+    case "mm": return amount / 25.4;
+    case "pt": return amount / 72;
+    case "px": return amount / CSS_PX_PER_INCH;
+    default: return null;
+  }
+}
+
+function pageSizeFromHtml(html: string): PageSize {
+  const pageRule = html.match(/@page\b[^{}]*\{([\s\S]*?)\}/i)?.[1] ?? "";
+  const sizeDeclaration = pageRule.match(/\bsize\s*:\s*([^;]+)/i)?.[1]?.trim();
+  if (!sizeDeclaration) return DEFAULT_PAGE_SIZE;
+
+  const normalized = sizeDeclaration.toLowerCase().replace(/\s+/g, " ");
+  const named = KNOWN_PAGE_SIZES[normalized];
+  if (named) return named;
+
+  const lengths = normalized.split(" ").map(parseLength).filter((value): value is number => value !== null);
+  if (lengths.length >= 2) {
+    return { widthInches: lengths[0], heightInches: lengths[1] };
+  }
+
+  return DEFAULT_PAGE_SIZE;
+}
+
+function renderSetupStyle(): string {
+  return `<style id="nexuslm-export-renderer">
+    *, *::before, *::after { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
+    ::-webkit-scrollbar { width: 0 !important; height: 0 !important; }
+  </style>`;
+}
+
+function injectRenderSetup(html: string): string {
+  const setup = renderSetupStyle();
+  if (/<\/head\s*>/i.test(html)) return html.replace(/<\/head\s*>/i, `${setup}</head>`);
+  return `${setup}${html}`;
+}
+
+async function waitForRenderedAssets(page: Page): Promise<void> {
+  await page.evaluate(async () => {
+    await document.fonts?.ready;
+    const images = Array.from(document.images);
+    await Promise.all(images.map((image) => image.complete
+      ? Promise.resolve()
+      : new Promise<void>((resolve) => {
+          image.addEventListener("load", () => resolve(), { once: true });
+          image.addEventListener("error", () => resolve(), { once: true });
+        })));
+  });
+}
+
+async function getRenderedContentHeight(page: Page): Promise<number> {
+  const contentHeight = await page.evaluate(() => Math.max(
+    document.body?.scrollHeight ?? 0,
+    document.documentElement.scrollHeight,
+  ));
+  if (contentHeight <= 0) throw new Error("The HTML design has no visible content.");
+  if (contentHeight > MAX_RENDERED_HEIGHT_PX) {
+    throw new Error("The HTML design is too tall to render safely. Split it into shorter pages.");
+  }
+  return contentHeight;
+}
+
+async function renderHtmlPages(html: string): Promise<RenderedHtmlPages> {
+  if (!html.trim()) throw new Error("The HTML design is empty.");
+  const pageSize = pageSizeFromHtml(html);
+  const viewport = {
+    width: Math.round(pageSize.widthInches * CSS_PX_PER_INCH),
+    height: Math.round(pageSize.heightInches * CSS_PX_PER_INCH),
+  };
+  const executablePath = await chromium.executablePath();
+  const browser = await playwrightChromium.launch({
+    args: [...chromium.args, "--no-sandbox", "--disable-setuid-sandbox"],
+    executablePath,
+    headless: true,
+  });
+
+  try {
+    const context = await browser.newContext({
+      viewport,
+      deviceScaleFactor: 1,
+      javaScriptEnabled: false,
+      colorScheme: "light",
+    });
+    const page = await context.newPage();
+    await page.route("**/*", async (route) => {
+      const url = route.request().url();
+      if (url.startsWith("data:")
+        || url.startsWith("blob:")
+        || url.startsWith("about:blank")) {
+        await route.continue();
+        return;
+      }
+      await route.abort();
+    });
+    await page.setContent(injectRenderSetup(html), {
+      timeout: RENDER_TIMEOUT_MS,
+      waitUntil: "load",
+    });
+    await waitForRenderedAssets(page);
+    const contentHeight = await getRenderedContentHeight(page);
+
+    const pageCount = Math.max(1, Math.ceil(contentHeight / viewport.height));
+    const pages: Buffer[] = [];
+    for (let index = 0; index < pageCount; index += 1) {
+      await page.evaluate((offset) => window.scrollTo(0, offset), index * viewport.height);
+      pages.push(await page.screenshot({ type: "png" }));
+    }
+    await context.close();
+    return { pages, pageSize };
+  } finally {
+    await browser.close();
+  }
+}
+
+async function renderHtmlPdf(html: string, pageSize: PageSize): Promise<Buffer> {
+  const executablePath = await chromium.executablePath();
+  const browser = await playwrightChromium.launch({
+    args: [...chromium.args, "--no-sandbox", "--disable-setuid-sandbox"],
+    executablePath,
+    headless: true,
+  });
+  try {
+    const context = await browser.newContext({
+      viewport: {
+        width: Math.round(pageSize.widthInches * CSS_PX_PER_INCH),
+        height: Math.round(pageSize.heightInches * CSS_PX_PER_INCH),
+      },
+      deviceScaleFactor: 1,
+      javaScriptEnabled: false,
+      colorScheme: "light",
+    });
+    const page = await context.newPage();
+    await page.route("**/*", async (route) => {
+      const url = route.request().url();
+      if (url.startsWith("data:") || url.startsWith("blob:") || url.startsWith("about:blank")) {
+        await route.continue();
+        return;
+      }
+      await route.abort();
+    });
+    await page.setContent(injectRenderSetup(html), {
+      timeout: RENDER_TIMEOUT_MS,
+      waitUntil: "load",
+    });
+    await waitForRenderedAssets(page);
+    await getRenderedContentHeight(page);
+    await page.emulateMedia({ media: "screen" });
+    const pdf = await page.pdf({
+      format: "A4",
+      printBackground: true,
+      preferCSSPageSize: true,
+      displayHeaderFooter: false,
+      margin: { top: "0", right: "0", bottom: "0", left: "0" },
+    });
+    await context.close();
+    return pdf;
+  } finally {
+    await browser.close();
+  }
+}
+
+export async function renderHtmlToPdfBuffer(html: string): Promise<Buffer> {
+  const pageSize = pageSizeFromHtml(html);
+  return renderHtmlPdf(html, pageSize);
+}
+
+export async function renderHtmlToVisualDocxBuffer(html: string): Promise<Buffer> {
+  const rendered = await renderHtmlPages(html);
+  const widthPx = Math.round(rendered.pageSize.widthInches * CSS_PX_PER_INCH);
+  const heightPx = Math.round(rendered.pageSize.heightInches * CSS_PX_PER_INCH);
+  const widthTwips = Math.round(rendered.pageSize.widthInches * 1440);
+  const heightTwips = Math.round(rendered.pageSize.heightInches * 1440);
+  const children = rendered.pages.map((page, index) => new Paragraph({
+    pageBreakBefore: index > 0,
+    alignment: AlignmentType.CENTER,
+    spacing: { before: 0, after: 0, line: 240 },
+    children: [
+      new ImageRun({
+        type: "png",
+        data: page,
+        transformation: { width: widthPx, height: heightPx },
+        altText: {
+          title: "Rendered HTML design",
+          description: "A page rendered from the original NexusLM HTML design.",
+          name: `nexuslm-html-page-${index + 1}`,
+        },
+      }),
+    ],
+  }));
+
+  const document = new DocxDocument({
+    sections: [{
+      properties: {
+        page: {
+          size: { width: widthTwips, height: heightTwips },
+          margin: { top: 0, right: 0, bottom: 0, left: 0, header: 0, footer: 0 },
+        },
+      },
+      children,
+    }],
+  });
+  return Packer.toBuffer(document);
+}

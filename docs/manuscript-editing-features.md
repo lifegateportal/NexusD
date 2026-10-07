@@ -37,7 +37,7 @@ NexusLM is not limited to book questions. Use the same composer for:
 - **Long-form chapter** responses for complete chapters, essays, reports, and other substantial work. Requests that clearly ask for a chapter or manuscript automatically use the larger response budget unless a shorter response is explicitly selected.
 - A browser-persisted **Manuscript workspace** that can capture any assistant response as a chapter, preserve its raw Markdown/rich content, reorder or edit chapters, and assemble them into a direct-download PDF without opening Book Studio.
 - Direct PDF generation through `/api/nexuslm/export`, with strict validation for title metadata, ordered chapters, templates, and payload size. A Generate PDF request can use the latest assistant response when no chapter has been saved yet.
-- Generated HTML remains a first-class artifact: use **Preview** on an HTML code block to render it directly in the app. From the preview, download the original HTML, a DOCX book proof, or a PDF book proof. **Print / Save PDF (exact)** uses the browser's print engine to preserve the assistant's HTML/CSS design; the DOCX/PDF downloads convert the design into an editable/readable book document.
+- Generated HTML remains a first-class artifact: use **Preview** on an HTML code block to render it directly in the app. From the preview, download the original HTML, an exact browser-rendered PDF, or a **Visual DOCX**. The PDF preserves the original HTML/CSS layout, colors, typography, spacing, borders, backgrounds, and embedded data-URI images. Visual DOCX places those rendered pages into Word as page-sized images so the appearance is preserved; it is not ordinary editable Word text.
 - The chat composer keeps **Context** and the **Nexus agent** in the active chat box, with persona, writing form, response length, mode, temperature, and response exports grouped under **Customize**. The side workspace is reserved for saved chats, previews, manuscript assembly, transcripts, and consulted sources.
 
 Use the **Context** control to choose:
@@ -57,9 +57,9 @@ General conversation accepts the user's instruction directly without requiring a
 3. Use **Add as chapter** on an assistant response, or use **Add latest response** in the Manuscript workspace.
 4. Edit the title, author, chapter order, and raw chapter content in the workspace. The stored chapter content is not sanitized into a fixed prose template.
 5. Choose **Generate PDF** for a traditional book proof assembled from the chapters.
-6. If the response contains assistant-designed HTML/CSS, choose **Preview design** or the code block's **Preview** button. The preview renders the HTML directly and provides HTML, DOCX, and PDF downloads. Use **Print / Save PDF (exact)** when visual fidelity to the HTML/CSS design matters most.
+6. If the response contains assistant-designed HTML/CSS, choose **Preview design** or the code block's **Preview** button. The preview renders the HTML directly and provides the original HTML, exact PDF, and Visual DOCX downloads. Use **Print / Save PDF (exact)** when the design depends on browser scripts or externally hosted assets; server exports intentionally disable scripts and external network requests for safe, deterministic rendering.
 
-The PDF paths are intentional. The downloaded PDF/DOCX are reliable, readable book proofs for arbitrary HTML/Markdown/plain-text chapters. The exact-preview print path is the fidelity path for custom HTML/CSS layouts and may require the browser's Save as PDF action.
+The export paths are intentional. Traditional chapter-based PDF/DOCX generation remains available for editable/readable manuscript content. HTML exports use the original design instead of converting it to plain text: the PDF is rendered by Chromium, while the Visual DOCX uses page images because Word cannot reproduce arbitrary browser CSS as editable document structure. HTML exports are limited to 2 MB per request and 120,000 CSS pixels of rendered height; split very long designs into multiple artifacts.
 
 ## 1. Audio Source Manager ✅ COMPLETED
 

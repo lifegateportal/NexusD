@@ -3,9 +3,10 @@ import { z } from "zod";
 import { EbookManifestSchema, BookTemplateEnum, PrintSpecSchema } from "@/lib/schemas/ebook";
 import { generateDocxBuffer, generatePdfBuffer } from "@/lib/ebook-generator";
 import { htmlToNexusLMDocumentText, safeNexusLMFilename, type NexusLMArtifactFormat } from "@/lib/nexuslm-artifacts";
+import { renderHtmlToPdfBuffer, renderHtmlToVisualDocxBuffer } from "@/lib/nexuslm-html-renderer";
 
 export const runtime = "nodejs";
-export const maxDuration = 120;
+export const maxDuration = 300;
 
 const ManuscriptChapterSchema = z.object({
   number: z.number().int().positive().max(200),
@@ -28,13 +29,6 @@ const ExportRequestSchema = z.object({
       code: z.ZodIssueCode.custom,
       path: ["chapters"],
       message: "Provide manuscript chapters or an HTML artifact to export.",
-    });
-  }
-  if (value.html && !value.chapters && !htmlToNexusLMDocumentText(value.html)) {
-    context.addIssue({
-      code: z.ZodIssueCode.custom,
-      path: ["html"],
-      message: "The HTML artifact contains no exportable document text.",
     });
   }
   const numbers = new Set<number>();
@@ -81,6 +75,26 @@ export async function POST(request: NextRequest) {
           "Content-Disposition": `attachment; filename="${filename}.html"`,
           "Content-Length": String(Buffer.byteLength(input.html, "utf8")),
           "Cache-Control": "no-store",
+        },
+      });
+    }
+
+    if (input.html) {
+      const artifact = format === "docx"
+        ? await renderHtmlToVisualDocxBuffer(input.html)
+        : await renderHtmlToPdfBuffer(input.html);
+      const extension = format === "docx" ? "docx" : "pdf";
+      const contentType = format === "docx"
+        ? "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        : "application/pdf";
+      return new NextResponse(new Uint8Array(artifact), {
+        status: 200,
+        headers: {
+          "Content-Type": contentType,
+          "Content-Disposition": `attachment; filename="${filename}.${extension}"`,
+          "Content-Length": String(artifact.byteLength),
+          "Cache-Control": "no-store",
+          "X-NexusLM-Export-Mode": "visual-html-render",
         },
       });
     }
