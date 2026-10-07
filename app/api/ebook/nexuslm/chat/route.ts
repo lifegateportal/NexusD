@@ -196,7 +196,7 @@ export async function POST(request: NextRequest) {
     ? "This is Plan Whole Book mode. Use every uploaded transcript slot represented in the transcript context, synthesize the author's complete teaching arc, and produce a practical whole-book plan before drafting. Include the book promise, core thesis, target reader, chapter sequence, each chapter's purpose and source-grounded teaching beats, progression between chapters, uncovered material, and the recommended writing order. Distinguish supported source material from decisions or gaps that require the author's input. Do not draft full chapters."
     : input.mode === "socratic"
       ? "This is Socratic Vetting mode. Produce a detailed, actionable vetting brief with these headings: Diagnosis; Evidence and assumptions; Proposed fixes; Chapter implementation plan; Questions requiring the author's decision. For every proposed fix, explain the problem it solves and the exact change a new chapter should make. Do not stop at questions or general criticism."
-      : "This is Ask mode: answer directly, distinguish transcript evidence from interpretation, and cite sources.";
+      : "This is Ask mode: answer directly and with the same depth and finish as a general-purpose writing assistant. For requests to write, draft, compose, or rewrite, provide the finished reader-facing work rather than advice about how to write it. Use source evidence as a guardrail, not as a reason to become terse. Distinguish evidence from interpretation when it matters, but do not expose internal source labels or add citations unless the user requests them.";
 
   try {
     const temperature = input.llmTemperature ?? (input.agent === "nexusR1" ? 1 : input.mode === "ask" ? 0.2 : undefined);
@@ -204,10 +204,11 @@ export async function POST(request: NextRequest) {
       ...(temperature === undefined ? {} : { temperature }),
       maxRetries: 2,
       maxTokens: input.mode === "socratic" || input.mode === "plan" ? responseLength.chatSocraticTokens : responseLength.chatAskTokens,
-      system: `You are NexusLM, a source-grounded book companion. The selected agent is ${input.agent}. The active persona is ${input.persona}.
+      system: `You are NexusLM, a source-grounded general-purpose writing partner for a book workspace. The selected agent is ${input.agent}. The active persona is ${input.persona}.
 The book is "${input.book.title}".
 The requested presentation form is ${writingStyle.label}: ${writingStyle.instruction}
-    The written manuscript is the primary audit target. Use the supplied WRITTEN MANUSCRIPT EXCERPTS to assess what the book actually says, demonstrates, defines, and sequences. Use transcript excerpts only as supporting provenance for the author's underlying teaching. Use the sources for grounding, but never expose source IDs, slot labels, bracketed retrieval markers, or internal routing labels in the final answer. If the supplied excerpts do not support an answer, say so. Do not fabricate quotations.
+    The written manuscript is the primary source for existing-book questions. Use the supplied WRITTEN MANUSCRIPT EXCERPTS to assess what the book actually says, demonstrates, defines, and sequences. Use transcript excerpts as supporting provenance for the author's underlying teaching. For creative writing, drafting, and rewriting requests, use the sources as factual and voice guardrails while exercising strong editorial judgment about structure, transitions, examples, imagery, emphasis, and reader experience. Deliver polished finished prose instead of a plan or explanation unless the user explicitly asks for a plan.
+    Use the sources for grounding, but never expose source IDs, slot labels, bracketed retrieval markers, or internal routing labels in the final answer. If the supplied excerpts do not support a factual claim, say so. Do not fabricate quotations.
   ${modeInstruction}
   ${EM_DASH_MINIMIZATION_RULES}
   ${SCRIPTURE_FORMATTING_RULES}`,

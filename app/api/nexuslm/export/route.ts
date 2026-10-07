@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { EbookManifestSchema, BookTemplateEnum, PrintSpecSchema } from "@/lib/schemas/ebook";
-import { generatePdfBuffer } from "@/lib/ebook-generator";
+import { generateDocxBuffer, generatePdfBuffer } from "@/lib/ebook-generator";
+import { htmlToNexusLMDocumentText, safeNexusLMFilename, type NexusLMArtifactFormat } from "@/lib/nexuslm-artifacts";
 
 export const runtime = "nodejs";
 export const maxDuration = 120;
@@ -13,16 +14,32 @@ const ManuscriptChapterSchema = z.object({
 }).strict();
 
 const ExportRequestSchema = z.object({
+  format: z.enum(["pdf", "docx", "html"]).default("pdf"),
   title: z.string().trim().min(1).max(300),
   subtitle: z.string().max(500).default(""),
   authorName: z.string().trim().min(1).max(200).default("NexusLM"),
   template: BookTemplateEnum.default("popular-nonfiction"),
   printSpec: PrintSpecSchema.partial().optional(),
-  chapters: z.array(ManuscriptChapterSchema).min(1).max(200),
+  html: z.string().trim().min(1).max(2_000_000).optional(),
+  chapters: z.array(ManuscriptChapterSchema).min(1).max(200).optional(),
 }).strict().superRefine((value, context) => {
+  if (!value.html && !value.chapters) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["chapters"],
+      message: "Provide manuscript chapters or an HTML artifact to export.",
+    });
+  }
+  if (value.html && !value.chapters && !htmlToNexusLMDocumentText(value.html)) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["html"],
+      message: "The HTML artifact contains no exportable document text.",
+    });
+  }
   const numbers = new Set<number>();
-  const totalCharacters = value.chapters.reduce((total, chapter) => total + chapter.content.length, 0);
-  for (const [index, chapter] of value.chapters.entries()) {
+  const totalCharacters = value.chapters?.reduce((total, chapter) => total + chapter.content.length, 0) ?? 0;
+  for (const [index, chapter] of (value.chapters ?? []).entries()) {
     if (numbers.has(chapter.number)) {
       context.addIssue({
         code: z.ZodIssueCode.custom,
@@ -41,10 +58,6 @@ const ExportRequestSchema = z.object({
   }
 });
 
-function safeFilename(value: string): string {
-  return value.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 80) || "nexuslm-manuscript";
-}
-
 export async function POST(request: NextRequest) {
   let input: z.infer<typeof ExportRequestSchema>;
   try {
@@ -57,8 +70,28 @@ export async function POST(request: NextRequest) {
   }
 
   try {
+    const format = input.format as NexusLMArtifactFormat;
+    const filename = safeNexusLMFilename(input.title);
+    if (format === "html") {
+      if (!input.html) throw new Error("An HTML artifact is required for HTML export.");
+      return new NextResponse(input.html, {
+        status: 200,
+        headers: {
+          "Content-Type": "text/html; charset=utf-8",
+          "Content-Disposition": `attachment; filename="${filename}.html"`,
+          "Content-Length": String(Buffer.byteLength(input.html, "utf8")),
+          "Cache-Control": "no-store",
+        },
+      });
+    }
+
     const printSpec = PrintSpecSchema.parse(input.printSpec ?? {});
-    const chapters = [...input.chapters]
+    const sourceChapters = input.chapters ?? [{
+      number: 1,
+      title: input.title,
+      content: htmlToNexusLMDocumentText(input.html ?? ""),
+    }];
+    const chapters = [...sourceChapters]
       .sort((a, b) => a.number - b.number)
       .map((chapter) => ({
         number: chapter.number,
@@ -100,14 +133,19 @@ export async function POST(request: NextRequest) {
       selectedTemplate: input.template,
       printSpec,
     });
-    const pdf = await generatePdfBuffer(manifest, input.template, printSpec);
-    const filename = `${safeFilename(input.title)}.pdf`;
-    return new NextResponse(new Uint8Array(pdf), {
+    const artifact = format === "docx"
+      ? await generateDocxBuffer(manifest, input.template, printSpec)
+      : await generatePdfBuffer(manifest, input.template, printSpec);
+    const extension = format === "docx" ? "docx" : "pdf";
+    const contentType = format === "docx"
+      ? "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+      : "application/pdf";
+    return new NextResponse(new Uint8Array(artifact), {
       status: 200,
       headers: {
-        "Content-Type": "application/pdf",
-        "Content-Disposition": `attachment; filename="${filename}"`,
-        "Content-Length": String(pdf.byteLength),
+        "Content-Type": contentType,
+        "Content-Disposition": `attachment; filename="${filename}.${extension}"`,
+        "Content-Length": String(artifact.byteLength),
         "Cache-Control": "no-store",
       },
     });

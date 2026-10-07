@@ -20,6 +20,7 @@ import {
 import { NEXUSLM_WRITING_STYLES, type NexusLMWritingStyle } from "@/lib/nexuslm-writing-styles";
 import { NEXUSLM_AGENTS, type NexusLMAgent } from "@/lib/nexuslm-agents";
 import { NEXUSLM_RESPONSE_LENGTHS, sanitizeNexusLMText, type NexusLMResponseLength } from "@/lib/nexuslm-response";
+import { safeNexusLMFilename, type NexusLMArtifactFormat } from "@/lib/nexuslm-artifacts";
 import {
   buildManifestChangeEntries,
   clearEbookUndoSnapshot,
@@ -48,6 +49,7 @@ type Message = {
 type Source = { id: string; label: string; excerpt: string };
 type ChatAttachment = NexusLMChatAttachment;
 type PreviewDocument = Pick<ChatAttachment, "name" | "content" | "kind" | "previewDataUrl">;
+type ArtifactDownloadFormat = Exclude<NexusLMArtifactFormat, "html"> | "html";
 type GeneralRequest = {
   instruction: string;
   mode: "ask" | "socratic" | "plan";
@@ -392,9 +394,18 @@ function attachmentKind(attachment: Pick<ChatAttachment, "kind" | "content">): C
     : attachment.kind;
 }
 
-function DocumentPreview({ attachment }: { attachment: PreviewDocument }) {
+function DocumentPreview({
+  attachment,
+  onPrintHtml,
+  onDownloadArtifact,
+  exportingArtifact,
+}: {
+  attachment: PreviewDocument;
+  onPrintHtml: (content: string) => void;
+  onDownloadArtifact: (attachment: PreviewDocument, format: ArtifactDownloadFormat) => void;
+  exportingArtifact: ArtifactDownloadFormat | null;
+}) {
   const kind = attachmentKind(attachment);
-  const htmlFrameRef = useRef<HTMLIFrameElement>(null);
 
   if (kind === "pdf") {
     return attachment.previewDataUrl ? (
@@ -413,15 +424,27 @@ function DocumentPreview({ attachment }: { attachment: PreviewDocument }) {
   if (kind === "html") {
     return (
       <div className="space-y-2">
-        <button
-          type="button"
-          onClick={() => htmlFrameRef.current?.contentWindow?.print()}
-          className="min-h-12 rounded-xl border border-cyan-400/40 bg-cyan-400/10 px-3 text-xs font-semibold text-cyan-200"
-        >
-          Print / Save PDF (exact preview)
-        </button>
+        <div className="flex flex-wrap gap-2">
+          <button
+            type="button"
+            onClick={() => onPrintHtml(attachment.content)}
+            className="min-h-12 rounded-xl border border-cyan-400/40 bg-cyan-400/10 px-3 text-xs font-semibold text-cyan-200"
+          >
+            Print / Save PDF (exact)
+          </button>
+          {(["html", "docx", "pdf"] as const).map((format) => (
+            <button
+              key={format}
+              type="button"
+              onClick={() => onDownloadArtifact(attachment, format)}
+              disabled={exportingArtifact !== null}
+              className="min-h-12 rounded-xl border border-slate-700 px-3 text-xs font-semibold text-slate-300 disabled:opacity-40"
+            >
+              {exportingArtifact === format ? "Preparing..." : `Download ${format.toUpperCase()}`}
+            </button>
+          ))}
+        </div>
         <iframe
-          ref={htmlFrameRef}
           title={attachment.name}
           srcDoc={attachment.content}
           sandbox="allow-modals"
@@ -461,6 +484,7 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
   const [generatedPreview, setGeneratedPreview] = useState<PreviewDocument | null>(null);
   const [manuscript, setManuscript] = useState<NexusLMManuscript>(() => createEmptyManuscript(manifest, pipelineSnapshot));
   const [pdfExporting, setPdfExporting] = useState(false);
+  const [exportingArtifact, setExportingArtifact] = useState<ArtifactDownloadFormat | null>(null);
   const [showDocumentPreview, setShowDocumentPreview] = useState(false);
   const [previewExpanded, setPreviewExpanded] = useState(false);
   const [sources, setSources] = useState<Source[]>([]);
@@ -813,9 +837,100 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
     });
   }
 
-  async function exportManuscriptPdf(chapters = manuscript.chapters): Promise<void> {
-    if (chapters.length === 0) {
-      setAttachmentError("Add at least one response as a chapter before generating a manuscript PDF.");
+  function downloadBlob(blob: Blob, filename: string): void {
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = filename;
+    document.body.appendChild(anchor);
+    anchor.click();
+    document.body.removeChild(anchor);
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+
+  function printHtmlArtifact(content: string): void {
+    const frame = document.createElement("iframe");
+    frame.setAttribute("sandbox", "allow-modals");
+    frame.setAttribute("aria-hidden", "true");
+    frame.style.position = "fixed";
+    frame.style.width = "1px";
+    frame.style.height = "1px";
+    frame.style.opacity = "0";
+    frame.style.pointerEvents = "none";
+    frame.onload = () => {
+      window.setTimeout(() => {
+        try {
+          frame.contentWindow?.focus();
+          frame.contentWindow?.print();
+        } catch (error) {
+          setAttachmentError(`The browser could not open the HTML print dialog: ${readableError(error)}`);
+        } finally {
+          window.setTimeout(() => frame.remove(), 1000);
+        }
+      }, 150);
+    };
+    frame.srcdoc = content;
+    document.body.appendChild(frame);
+  }
+
+  async function downloadHtmlArtifact(attachment: PreviewDocument, format: ArtifactDownloadFormat): Promise<void> {
+    if (attachmentKind(attachment) !== "html" || !attachment.content.trim()) {
+      setAttachmentError("An HTML design is required for this export.");
+      return;
+    }
+    const title = attachment.name.replace(/\.(?:html?|xhtml)$/i, "").trim() || manuscript.title || "nexuslm-design";
+    setExportingArtifact(format);
+    setAttachmentError(null);
+    try {
+      if (format === "html") {
+        downloadBlob(new Blob([attachment.content], { type: "text/html;charset=utf-8" }), `${safeNexusLMFilename(title)}.html`);
+        return;
+      }
+      const response = await fetch("/api/nexuslm/export", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          format,
+          title,
+          subtitle: manuscript.subtitle,
+          authorName: manuscript.authorName,
+          template: manuscript.template,
+          html: attachment.content,
+        }),
+      });
+      if (!response.ok) {
+        const payload = await response.json().catch(() => null) as { error?: string } | null;
+        throw new Error(payload?.error ?? `The ${format.toUpperCase()} export failed (${response.status}).`);
+      }
+      downloadBlob(await response.blob(), `${safeNexusLMFilename(title)}.${format}`);
+    } catch (error) {
+      setAttachmentError(`${format.toUpperCase()} export failed: ${readableError(error)}`);
+    } finally {
+      setExportingArtifact(null);
+    }
+  }
+
+  async function exportManuscriptPdf(chapters?: ManuscriptChapter[]): Promise<void> {
+    const exportChapters = chapters?.length
+      ? chapters
+      : manuscript.chapters.length > 0
+        ? manuscript.chapters
+        : (() => {
+            const latest = messages.slice().reverse().find((message) => message.role === "assistant" && message.content.trim());
+            if (!latest) return [];
+            const number = 1;
+            const now = new Date().toISOString();
+            return [{
+              id: `preview-${Date.now()}`,
+              number,
+              title: extractChapterTitle(latest.content, number),
+              content: latest.content.trim(),
+              createdAt: now,
+              updatedAt: now,
+            }];
+          })();
+    if (exportChapters.length === 0) {
+      setAttachmentError("Write a response or add a chapter before generating a manuscript PDF.");
       return;
     }
     setPdfExporting(true);
@@ -829,7 +944,7 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
           subtitle: manuscript.subtitle,
           authorName: manuscript.authorName,
           template: manuscript.template,
-          chapters: chapters.map((chapter) => ({
+          chapters: exportChapters.map((chapter) => ({
             number: chapter.number,
             title: chapter.title,
             content: chapter.content,
@@ -921,7 +1036,9 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
       if (isPdfRequest(instruction)) {
         const htmlArtifact = extractGeneratedHtml(answer);
         if (htmlArtifact) {
+          const htmlPreview: PreviewDocument = { name: "Generated HTML", content: htmlArtifact, kind: "html" };
           openGeneratedHtmlPreview(htmlArtifact);
+          await downloadHtmlArtifact(htmlPreview, "pdf");
         } else {
           const number = manuscript.chapters.reduce((highest, chapter) => Math.max(highest, chapter.number), 0) + 1;
           const now = new Date().toISOString();
@@ -1872,7 +1989,7 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
             <button
               type="button"
               onClick={() => void exportManuscriptPdf()}
-              disabled={pdfExporting || manuscript.chapters.length === 0}
+              disabled={pdfExporting || loading}
               className="min-h-12 rounded-xl bg-cyan-300 px-3 text-xs font-bold text-slate-950 disabled:opacity-40"
             >
               {pdfExporting ? "Generating PDF..." : "Generate PDF"}
@@ -1969,7 +2086,12 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
                     <button type="button" onClick={() => setShowDocumentPreview(false)} className="min-h-12 min-w-12 rounded-lg text-slate-400" aria-label="Close document preview">×</button>
                   </div>
                 </div>
-                <DocumentPreview attachment={previewDocument} />
+                <DocumentPreview
+                  attachment={previewDocument}
+                  onPrintHtml={printHtmlArtifact}
+                  onDownloadArtifact={(attachment, format) => void downloadHtmlArtifact(attachment, format)}
+                  exportingArtifact={exportingArtifact}
+                />
               </div>
             )}
           </div>
