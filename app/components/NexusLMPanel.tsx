@@ -1580,10 +1580,76 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
                 void addFiles(event.dataTransfer.files);
               }}
             >
-              <div className="border-b border-slate-800 px-2 pb-2 pt-2 sm:px-3 sm:pb-3 sm:pt-3">
-                <div className="flex min-w-0 items-center gap-2">
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept=".txt,.md,.csv,.json,.css,.js,.jsx,.ts,.tsx,.xml,.yaml,.yml,.srt,.log,.html,.htm,.pdf,text/*,application/pdf"
+                multiple
+                className="hidden"
+                onChange={(event) => {
+                  void addFiles(event.target.files ?? []);
+                  event.currentTarget.value = "";
+                }}
+              />
+              {attachments.length > 0 && (
+                <div className="flex min-w-0 items-center gap-2 border-b border-slate-800 px-3 py-1.5">
+                  <div className="flex min-w-0 flex-1 items-center gap-2 overflow-x-auto py-0.5">
+                    {attachments.map((attachment) => (
+                      <div key={attachment.id} className="flex shrink-0 items-center gap-1 rounded-lg border border-cyan-500/30 bg-cyan-500/10 text-xs text-cyan-100">
+                        <button
+                          type="button"
+                          onClick={() => openAttachmentPreview(attachment.id)}
+                          className="min-h-12 max-w-[12rem] truncate rounded-md px-2 text-left text-cyan-100"
+                          title={`Preview ${attachment.name}`}
+                        >
+                          {attachment.name}
+                        </button>
+                        <button type="button" onClick={() => {
+                          setAttachments((current) => current.filter((item) => item.id !== attachment.id));
+                          setSelectedAttachmentId((current) => current === attachment.id ? (attachments.find((item) => item.id !== attachment.id)?.id ?? null) : current);
+                        }} className="min-h-12 min-w-12 rounded-md text-cyan-300" aria-label={`Remove ${attachment.name}`}>
+                          ×
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={processEntireDocument}
+                    onClick={() => setProcessEntireDocument((current) => !current)}
+                    title="Read every document section for transcript-wide analysis"
+                    className={`min-h-12 shrink-0 rounded-xl border px-3 text-xs font-bold ${processEntireDocument ? "border-cyan-400/60 bg-cyan-400/15 text-cyan-200" : "border-slate-700 text-slate-400"}`}
+                  >
+                    <span className="sm:hidden">All</span>
+                    <span className="hidden sm:inline">Read all</span>
+                    {processEntireDocument ? " · On" : " · Off"}
+                  </button>
+                </div>
+              )}
+              {attachmentError && (
+                <p className="px-3 pt-2 text-xs text-amber-300" role="alert">{attachmentError}</p>
+              )}
+              <div className="px-2 pb-2 pt-2 lg:flex lg:items-end lg:gap-2 lg:px-3">
+                <textarea
+                  ref={inputRef}
+                  value={input}
+                  onChange={(event) => setInput(event.target.value)}
+                  onPaste={(event) => {
+                    if (event.clipboardData.files.length > 0) {
+                      event.preventDefault();
+                      void addFiles(event.clipboardData.files);
+                    }
+                  }}
+                  onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void send(); } }}
+                  placeholder={useBookContext ? "Ask NexusLM about your book, or switch to General..." : "Ask NexusLM anything..."}
+                  disabled={loading}
+                  rows={1}
+                  className="block min-h-12 w-full resize-none rounded-xl border-0 bg-transparent px-2 py-3 text-base leading-6 text-slate-100 outline-none placeholder:text-slate-600 focus:ring-0 lg:min-h-12 lg:min-w-[8rem] lg:flex-1 lg:px-3"
+                />
+                <div className="mt-2 flex min-w-0 items-center gap-2 lg:mt-0 lg:shrink-0">
                   <div className="flex min-w-0 flex-1 items-center gap-2 overflow-x-auto">
-                    <span className="hidden shrink-0 px-1 text-[10px] font-bold uppercase tracking-widest text-slate-500 lg:block">Context</span>
+                    <span className="hidden shrink-0 px-1 text-[10px] font-bold uppercase tracking-widest text-slate-500 xl:block">Context</span>
                     <div className="flex shrink-0 rounded-xl border border-slate-800 bg-slate-950/70 p-1" role="group" aria-label="Conversation context">
                       {([
                         ["auto", "Auto"],
@@ -1594,7 +1660,7 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
                           key={value}
                           type="button"
                           onClick={() => setContextMode(value)}
-                          className={`min-h-12 shrink-0 rounded-lg px-2.5 text-xs font-semibold sm:px-3 ${contextMode === value ? "bg-cyan-400/15 text-cyan-200" : "text-slate-500"}`}
+                          className={`min-h-12 shrink-0 rounded-lg px-2 text-xs font-semibold ${contextMode === value ? "bg-cyan-400/15 text-cyan-200" : "text-slate-500"}`}
                         >
                           {label}
                         </button>
@@ -1606,15 +1672,15 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
                       value={agent}
                       onChange={(event) => setAgent(event.target.value as NexusLMAgent)}
                       aria-label="Nexus agent"
-                      className="min-h-12 w-[9rem] shrink-0 rounded-xl border border-slate-800 bg-slate-950/70 px-3 text-base text-slate-200 sm:w-[10rem]"
+                      className="min-h-12 w-[8rem] shrink-0 rounded-xl border border-slate-800 bg-slate-950/70 px-2 text-base text-slate-200 xl:w-[10rem]"
                     >
                       {Object.entries(NEXUSLM_AGENTS).map(([value, item]) => <option key={value} value={value}>{item.label}</option>)}
                     </select>
                   </div>
                   <details className="relative shrink-0">
                     <summary className="flex min-h-12 cursor-pointer list-none items-center justify-center whitespace-nowrap rounded-xl border border-slate-800 bg-slate-950/70 px-3 text-xs font-semibold text-slate-300">
-                      <span className="lg:hidden">More</span>
-                      <span className="hidden lg:inline">Customize</span>
+                      <span className="xl:hidden">More</span>
+                      <span className="hidden xl:inline">Customize</span>
                     </summary>
                     <div className="absolute bottom-full right-0 z-40 mb-2 w-[min(22rem,calc(100vw-2rem))] rounded-2xl border border-slate-700 bg-shell-950 p-4 shadow-2xl">
                       <div className="space-y-4">
@@ -1673,96 +1739,18 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
                       </div>
                     </div>
                   </details>
-                </div>
-                <p className="hidden truncate px-1 text-[11px] text-slate-500 lg:mt-2 lg:block">
-                  {contextMode === "general"
-                    ? "General conversation · book sources ignored"
-                    : contextMode === "book" && hasBookContext
-                      ? "Book context active · manuscript and transcript sources available"
-                      : contextMode === "auto" && hasBookContext
-                        ? "Auto context · connected book sources will be used"
-                        : "General conversation · no connected book sources"}
-                </p>
-              </div>
-              <input
-                ref={fileInputRef}
-                type="file"
-                accept=".txt,.md,.csv,.json,.css,.js,.jsx,.ts,.tsx,.xml,.yaml,.yml,.srt,.log,.html,.htm,.pdf,text/*,application/pdf"
-                multiple
-                className="hidden"
-                onChange={(event) => {
-                  void addFiles(event.target.files ?? []);
-                  event.currentTarget.value = "";
-                }}
-              />
-              {attachments.length > 0 && (
-                <div className="flex min-w-0 items-center gap-2 border-b border-slate-800 px-3 py-1.5">
-                  <div className="flex min-w-0 flex-1 items-center gap-2 overflow-x-auto py-0.5">
-                    {attachments.map((attachment) => (
-                      <div key={attachment.id} className="flex shrink-0 items-center gap-1 rounded-lg border border-cyan-500/30 bg-cyan-500/10 text-xs text-cyan-100">
-                        <button
-                          type="button"
-                          onClick={() => openAttachmentPreview(attachment.id)}
-                          className="min-h-12 max-w-[12rem] truncate rounded-md px-2 text-left text-cyan-100"
-                          title={`Preview ${attachment.name}`}
-                        >
-                          {attachment.name}
-                        </button>
-                        <button type="button" onClick={() => {
-                          setAttachments((current) => current.filter((item) => item.id !== attachment.id));
-                          setSelectedAttachmentId((current) => current === attachment.id ? (attachments.find((item) => item.id !== attachment.id)?.id ?? null) : current);
-                        }} className="min-h-12 min-w-12 rounded-md text-cyan-300" aria-label={`Remove ${attachment.name}`}>
-                          ×
-                        </button>
-                      </div>
-                    ))}
-                  </div>
+                  <button type="button" onClick={() => fileInputRef.current?.click()} disabled={loading} className="min-h-12 min-w-12 shrink-0 rounded-xl border border-slate-700 px-3 text-xs font-semibold text-slate-300 disabled:opacity-40" aria-label="Attach a document">
+                    +
+                  </button>
                   <button
                     type="button"
-                    role="switch"
-                    aria-checked={processEntireDocument}
-                    onClick={() => setProcessEntireDocument((current) => !current)}
-                    title="Read every document section for transcript-wide analysis"
-                    className={`min-h-12 shrink-0 rounded-xl border px-3 text-xs font-bold ${processEntireDocument ? "border-cyan-400/60 bg-cyan-400/15 text-cyan-200" : "border-slate-700 text-slate-400"}`}
+                    onClick={() => (loading ? stopGenerating() : void send())}
+                    disabled={loading ? !canAbort : !input.trim()}
+                    className={`min-h-12 shrink-0 rounded-xl px-4 text-sm font-bold disabled:cursor-not-allowed disabled:opacity-40 ${loading && canAbort ? "border border-rose-400/40 bg-rose-500/10 text-rose-200" : "bg-cyan-400 text-slate-950"}`}
                   >
-                    <span className="sm:hidden">All</span>
-                    <span className="hidden sm:inline">Read all</span>
-                    {processEntireDocument ? " · On" : " · Off"}
+                    {loading ? (canAbort ? "Stop" : "Working...") : "Send"}
                   </button>
                 </div>
-              )}
-              {attachmentError && (
-                <p className="px-3 pt-2 text-xs text-amber-300" role="alert">{attachmentError}</p>
-              )}
-              <div className="flex flex-wrap items-end gap-2 px-2 pb-2 lg:gap-3 lg:px-3">
-                <textarea
-                  ref={inputRef}
-                  value={input}
-                  onChange={(event) => setInput(event.target.value)}
-                  onPaste={(event) => {
-                    if (event.clipboardData.files.length > 0) {
-                      event.preventDefault();
-                      void addFiles(event.clipboardData.files);
-                    }
-                  }}
-                  onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void send(); } }}
-                  placeholder={useBookContext ? "Ask NexusLM about your book, or switch to General..." : "Ask NexusLM anything..."}
-                  disabled={loading}
-                  rows={1}
-                  className="order-2 min-h-12 min-w-0 flex-1 resize-none rounded-xl border-0 bg-transparent px-2 py-3 text-base leading-6 text-slate-100 outline-none placeholder:text-slate-600 focus:ring-0 lg:order-none lg:basis-full lg:rounded-t-2xl lg:px-4 lg:min-h-[4.5rem]"
-                />
-                <button type="button" onClick={() => fileInputRef.current?.click()} disabled={loading} className="order-1 min-h-12 min-w-12 shrink-0 rounded-xl border border-slate-700 px-3 text-xs font-semibold text-slate-300 disabled:opacity-40 lg:order-none" aria-label="Attach a document">
-                  +
-                </button>
-                <p className="order-4 hidden min-w-0 flex-1 truncate text-[11px] text-slate-500 lg:order-none lg:block">Enter to send · Shift+Enter for a new line · add text, HTML, or PDF</p>
-                <button
-                  type="button"
-                  onClick={() => (loading ? stopGenerating() : void send())}
-                  disabled={loading ? !canAbort : !input.trim()}
-                  className={`order-3 min-h-12 shrink-0 rounded-xl px-4 text-sm font-bold disabled:cursor-not-allowed disabled:opacity-40 lg:order-none ${loading && canAbort ? "border border-rose-400/40 bg-rose-500/10 text-rose-200" : "bg-cyan-400 text-slate-950"}`}
-                >
-                  {loading ? (canAbort ? "Stop" : "Working...") : "Send"}
-                </button>
               </div>
             </div>
           </div>
