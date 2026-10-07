@@ -71,7 +71,14 @@ function canBuildCompletedManifest(job: EbookJobState | null): job is EbookJobSt
 
 function getNexusLMTranscripts(job: EbookJobState | null): Array<{ label: string; text: string }> {
   if (!job) return [];
-  const transcripts = Array.isArray(job.transcripts) ? job.transcripts : [];
+  const transcripts = (Array.isArray(job.transcripts) ? job.transcripts : [])
+    .filter((transcript) => (
+      typeof transcript?.label === "string" &&
+      typeof transcript?.text === "string" &&
+      transcript.label.trim().length > 0 &&
+      transcript.text.trim().length > 0
+    ))
+    .map((transcript) => ({ label: transcript.label.trim(), text: transcript.text }));
   const masterTranscript = typeof job.masterTranscript === "string" ? job.masterTranscript : "";
   if (transcripts.length > 0) return transcripts;
   if (!masterTranscript.trim()) return [];
@@ -216,6 +223,7 @@ function EbookPageClient() {
         const raw = localStorage.getItem(JOB_STATE_KEY);
         const parsed = raw ? EbookJobStateSchema.safeParse(JSON.parse(raw)) : null;
         if (parsed?.success) {
+          if (liveJobStateRef.current) return;
           liveJobStateRef.current = parsed.data;
           setEbookJobState(parsed.data);
           return;
@@ -224,6 +232,7 @@ function EbookPageClient() {
         if (!jobId) return;
         const storedJob = await getEbookJob(jobId);
         if (!storedJob) return;
+        if (liveJobStateRef.current) return;
         liveJobStateRef.current = storedJob;
         setEbookJobState(storedJob);
       } catch {

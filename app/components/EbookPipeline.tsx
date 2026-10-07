@@ -1987,6 +1987,9 @@ export function EbookPipeline({
   const [reviewTab, setReviewTab] = useState<ReviewTab>("manuscript");
   const [sectionAssignments, setSectionAssignments] = useState<SectionAssignment[]>([]);
   const [sourceTranscripts, setSourceTranscripts] = useState<Array<{ label: string; text: string }>>([]);
+  const sourceTranscriptsRef = useRef<Array<{ label: string; text: string }>>([]);
+  const sourceMapWriteRef = useRef(0);
+  const sourceMapPersistenceQueueRef = useRef(Promise.resolve());
   const [audioSourceStatuses, setAudioSourceStatuses] = useState<Array<"idle" | "transcribing" | "complete" | "error" | "regenerating">>(["idle", "idle", "idle", "idle", "idle", "idle", "idle", "idle", "idle", "idle"]);
   const sourceMapImportRef = useRef<HTMLInputElement | null>(null);
   const jobIdRef = useRef<string>(newJobId());
@@ -2002,6 +2005,10 @@ export function EbookPipeline({
   // externally-edited manifest was already provided and must NOT be overwritten by the
   // job-state reconstruction (which only knows about the original pipeline output).
   const ebookManifestAtMountRef = useRef<EbookManifest | null | undefined>(ebookManifest);
+
+  useEffect(() => {
+    sourceTranscriptsRef.current = sourceTranscripts;
+  }, [sourceTranscripts]);
 
   const addLog = useCallback((msg: string) => {
     const entry = `[${new Date().toLocaleTimeString()}] ${msg}`;
@@ -2022,6 +2029,8 @@ export function EbookPipeline({
     setChapters([]);
     setSectionAssignments([]);
     setSourceTranscripts([]);
+    sourceTranscriptsRef.current = [];
+    sourceMapWriteRef.current += 1;
     setLog([]);
     logRef.current = [];
     setExportUrls(null);
@@ -2088,66 +2097,78 @@ export function EbookPipeline({
     onManifestReady?.(normalized);
   }, [onManifestReady, recalculateManifestTotal]);
 
-  const persistSourceMapState = useCallback(async (
+  const persistSourceMapState = useCallback((
     assignments: SectionAssignment[],
     transcripts?: Array<{ label: string; text: string }>,
-  ) => {
-    const nextTranscripts = transcripts ?? sourceTranscripts;
-    const base = (() => {
-      try {
-        const raw = localStorage.getItem(JOB_STATE_KEY);
-        if (!raw) return savedJobRef.current;
-        return JSON.parse(raw) as EbookJobState;
-      } catch {
-        return savedJobRef.current;
-      }
-    })();
+  ): Promise<void> => {
+    const writeId = ++sourceMapWriteRef.current;
+    const jobId = jobIdRef.current;
+    const nextTranscripts = transcripts ?? sourceTranscriptsRef.current;
+    sourceTranscriptsRef.current = nextTranscripts;
+    const persist = async () => {
+      const base = (() => {
+        try {
+          const raw = localStorage.getItem(JOB_STATE_KEY);
+          if (!raw) return savedJobRef.current;
+          return JSON.parse(raw) as EbookJobState;
+        } catch {
+          return savedJobRef.current;
+        }
+      })();
 
-    const checkpointBase = base ?? sanitizeJobStateForPersistence({
-      jobId: jobIdRef.current,
-      simpleDirect: useSimpleDirectBookMode,
-      status: "idle",
-      audioFileNames: audioFiles.filter(Boolean).map((file) => file!.name),
-      transcripts: [],
-      masterTranscript: "",
-      filteredTranscript: "",
-      filterRemovedCount: 0,
-      voiceDNA: null,
-      contentMap: null,
-      architecture: null,
-      sectionAssignments: [],
-      sections: [],
-      chapters: [],
-      frontMatter: null,
-      backMatter: null,
-      exportUrls: null,
-      currentStage: "idle",
-      progress: { total: 0, completed: 0 },
-      errorLog: [],
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    });
-    const updated: EbookJobState = {
-      ...checkpointBase,
-      sectionAssignments: assignments,
-      transcripts: nextTranscripts,
-      updatedAt: new Date().toISOString(),
+      const checkpointBase = base ?? sanitizeJobStateForPersistence({
+        jobId,
+        simpleDirect: useSimpleDirectBookMode,
+        status: "idle",
+        audioFileNames: audioFiles.filter(Boolean).map((file) => file!.name),
+        transcripts: [],
+        masterTranscript: "",
+        filteredTranscript: "",
+        filterRemovedCount: 0,
+        voiceDNA: null,
+        contentMap: null,
+        architecture: null,
+        sectionAssignments: [],
+        sections: [],
+        chapters: [],
+        frontMatter: null,
+        backMatter: null,
+        exportUrls: null,
+        currentStage: "idle",
+        progress: { total: 0, completed: 0 },
+        errorLog: [],
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      });
+      const updated: EbookJobState = {
+        ...checkpointBase,
+        jobId,
+        sectionAssignments: assignments,
+        transcripts: nextTranscripts,
+        updatedAt: new Date().toISOString(),
+      };
+      if (jobIdRef.current !== jobId || writeId !== sourceMapWriteRef.current) return;
+      const persistableUpdated = sanitizeJobStateForPersistence(updated);
+      if (jobIdRef.current !== jobId || writeId !== sourceMapWriteRef.current) return;
+      savedJobRef.current = persistableUpdated;
+      onJobStateChange?.(persistableUpdated);
+      try {
+        localStorage.setItem(JOB_STATE_KEY, JSON.stringify(persistableUpdated));
+        localStorage.setItem(JOB_STORAGE_KEY, jobId);
+      } catch (err) {
+        addLog(`⚠ localStorage save failed: ${err instanceof Error ? err.message : "quota exceeded"}`);
+      }
+      try {
+        await saveEbookJob(persistableUpdated);
+      } catch (err) {
+        addLog(`⚠ IndexedDB save failed: ${err instanceof Error ? err.message : "unknown error"}`);
+      }
     };
-    if (jobIdRef.current !== updated.jobId) return;
-    const persistableUpdated = sanitizeJobStateForPersistence(updated);
-    savedJobRef.current = persistableUpdated;
-    onJobStateChange?.(persistableUpdated);
-    try { 
-      localStorage.setItem(JOB_STATE_KEY, JSON.stringify(persistableUpdated)); 
-    } catch (err) {
-      addLog(`⚠ localStorage save failed: ${err instanceof Error ? err.message : 'quota exceeded'}`);
-    }
-    try { 
-      await saveEbookJob(persistableUpdated); 
-    } catch (err) {
-      addLog(`⚠ IndexedDB save failed: ${err instanceof Error ? err.message : 'unknown error'}`);
-    }
-  }, [addLog, audioFiles, onJobStateChange, sectionAssignments, sourceTranscripts, useSimpleDirectBookMode]);
+
+    const queued = sourceMapPersistenceQueueRef.current.then(persist, persist);
+    sourceMapPersistenceQueueRef.current = queued.catch(() => undefined);
+    return queued;
+  }, [addLog, audioFiles, onJobStateChange, useSimpleDirectBookMode]);
 
   const downloadSourceMap = useCallback(() => {
     if (sectionAssignments.length === 0) {
@@ -2576,6 +2597,7 @@ export function EbookPipeline({
       setSectionAssignments(restoredAssignments);
       const restoredTranscripts = job.transcripts ?? [];
       const restoredTranscriptFiles = restoreTranscriptFiles(restoredTranscripts);
+      sourceTranscriptsRef.current = restoredTranscripts;
       setSourceTranscripts(restoredTranscripts);
       setTranscriptFiles(restoredTranscriptFiles);
       setAudioSourceStatuses(restoreTranscriptStatuses(restoredTranscriptFiles));
@@ -2800,13 +2822,22 @@ export function EbookPipeline({
 
   const setTranscript = useCallback((i: number, f: File | null) => {
     setTranscriptFiles((prev) => { const next = [...prev]; next[i] = f; return next; });
-    if (!f) return;
     const label = `Slot-${i + 1}`;
+    if (!f) {
+      const nextTranscripts = sourceTranscriptsRef.current.filter((transcript) => transcript.label !== label);
+      sourceTranscriptsRef.current = nextTranscripts;
+      setSourceTranscripts(nextTranscripts);
+      void persistSourceMapState(sectionAssignments, nextTranscripts).catch((err: unknown) => {
+        addLog(`✗ ${label} transcript removal could not be saved: ${err instanceof Error ? err.message : "Unknown error"}`);
+      });
+      return;
+    }
     void (async () => {
       try {
         const text = await readTextFile(f);
-        const nextTranscripts = sourceTranscripts.filter((transcript) => transcript.label !== label);
+        const nextTranscripts = sourceTranscriptsRef.current.filter((transcript) => transcript.label !== label);
         nextTranscripts.push({ label, text });
+        sourceTranscriptsRef.current = nextTranscripts;
         setSourceTranscripts(nextTranscripts);
         await persistSourceMapState(sectionAssignments, nextTranscripts);
         addLog(`✓ ${label} transcript available to NexusLM — ${countWords(text).toLocaleString()} words`);
@@ -2814,13 +2845,13 @@ export function EbookPipeline({
         addLog(`✗ ${label} transcript could not be loaded: ${err instanceof Error ? err.message : "Unknown error"}`);
       }
     })();
-  }, [addLog, persistSourceMapState, sectionAssignments, sourceTranscripts]);
+  }, [addLog, persistSourceMapState, sectionAssignments]);
 
   // A slot is active if it has audio OR a pre-existing transcript
   const activeSlotCount = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9].filter(
     (i) => audioFiles[i] || transcriptFiles[i]
   ).length;
-  const canStart = activeSlotCount >= 1 && stage === "idle";
+  const canStart = activeSlotCount >= 1 && stage === "idle" && pipelineRestoreReady;
 
   // ── Audio Source Management Handlers ──────────────────────────────────────
 
@@ -4712,7 +4743,7 @@ export function EbookPipeline({
             onFile={(f) => setAudio(i, f)}
             transcriptFile={transcriptFiles[i]}
             onTranscriptFile={(f) => setTranscript(i, f)}
-            disabled={isRunning}
+            disabled={isRunning || !pipelineRestoreReady}
           />
         ))}
       </div>
