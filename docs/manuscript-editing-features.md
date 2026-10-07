@@ -29,7 +29,10 @@ NexusLM is not limited to book questions. Use the same composer for:
 
 - General conversation, explanations, brainstorming, writing, rewriting, planning, analysis, translation, and coding guidance
 - Markdown responses with headings, lists, links, quotes, and code blocks
-- Text, Markdown, CSV, JSON, YAML, and source-file attachments (up to 8 files, 400 KB per file)
+- Text, Markdown, CSV, JSON, YAML, source-file, HTML, and PDF attachments (up to 8 files; text/HTML files up to 6 MB and PDFs up to 20 MB)
+- Long-document processing with relevant-section retrieval by default and an explicit **Read every section** control for transcript-wide summaries, themes, reviews, and analysis
+- In-app document previews for text/Markdown, sandboxed HTML, and extracted PDFs
+- Saved chat workspaces in browser storage with **New chat**, chat switching, renaming, deletion, and persistent document context for follow-up questions
 - Streaming responses with **Stop**, **Retry**, **Copy**, and Markdown/TXT/HTML export controls
 
 Use the **Context** control to choose:

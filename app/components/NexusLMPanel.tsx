@@ -5,7 +5,16 @@ import { ChapterDraftSchema, EbookManifestSchema } from "@/lib/schemas/ebook";
 import type { EbookManifest } from "@/lib/schemas/ebook";
 import type { ChapterDraft } from "@/lib/schemas/ebook";
 import type { EbookPipelineSnapshot } from "@/app/components/EbookPipeline";
-import { deleteNexusLMChat, getNexusLMChat, saveNexusLMChat } from "@/lib/nexuslm-chat-store";
+import {
+  createNexusLMChat,
+  deleteNexusLMChat,
+  getNexusLMChat,
+  listNexusLMChats,
+  renameNexusLMChat,
+  saveNexusLMChat,
+  type NexusLMChatAttachment,
+  type NexusLMChatSummary,
+} from "@/lib/nexuslm-chat-store";
 import { NEXUSLM_WRITING_STYLES, type NexusLMWritingStyle } from "@/lib/nexuslm-writing-styles";
 import { NEXUSLM_AGENTS, type NexusLMAgent } from "@/lib/nexuslm-agents";
 import { NEXUSLM_RESPONSE_LENGTHS, sanitizeNexusLMText, type NexusLMResponseLength } from "@/lib/nexuslm-response";
@@ -28,13 +37,19 @@ type NexusLMPanelProps = {
 type Mode = "ask" | "socratic" | "plan" | "draft" | "edit";
 type ContextMode = "auto" | "general" | "book";
 type Persona = "editorial-coach" | "skeptical-reviewer" | "socratic-teacher" | "voice-guardian";
-type Message = { role: "user" | "assistant" | "system"; content: string; format?: "plain" | "markdown" };
+type Message = {
+  role: "user" | "assistant" | "system";
+  content: string;
+  format?: "plain" | "markdown";
+  attachments?: Array<{ id: string; name: string }>;
+};
 type Source = { id: string; label: string; excerpt: string };
-type ChatAttachment = { id: string; name: string; content: string; size: number };
+type ChatAttachment = NexusLMChatAttachment;
 type GeneralRequest = {
   instruction: string;
   mode: "ask" | "socratic" | "plan";
   attachments: ChatAttachment[];
+  processEntireDocument: boolean;
 };
 type LibraryPatch = {
   slug: string;
@@ -178,7 +193,7 @@ function compactHistory(history: Message[]): Array<{ role: "user" | "assistant";
 function initialMessage(manifest: EbookManifest | null): Message {
   return manifest
     ? { role: "system", content: `NexusLM is connected to “${manifest.bookTitle}”. Ask about the manuscript, challenge its thinking, or request a focused edit.` }
-    : { role: "system", content: "NexusLM is ready for general conversation. Ask anything, attach a text file, or connect a book when you want source-grounded manuscript help." };
+    : { role: "system", content: "NexusLM is ready for general conversation. Ask anything, attach a text, HTML, or PDF document, or connect a book when you want source-grounded manuscript help." };
 }
 
 function formatChapterDraft(chapter: ChapterDraft): string {
@@ -293,8 +308,59 @@ function renderAssistantContent(content: string, markdown = false) {
   return rendered;
 }
 
+function readDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      if (typeof reader.result !== "string") {
+        reject(new Error(`Could not create a preview for ${file.name}.`));
+        return;
+      }
+      resolve(reader.result);
+    };
+    reader.onerror = () => reject(reader.error ?? new Error(`Could not read ${file.name}.`));
+    reader.readAsDataURL(file);
+  });
+}
+
+function DocumentPreview({ attachment }: { attachment: ChatAttachment }) {
+  if (attachment.kind === "pdf") {
+    return attachment.previewDataUrl ? (
+      <iframe
+        title={attachment.name}
+        src={attachment.previewDataUrl}
+        className="h-[52dvh] min-h-[22rem] w-full rounded-xl border border-slate-800 bg-white"
+      />
+    ) : (
+      <p className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-4 text-sm leading-6 text-amber-100">
+        A preview is not available for this PDF in the current chat session.
+      </p>
+    );
+  }
+
+  if (attachment.kind === "html") {
+    return (
+      <iframe
+        title={attachment.name}
+        srcDoc={attachment.content}
+        sandbox=""
+        className="h-[52dvh] min-h-[22rem] w-full rounded-xl border border-slate-800 bg-white"
+      />
+    );
+  }
+
+  return (
+    <pre className="h-[52dvh] min-h-[22rem] overflow-auto whitespace-pre-wrap rounded-xl border border-slate-800 bg-slate-950 p-4 text-xs leading-6 text-slate-300">
+      {attachment.content}
+    </pre>
+  );
+}
+
 export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, transcripts, onManifestChange }: NexusLMPanelProps) {
   const [messages, setMessages] = useState<Message[]>([initialMessage(manifest)]);
+  const [activeConversationKey, setActiveConversationKey] = useState(conversationKey);
+  const [chatHistory, setChatHistory] = useState<NexusLMChatSummary[]>([]);
+  const [showChatHistory, setShowChatHistory] = useState(false);
   const [input, setInput] = useState("");
   const [contextMode, setContextMode] = useState<ContextMode>("auto");
   const [mode, setMode] = useState<Mode>("ask");
@@ -306,8 +372,11 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
   const [loading, setLoading] = useState(false);
   const [canAbort, setCanAbort] = useState(false);
   const [attachments, setAttachments] = useState<ChatAttachment[]>([]);
+  const [processEntireDocument, setProcessEntireDocument] = useState(false);
   const [attachmentError, setAttachmentError] = useState<string | null>(null);
   const [lastGeneralRequest, setLastGeneralRequest] = useState<GeneralRequest | null>(null);
+  const [selectedAttachmentId, setSelectedAttachmentId] = useState<string | null>(null);
+  const [showDocumentPreview, setShowDocumentPreview] = useState(false);
   const [sources, setSources] = useState<Source[]>([]);
   const [pendingEdit, setPendingEdit] = useState<PendingEdit | null>(null);
   const [pendingDraft, setPendingDraft] = useState<ChapterDraft | null>(null);
@@ -321,9 +390,32 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
+  const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const activeScopeRef = useRef(conversationKey);
   const historyLoadedRef = useRef(false);
   const hasBookContext = Boolean(manifest || transcripts.length > 0);
   const useBookContext = contextMode === "book" || (contextMode === "auto" && hasBookContext);
+
+  useEffect(() => {
+    try {
+      setActiveConversationKey(window.localStorage.getItem(`nexuslm-active-chat:${conversationKey}`) ?? conversationKey);
+    } catch {
+      setActiveConversationKey(conversationKey);
+    }
+  }, [conversationKey]);
+
+  useEffect(() => {
+    if (activeScopeRef.current !== conversationKey) {
+      activeScopeRef.current = conversationKey;
+      return;
+    }
+    if (activeConversationKey === conversationKey) return;
+    try {
+      window.localStorage.setItem(`nexuslm-active-chat:${conversationKey}`, activeConversationKey);
+    } catch (error) {
+      setAttachmentError(`Active chat could not be remembered: ${readableError(error)}`);
+    }
+  }, [activeConversationKey, conversationKey]);
 
   useEffect(() => {
     setUndoSnapshot(manifest?.jobId ? loadEbookUndoSnapshot(manifest.jobId) : null);
@@ -335,18 +427,46 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
   useEffect(() => {
     let cancelled = false;
     historyLoadedRef.current = false;
-    void getNexusLMChat(conversationKey).then((archive) => {
-      if (cancelled) return;
-      setMessages(archive?.messages?.length ? archive.messages : [initialMessage(manifest)]);
-      historyLoadedRef.current = true;
-    });
+    void getNexusLMChat(activeConversationKey)
+      .then((archive) => {
+        if (cancelled) return;
+        setMessages(archive?.messages?.length ? archive.messages : [initialMessage(manifest)]);
+        setAttachments(archive?.attachments ?? []);
+        setProcessEntireDocument(false);
+        setSelectedAttachmentId(archive?.attachments?.[0]?.id ?? null);
+        setShowDocumentPreview(false);
+        setLastGeneralRequest(null);
+        historyLoadedRef.current = true;
+      })
+      .catch((error) => {
+        if (cancelled) return;
+        historyLoadedRef.current = true;
+        setAttachmentError(`Chat history could not be loaded: ${readableError(error)}`);
+      });
     return () => { cancelled = true; };
-  }, [conversationKey]);
+  }, [activeConversationKey]);
 
   useEffect(() => {
-    if (!historyLoadedRef.current || !conversationKey) return;
-    void saveNexusLMChat(conversationKey, messages);
-  }, [conversationKey, messages]);
+    if (!historyLoadedRef.current || !activeConversationKey) return;
+    if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+    saveTimerRef.current = setTimeout(() => {
+      void saveNexusLMChat(activeConversationKey, messages, {
+        scope: conversationKey,
+        attachments,
+      })
+        .then(() => listNexusLMChats(conversationKey).then(setChatHistory))
+        .catch((error) => setAttachmentError(`Chat history could not be saved: ${readableError(error)}`));
+    }, 300);
+    return () => {
+      if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+    };
+  }, [activeConversationKey, attachments, conversationKey, messages]);
+
+  useEffect(() => {
+    void listNexusLMChats(conversationKey)
+      .then(setChatHistory)
+      .catch((error) => setAttachmentError(`Chat history could not be listed: ${readableError(error)}`));
+  }, [conversationKey]);
 
   useEffect(() => {
     if (selectedTranscriptLabel && transcripts.some((transcript) => transcript.label === selectedTranscriptLabel)) return;
@@ -357,29 +477,101 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
   }, [messages, loading]);
 
+  async function startNewConversation(): Promise<void> {
+    if (loading) return;
+    try {
+      const id = await createNexusLMChat(conversationKey);
+      historyLoadedRef.current = false;
+      setActiveConversationKey(id);
+      setMessages([initialMessage(manifest)]);
+      setAttachments([]);
+      setProcessEntireDocument(false);
+      setSelectedAttachmentId(null);
+      setLastGeneralRequest(null);
+      setAttachmentError(null);
+      setShowDocumentPreview(false);
+      setShowChatHistory(false);
+    } catch (error) {
+      setAttachmentError(`New chat could not be created: ${readableError(error)}`);
+    }
+  }
+
+  function openSavedConversation(id: string): void {
+    if (loading || id === activeConversationKey) {
+      setShowChatHistory(false);
+      return;
+    }
+    historyLoadedRef.current = false;
+    setActiveConversationKey(id);
+    setShowDocumentPreview(false);
+    setShowChatHistory(false);
+  }
+
+  async function removeSavedConversation(id: string): Promise<void> {
+    if (loading) return;
+    try {
+      await deleteNexusLMChat(id);
+      if (id === activeConversationKey) {
+        await startNewConversation();
+        return;
+      }
+      setChatHistory(await listNexusLMChats(conversationKey));
+    } catch (error) {
+      setAttachmentError(`Chat could not be deleted: ${readableError(error)}`);
+    }
+  }
+
+  async function renameSavedConversation(chat: NexusLMChatSummary): Promise<void> {
+    if (loading) return;
+    const nextTitle = window.prompt("Name this chat", chat.title)?.trim();
+    if (!nextTitle || nextTitle === chat.title) return;
+    try {
+      await renameNexusLMChat(chat.id, nextTitle);
+      setChatHistory(await listNexusLMChats(conversationKey));
+    } catch (error) {
+      setAttachmentError(`Chat could not be renamed: ${readableError(error)}`);
+    }
+  }
+
   async function addFiles(fileList: FileList | File[]): Promise<void> {
     const files = Array.from(fileList);
     if (files.length === 0) return;
     if (attachments.length + files.length > 8) {
-      setAttachmentError("You can attach up to 8 text files per message.");
+      setAttachmentError("You can keep up to 8 documents in a chat.");
       return;
     }
 
     const accepted: ChatAttachment[] = [];
     for (const file of files) {
       const extension = file.name.toLowerCase().split(".").pop() ?? "";
+      const isPdf = extension === "pdf" || file.type === "application/pdf";
+      const isHtml = extension === "html" || extension === "htm" || file.type === "text/html";
       const isText = file.type.startsWith("text/")
-        || ["csv", "css", "json", "js", "jsx", "md", "tsx", "ts", "xml", "yaml", "yml"].includes(extension);
-      if (!isText) {
-        setAttachmentError(`${file.name} is not a text file. Use TXT, Markdown, CSV, JSON, or source files for now.`);
+        || ["csv", "css", "json", "js", "jsx", "md", "tsx", "ts", "xml", "yaml", "yml", "srt", "log"].includes(extension);
+      if (!isText && !isHtml && !isPdf) {
+        setAttachmentError(`${file.name} is not supported yet. Use text, HTML, Markdown, or PDF documents.`);
         continue;
       }
-      if (file.size > 400_000) {
-        setAttachmentError(`${file.name} is too large. Each attachment must be 400 KB or smaller.`);
+      if ((!isPdf && file.size > 6_000_000) || (isPdf && file.size > 20_000_000)) {
+        setAttachmentError(`${file.name} is too large. Text/HTML files may be up to 6 MB; PDFs may be up to 20 MB.`);
         continue;
       }
       try {
-        const content = await file.text();
+        let content = "";
+        let previewDataUrl: string | undefined;
+        if (isPdf) {
+          const formData = new FormData();
+          formData.append("file", file);
+          const response = await fetch("/api/nexuslm/attachment", { method: "POST", body: formData });
+          const payload = await response.json() as { text?: string; error?: string };
+          if (!response.ok || !payload.text) {
+            throw new Error(payload.error ?? `Could not extract text from ${file.name}.`);
+          }
+          content = payload.text;
+          previewDataUrl = await readDataUrl(file);
+        } else {
+          content = await file.text();
+        }
         if (!content.trim()) {
           setAttachmentError(`${file.name} is empty.`);
           continue;
@@ -389,6 +581,9 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
           name: file.name,
           content,
           size: file.size,
+          kind: isPdf ? "pdf" : isHtml ? "html" : "text",
+          mimeType: file.type || (isPdf ? "application/pdf" : isHtml ? "text/html" : "text/plain"),
+          previewDataUrl,
         });
       } catch (error) {
         setAttachmentError(`${file.name} could not be read: ${readableError(error)}`);
@@ -396,7 +591,13 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
     }
 
     if (accepted.length > 0) {
+      const totalCharacters = [...attachments, ...accepted].reduce((total, attachment) => total + attachment.content.length, 0);
+      if (totalCharacters > 12_000_000) {
+        setAttachmentError("Attached document text is too large for one request. Keep the combined text at or below 12 MB.");
+        return;
+      }
       setAttachments((current) => [...current, ...accepted]);
+      setSelectedAttachmentId((current) => current ?? accepted[0].id);
       setAttachmentError(null);
     }
   }
@@ -405,11 +606,14 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
     abortControllerRef.current?.abort();
   }
 
+  const selectedAttachment = attachments.find((attachment) => attachment.id === selectedAttachmentId) ?? null;
+
   async function streamGeneralResponse(
     instruction: string,
     activeMode: "ask" | "socratic" | "plan",
     nextMessages: Message[],
     requestAttachments: ChatAttachment[],
+    shouldProcessEntireDocument: boolean,
   ): Promise<void> {
     const controller = new AbortController();
     abortControllerRef.current = controller;
@@ -440,7 +644,8 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
           writingStyle,
           responseLength,
           llmTemperature: nexusLMTemperature,
-          attachments: requestAttachments.map(({ name, content }) => ({ name, content })),
+          processEntireDocument: shouldProcessEntireDocument,
+          attachments: requestAttachments.map(({ name, content, kind, mimeType }) => ({ name, content, kind, mimeType })),
           history: compactHistory(nextMessages),
         }),
       });
@@ -472,11 +677,12 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
   }
 
   async function clearConversation() {
-    await deleteNexusLMChat(conversationKey);
-    setMessages([initialMessage(manifest)]);
-    setAttachments([]);
-    setAttachmentError(null);
-    setLastGeneralRequest(null);
+    try {
+      await deleteNexusLMChat(activeConversationKey);
+      await startNewConversation();
+    } catch (error) {
+      setAttachmentError(`Chat history could not be cleared: ${readableError(error)}`);
+    }
   }
 
   function downloadLatestResponse(extension: "md" | "txt" | "html") {
@@ -517,14 +723,19 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
 
   function retryLastResponse(): void {
     if (!lastGeneralRequest || loading) return;
-    void send(lastGeneralRequest.instruction, lastGeneralRequest.mode, "all", { retry: true, forceGeneral: true });
+    void send(lastGeneralRequest.instruction, lastGeneralRequest.mode, "all", {
+      retry: true,
+      forceGeneral: true,
+      requestAttachments: lastGeneralRequest.attachments,
+      processEntireDocument: lastGeneralRequest.processEntireDocument,
+    });
   }
 
   async function send(
     requestText?: string,
     requestMode?: Mode,
     draftTranscriptScope: "all" | "selected" = "all",
-    options?: { retry?: boolean; forceGeneral?: boolean },
+    options?: { retry?: boolean; forceGeneral?: boolean; requestAttachments?: ChatAttachment[]; processEntireDocument?: boolean },
   ) {
     const instruction = (requestText ?? input).trim();
     if (!instruction || loading) return;
@@ -551,14 +762,27 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
       ]);
       return;
     }
+    if (requestUsesBook && attachments.length > 0 && !options?.forceGeneral) {
+      setMessages((current) => [...current,
+        { role: "user", content: instruction },
+        { role: "assistant", content: "These attached documents are ready for general chat. Switch Context to General to process them, or remove the attachments to continue with the book." },
+      ]);
+      return;
+    }
 
     const userMessage = `${instruction}\n\n[Mode: ${MODES[activeMode].label}] [Persona: ${PERSONAS[persona].label}]`;
     const retryBase = options?.retry && messages[messages.length - 1]?.role === "assistant"
       ? messages.slice(0, -1)
       : messages;
+    const requestAttachments = options?.requestAttachments ?? attachments;
+    const shouldProcessEntireDocument = options?.processEntireDocument ?? processEntireDocument;
     const nextMessages = options?.retry
       ? retryBase
-      : [...messages, { role: "user" as const, content: instruction }];
+      : [...messages, {
+        role: "user" as const,
+        content: instruction,
+        attachments: requestUsesBook ? undefined : requestAttachments.map(({ id, name }) => ({ id, name })),
+      }];
     setMessages(nextMessages);
     setInput("");
     setLoading(true);
@@ -579,12 +803,16 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
 
       if (!requestUsesBook) {
         const generalMode = activeMode === "socratic" || activeMode === "plan" ? activeMode : "ask";
-        const requestAttachments = attachments.map((attachment) => ({ ...attachment }));
-        setLastGeneralRequest({ instruction, mode: generalMode, attachments: requestAttachments });
+        const requestAttachmentsSnapshot = requestAttachments.map((attachment) => ({ ...attachment }));
+        setLastGeneralRequest({
+          instruction,
+          mode: generalMode,
+          attachments: requestAttachmentsSnapshot,
+          processEntireDocument: shouldProcessEntireDocument,
+        });
         setSources([]);
-        setAttachments([]);
         setAttachmentError(null);
-        await streamGeneralResponse(instruction, generalMode, nextMessages, requestAttachments);
+        await streamGeneralResponse(instruction, generalMode, nextMessages, requestAttachmentsSnapshot, shouldProcessEntireDocument);
         return;
       }
 
@@ -882,6 +1110,24 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
                 {message.role === "user" ? (
                   <>
                     <p className="whitespace-pre-wrap">{message.content}</p>
+                    {message.attachments && message.attachments.length > 0 && (
+                      <div className="mt-3 flex flex-wrap justify-end gap-2">
+                        {message.attachments.map((attachment) => (
+                          <button
+                            key={attachment.id}
+                            type="button"
+                            onClick={() => {
+                              if (!attachments.some((item) => item.id === attachment.id)) return;
+                              setSelectedAttachmentId(attachment.id);
+                              setShowDocumentPreview(true);
+                            }}
+                            className="min-h-12 max-w-full rounded-lg border border-cyan-500/30 px-3 text-[11px] font-semibold text-cyan-200"
+                          >
+                            {attachment.name}
+                          </button>
+                        ))}
+                      </div>
+                    )}
                     <div className="mt-2 flex justify-end">
                       <button
                         type="button"
@@ -907,7 +1153,7 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
                 ) : message.content}
               </div>
             ))}
-            {loading && <div className="text-sm text-slate-500">NexusLM is thinking...</div>}
+            {loading && <div className="text-sm text-slate-500">{processEntireDocument ? "NexusLM is reading every document section..." : "NexusLM is thinking..."}</div>}
           </div>
         </div>
 
@@ -1057,7 +1303,7 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
               <input
                 ref={fileInputRef}
                 type="file"
-                accept=".txt,.md,.csv,.json,.css,.js,.jsx,.ts,.tsx,.xml,.yaml,.yml,text/*"
+                accept=".txt,.md,.csv,.json,.css,.js,.jsx,.ts,.tsx,.xml,.yaml,.yml,.srt,.log,.html,.htm,.pdf,text/*,application/pdf"
                 multiple
                 className="hidden"
                 onChange={(event) => {
@@ -1068,13 +1314,43 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
               {attachments.length > 0 && (
                 <div className="flex flex-wrap gap-2 px-3 pt-3">
                   {attachments.map((attachment) => (
-                    <span key={attachment.id} className="flex max-w-full items-center gap-2 rounded-lg border border-cyan-500/30 bg-cyan-500/10 px-2 py-1.5 text-xs text-cyan-100">
-                      <span className="max-w-[12rem] truncate">{attachment.name}</span>
-                      <button type="button" onClick={() => setAttachments((current) => current.filter((item) => item.id !== attachment.id))} className="min-h-12 min-w-12 rounded-md text-cyan-300" aria-label={`Remove ${attachment.name}`}>
+                    <div key={attachment.id} className="flex max-w-full items-center gap-1 rounded-lg border border-cyan-500/30 bg-cyan-500/10 px-1.5 py-1 text-xs text-cyan-100">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setSelectedAttachmentId(attachment.id);
+                          setShowDocumentPreview(true);
+                        }}
+                        className="min-h-12 max-w-[12rem] truncate rounded-md px-2 text-left text-cyan-100"
+                        title={`Preview ${attachment.name}`}
+                      >
+                        {attachment.name}
+                      </button>
+                      <button type="button" onClick={() => {
+                        setAttachments((current) => current.filter((item) => item.id !== attachment.id));
+                        setSelectedAttachmentId((current) => current === attachment.id ? (attachments.find((item) => item.id !== attachment.id)?.id ?? null) : current);
+                      }} className="min-h-12 min-w-12 rounded-md text-cyan-300" aria-label={`Remove ${attachment.name}`}>
                         ×
                       </button>
-                    </span>
+                    </div>
                   ))}
+                </div>
+              )}
+              {attachments.length > 0 && (
+                <div className="mx-3 mt-3 flex items-center justify-between gap-3 rounded-xl border border-slate-800 bg-slate-950/60 px-3 py-2">
+                  <div className="min-w-0">
+                    <p className="text-xs font-semibold text-slate-300">Read every section</p>
+                    <p className="mt-1 text-[11px] leading-5 text-slate-500">Use full-document processing for summaries, themes, and transcript-wide analysis.</p>
+                  </div>
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={processEntireDocument}
+                    onClick={() => setProcessEntireDocument((current) => !current)}
+                    className={`min-h-12 shrink-0 rounded-xl border px-3 text-xs font-bold ${processEntireDocument ? "border-cyan-400/60 bg-cyan-400/15 text-cyan-200" : "border-slate-700 text-slate-400"}`}
+                  >
+                    {processEntireDocument ? "On" : "Off"}
+                  </button>
                 </div>
               )}
               {attachmentError && (
@@ -1098,10 +1374,10 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
               />
               <div className="flex items-center justify-between gap-3 px-3 pb-2">
                 <div className="flex min-w-0 items-center gap-2">
-                  <button type="button" onClick={() => fileInputRef.current?.click()} disabled={loading} className="min-h-12 min-w-12 rounded-xl border border-slate-700 px-3 text-xs font-semibold text-slate-300 disabled:opacity-40" aria-label="Attach a text file">
+                  <button type="button" onClick={() => fileInputRef.current?.click()} disabled={loading} className="min-h-12 min-w-12 rounded-xl border border-slate-700 px-3 text-xs font-semibold text-slate-300 disabled:opacity-40" aria-label="Attach a document">
                     +
                   </button>
-                  <p className="truncate text-[11px] text-slate-500">Enter to send · Shift+Enter for a new line · drop or paste text files</p>
+                  <p className="truncate text-[11px] text-slate-500">Enter to send · Shift+Enter for a new line · add text, HTML, or PDF</p>
                 </div>
                 <button
                   type="button"
@@ -1128,6 +1404,81 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
             <button type="button" onClick={() => void clearConversation()} className="min-h-12 shrink-0 rounded-xl border border-slate-700 px-3 text-xs font-semibold text-slate-400">Clear history</button>
           </div>
         </div>
+
+        <div className="mb-6 border-b border-slate-800 pb-5">
+          <div className="flex items-center justify-between gap-3">
+            <p className="text-xs font-semibold uppercase tracking-widest text-slate-500">Saved chats</p>
+            <button type="button" onClick={() => void startNewConversation()} disabled={loading} className="min-h-12 rounded-xl bg-cyan-400 px-3 text-xs font-bold text-slate-950 disabled:opacity-40">
+              New chat
+            </button>
+          </div>
+          <button
+            type="button"
+            onClick={() => setShowChatHistory((current) => !current)}
+            className="mt-2 flex min-h-12 w-full items-center justify-between rounded-xl border border-slate-700 px-3 text-left text-xs font-semibold text-slate-300"
+          >
+            <span>{chatHistory.length === 0 ? "No saved chats yet" : `${chatHistory.length} saved chat${chatHistory.length === 1 ? "" : "s"}`}</span>
+            <span className="text-cyan-300">{showChatHistory ? "Hide" : "Show"}</span>
+          </button>
+          {showChatHistory && chatHistory.length > 0 && (
+            <div className="mt-2 max-h-[35dvh] space-y-2 overflow-y-auto">
+              {chatHistory.map((chat) => (
+                <div key={chat.id} className={`rounded-xl border p-2 ${chat.id === activeConversationKey ? "border-cyan-400/50 bg-cyan-400/10" : "border-slate-800 bg-slate-900/60"}`}>
+                  <button type="button" onClick={() => openSavedConversation(chat.id)} className="min-h-12 w-full truncate px-1 text-left text-sm font-semibold text-slate-200">
+                    {chat.title}
+                  </button>
+                  <div className="flex items-center justify-between gap-2 px-1">
+                    <p className="truncate text-[10px] text-slate-500">
+                      {chat.messageCount} message{chat.messageCount === 1 ? "" : "s"} · {new Date(chat.updatedAt).toLocaleDateString()}
+                    </p>
+                    <div className="flex shrink-0 gap-1">
+                      <button type="button" onClick={() => void renameSavedConversation(chat)} className="min-h-12 min-w-12 rounded-lg text-[10px] font-semibold text-slate-400" aria-label={`Rename ${chat.title}`}>Rename</button>
+                      <button type="button" onClick={() => void removeSavedConversation(chat.id)} className="min-h-12 min-w-12 rounded-lg text-[10px] font-semibold text-rose-300" aria-label={`Delete ${chat.title}`}>Delete</button>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {attachments.length > 0 && (
+          <div className="mb-6 border-b border-slate-800 pb-5">
+            <div className="flex items-center justify-between gap-3">
+              <p className="text-xs font-semibold uppercase tracking-widest text-slate-500">Documents</p>
+              {selectedAttachment && (
+                <button type="button" onClick={() => setShowDocumentPreview((current) => !current)} className="min-h-12 rounded-lg border border-slate-700 px-3 text-[11px] font-semibold text-cyan-300">
+                  {showDocumentPreview ? "Hide preview" : "View preview"}
+                </button>
+              )}
+            </div>
+            <div className="mt-2 space-y-1">
+              {attachments.map((attachment) => (
+                <button
+                  key={attachment.id}
+                  type="button"
+                  onClick={() => {
+                    setSelectedAttachmentId(attachment.id);
+                    setShowDocumentPreview(true);
+                  }}
+                  className={`flex min-h-12 w-full items-center justify-between gap-2 rounded-xl border px-3 text-left text-xs ${selectedAttachmentId === attachment.id ? "border-cyan-400/50 bg-cyan-400/10 text-cyan-100" : "border-slate-800 text-slate-400"}`}
+                >
+                  <span className="truncate">{attachment.name}</span>
+                  <span className="shrink-0 uppercase text-[10px] text-slate-500">{attachment.kind}</span>
+                </button>
+              ))}
+            </div>
+            {showDocumentPreview && selectedAttachment && (
+              <div className="mt-3">
+                <div className="mb-2 flex items-center justify-between gap-2">
+                  <p className="truncate text-xs font-semibold text-slate-300">{selectedAttachment.name}</p>
+                  <button type="button" onClick={() => setShowDocumentPreview(false)} className="min-h-12 min-w-12 rounded-lg text-slate-400" aria-label="Close document preview">×</button>
+                </div>
+                <DocumentPreview attachment={selectedAttachment} />
+              </div>
+            )}
+          </div>
+        )}
 
         <p className="block text-xs font-semibold uppercase tracking-widest text-slate-500">Context</p>
         <div className="mt-2 grid grid-cols-3 gap-2">
