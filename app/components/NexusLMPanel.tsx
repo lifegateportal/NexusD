@@ -1630,7 +1630,7 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
               {attachmentError && (
                 <p className="px-3 pt-2 text-xs text-amber-300" role="alert">{attachmentError}</p>
               )}
-              <div className="px-2 pb-2 pt-2 lg:flex lg:items-end lg:gap-2 lg:px-3">
+              <div className="px-2 pb-2 pt-2 lg:px-3">
                 <textarea
                   ref={inputRef}
                   value={input}
@@ -1645,9 +1645,9 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
                   placeholder={useBookContext ? "Ask NexusLM about your book, or switch to General..." : "Ask NexusLM anything..."}
                   disabled={loading}
                   rows={1}
-                  className="block min-h-12 w-full resize-none rounded-xl border-0 bg-transparent px-2 py-3 text-base leading-6 text-slate-100 outline-none placeholder:text-slate-600 focus:ring-0 lg:min-h-12 lg:min-w-[8rem] lg:flex-1 lg:px-3"
+                  className="block min-h-12 w-full resize-none rounded-xl border-0 bg-transparent px-2 py-3 text-base leading-6 text-slate-100 outline-none placeholder:text-slate-600 focus:ring-0 lg:min-h-[4.5rem] lg:px-4"
                 />
-                <div className="mt-2 flex min-w-0 items-center gap-2 lg:mt-0 lg:shrink-0">
+                <div className="mt-2 flex min-w-0 items-center gap-2">
                   <div className="flex min-w-0 flex-1 items-center gap-2 overflow-x-auto">
                     <span className="hidden shrink-0 px-1 text-[10px] font-bold uppercase tracking-widest text-slate-500 xl:block">Context</span>
                     <div className="flex shrink-0 rounded-xl border border-slate-800 bg-slate-950/70 p-1" role="group" aria-label="Conversation context">
