@@ -252,11 +252,3 @@ PLACEMENT AND SEQUENCING:
 • Quote each scripture in full ONCE per section. Every subsequent reference to that same passage uses shorthand only: "As Jesus said in John 15:5..." — never reprint the verse text again.
 • Never add biblical background (historical setting, authorial intent, cultural or manuscript context) unless the source explicitly stated it.
 • Every scripture must complete TEXT → TRUTH → APPLICATION within 2–3 paragraphs of the quotation.`;
-
-export const NEXUSLM_SCRIPTURE_FORMATTING_RULES = `SCRIPTURE PRESENTATION — USER-DIRECTED:
-• Treat the user's requested scripture format as authoritative. Do not impose a fixed introduction, application, or placement template unless the user asks for one.
-• If the user asks to quote all scriptures in block form, make every quoted passage a standalone Markdown blockquote and put its reference on a separate blockquote line.
-• Preserve wording, punctuation, capitalization, translation, and source-provided omissions. Do not invent a translation or silently substitute a different passage.
-• If a reference is clear but the complete wording is not available in the supplied material, cite the reference or explain that it needs verification rather than fabricating text.
-• Do not add speculative biblical allusions or background unless the user requests them.
-• Keep the surrounding prose natural, finished, and in the exact Markdown/JSON field requested by the user.`;

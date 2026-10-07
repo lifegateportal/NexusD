@@ -4,7 +4,8 @@ import { z } from "zod";
 import { deepSeekModel, deepSeekReasonerModel } from "@/lib/ai-providers";
 import { EM_DASH_MINIMIZATION_RULES } from "@/lib/editorial-style-bible";
 import { ChapterDraftSchema } from "@/lib/schemas/ebook";
-import { normalizeScriptureBlockquotes, NEXUSLM_SCRIPTURE_FORMATTING_RULES } from "@/lib/scripture-formatter";
+import { normalizeScriptureBlockquotes, SCRIPTURE_FORMATTING_RULES } from "@/lib/scripture-formatter";
+import { completeScriptureBlockquotes } from "@/lib/scripture-verse";
 import { NexusLMWritingStyleSchema, NEXUSLM_WRITING_STYLES } from "@/lib/nexuslm-writing-styles";
 import { NexusLMAgentSchema } from "@/lib/nexuslm-agents";
 import { NexusLMResponseLengthSchema, NEXUSLM_RESPONSE_LENGTHS, sanitizeNexusLMText } from "@/lib/nexuslm-response";
@@ -66,7 +67,8 @@ The JSON wrapper is transport only. Inside each section body, prioritize the sam
   CHAPTER OPENING PLACEMENT: Leave the ChapterDraft intro field empty. Do not write a separate premise, overview, thesis summary, or chapter-preview block before the body. The actual chapter introduction belongs in the opening paragraphs of Section 1, written as finished reader-facing prose that enters the chapter's material directly. Section 1 must begin with the chapter body, not planning language or a summary of what the chapter will discuss.
   SERIES-SERMON TO BOOK TRANSFORMATION: Sermon transcripts may recap earlier messages. Treat that recap as source context, not as mandatory chapter-opening material. Do not open with "last week," "as we saw," "continuing this series," or a replay of an earlier chapter. If the recap helps orient the reader, compress it into the shortest useful bridge and pivot quickly to this chapter's new movement. Write for a reader who may not have attended the sermon, and do not make the book repeat live-series catch-up.
   ${EM_DASH_MINIMIZATION_RULES}
-${NEXUSLM_SCRIPTURE_FORMATTING_RULES}
+  SCRIPTURE OUTPUT CONTRACT: Every Scripture quotation in the introduction, epigraph, section bodies, takeaways, or reflection questions must be a standalone Markdown blockquote with its reference on the next blockquote line. Never place quoted Scripture inline in a prose sentence.
+${SCRIPTURE_FORMATTING_RULES}
 Return a complete ChapterDraft object. The sections must contain readable prose in the body field, not planning notes. ${responseLength.instruction}
 Do not expose source IDs, slot labels, retrieval markers, or internal routing labels in any field. Use standalone blockquotes for Scripture exactly as required above.`;
     const prompt = `RESPONSE LENGTH: ${responseLength.label}. ${responseLength.instruction}
@@ -98,7 +100,7 @@ Return JSON only.`;
       prompt,
     });
     let sections = await Promise.all(object.sections.map(async (section, index) => {
-      const body = normalizeScriptureBlockquotes(sanitizeNexusLMText(section.body.trim()));
+      const body = await completeScriptureBlockquotes(normalizeScriptureBlockquotes(sanitizeNexusLMText(section.body.trim())));
       return {
         chapterNumber: input.chapterNumber,
         sectionNumber: section.sectionNumber || index + 1,
@@ -111,17 +113,19 @@ Return JSON only.`;
     if (sections.length === 0 || sections.every((section) => !section.body.trim())) {
       throw new Error("The selected model returned no usable chapter sections.");
     }
-    const normalizeText = (value: string) => normalizeScriptureBlockquotes(sanitizeNexusLMText(value));
+    const completeText = (value: string) => completeScriptureBlockquotes(
+      normalizeScriptureBlockquotes(sanitizeNexusLMText(value))
+    );
     const normalizedCandidate = {
       ...object,
       number: input.chapterNumber,
       title: sanitizeNexusLMText(object.title.trim()) || `Chapter ${input.chapterNumber}`,
       intro: "",
-      epigraph: normalizeText(object.epigraph.trim()),
+      epigraph: await completeText(object.epigraph.trim()),
       sections,
-      forwardQuestion: normalizeText(object.forwardQuestion.trim()),
-      keyTakeaways: object.keyTakeaways.map((value) => normalizeText(String(value))),
-      reflectionQuestions: object.reflectionQuestions.map((value) => normalizeText(String(value))),
+      forwardQuestion: await completeText(object.forwardQuestion.trim()),
+      keyTakeaways: await Promise.all(object.keyTakeaways.map((value) => completeText(String(value)))),
+      reflectionQuestions: await Promise.all(object.reflectionQuestions.map((value) => completeText(String(value)))),
       totalWordCount: sections.reduce((sum, section) => sum + section.wordCount, 0),
       status: "complete" as const,
     };

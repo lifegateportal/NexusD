@@ -7,7 +7,8 @@ import { ChapterDraftSchema, FrontBackMatterSchema } from "@/lib/schemas/ebook";
 import { NexusLMWritingStyleSchema, NEXUSLM_WRITING_STYLES } from "@/lib/nexuslm-writing-styles";
 import { NexusLMAgentSchema } from "@/lib/nexuslm-agents";
 import { NexusLMResponseLengthSchema, NEXUSLM_RESPONSE_LENGTHS, sanitizeNexusLMText } from "@/lib/nexuslm-response";
-import { normalizeScriptureBlockquotes, NEXUSLM_SCRIPTURE_FORMATTING_RULES } from "@/lib/scripture-formatter";
+import { normalizeScriptureBlockquotes, SCRIPTURE_FORMATTING_RULES } from "@/lib/scripture-formatter";
+import { completeScriptureBlockquotes } from "@/lib/scripture-verse";
 
 export const runtime = "nodejs";
 export const maxDuration = 90;
@@ -210,7 +211,7 @@ The requested presentation form is ${writingStyle.label}: ${writingStyle.instruc
     Use the sources for grounding, but never expose source IDs, slot labels, bracketed retrieval markers, or internal routing labels in the final answer. If the supplied excerpts do not support a factual claim, say so. Do not fabricate quotations.
   ${modeInstruction}
   ${EM_DASH_MINIMIZATION_RULES}
-  ${NEXUSLM_SCRIPTURE_FORMATTING_RULES}`,
+  ${SCRIPTURE_FORMATTING_RULES}`,
       prompt: `RESPONSE LENGTH: ${responseLength.label}. ${responseLength.instruction}
 
 CHAPTER OUTLINE:\n${chapterContext || "No chapter outline available."}\n\nTRANSCRIPT SOURCES:\n${sourceContext}\n\nRECENT CONVERSATION:\n${history || "None"}\n\nUSER QUESTION:\n${input.query}
@@ -223,7 +224,7 @@ CHAPTER OUTLINE:\n${chapterContext || "No chapter outline available."}\n\nTRANSC
     });
     if (!text.trim()) throw new Error("The selected model returned an empty response.");
 
-    const answer = normalizeScriptureBlockquotes(sanitizeNexusLMText(text));
+    const answer = await completeScriptureBlockquotes(normalizeScriptureBlockquotes(sanitizeNexusLMText(text)));
     if (!answer) {
       return NextResponse.json({ error: "The reasoning model returned no final vetting response. Please try again." }, { status: 502 });
     }
