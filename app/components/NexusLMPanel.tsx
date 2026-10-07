@@ -45,6 +45,7 @@ type Message = {
 };
 type Source = { id: string; label: string; excerpt: string };
 type ChatAttachment = NexusLMChatAttachment;
+type PreviewDocument = Pick<ChatAttachment, "name" | "content" | "kind" | "previewDataUrl">;
 type GeneralRequest = {
   instruction: string;
   mode: "ask" | "socratic" | "plan";
@@ -244,31 +245,47 @@ function renderInlineMarkdown(text: string) {
   });
 }
 
-function renderAssistantContent(content: string, markdown = false) {
+function renderAssistantContent(content: string, markdown = false, onPreviewHtml?: (content: string) => void) {
   const lines = content.split("\n");
   const rendered: ReactNode[] = [];
   let codeLines: string[] = [];
+  let codeLanguage = "";
   let inCodeBlock = false;
 
   const pushCodeBlock = (key: string) => {
     const code = codeLines.join("\n");
+    const isHtmlCode = /^(?:html?|xhtml)$/i.test(codeLanguage) || looksLikeHtmlDocument(code);
     rendered.push(
       <div key={key} className="my-3 overflow-hidden rounded-xl border border-slate-700 bg-slate-950">
         <div className="flex items-center justify-between border-b border-slate-800 px-3 py-2">
-          <span className="text-[10px] font-semibold uppercase tracking-widest text-slate-500">Code</span>
-          <CopyMessageButton content={code} />
+          <span className="text-[10px] font-semibold uppercase tracking-widest text-slate-500">{isHtmlCode ? "HTML" : codeLanguage || "Code"}</span>
+          <div className="flex items-center gap-2">
+            {isHtmlCode && onPreviewHtml && (
+              <button
+                type="button"
+                onClick={() => onPreviewHtml(code)}
+                className="min-h-12 rounded-lg border border-cyan-400/40 px-3 text-[11px] font-semibold text-cyan-200"
+              >
+                Preview
+              </button>
+            )}
+            <CopyMessageButton content={code} />
+          </div>
         </div>
         <pre className="overflow-x-auto p-4 text-xs leading-6 text-slate-200"><code>{code}</code></pre>
       </div>,
     );
     codeLines = [];
+    codeLanguage = "";
   };
 
   lines.forEach((line, index) => {
     const raw = line.trim();
-    if (markdown && raw.startsWith("```")) {
+    if (raw.startsWith("```")) {
       if (inCodeBlock) {
         pushCodeBlock(`code-${index}`);
+      } else {
+        codeLanguage = raw.slice(3).trim().split(/\s+/)[0].toLowerCase();
       }
       inCodeBlock = !inCodeBlock;
       return;
@@ -330,13 +347,13 @@ function looksLikeHtmlDocument(content: string): boolean {
     || (/<head(?:\s[^>]*)?>/i.test(start) && /<body(?:\s[^>]*)?>/i.test(content));
 }
 
-function attachmentKind(attachment: ChatAttachment): ChatAttachment["kind"] {
+function attachmentKind(attachment: Pick<ChatAttachment, "kind" | "content">): ChatAttachment["kind"] {
   return attachment.kind === "text" && looksLikeHtmlDocument(attachment.content)
     ? "html"
     : attachment.kind;
 }
 
-function DocumentPreview({ attachment }: { attachment: ChatAttachment }) {
+function DocumentPreview({ attachment }: { attachment: PreviewDocument }) {
   const kind = attachmentKind(attachment);
 
   if (kind === "pdf") {
@@ -391,7 +408,9 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
   const [attachmentError, setAttachmentError] = useState<string | null>(null);
   const [lastGeneralRequest, setLastGeneralRequest] = useState<GeneralRequest | null>(null);
   const [selectedAttachmentId, setSelectedAttachmentId] = useState<string | null>(null);
+  const [generatedPreview, setGeneratedPreview] = useState<PreviewDocument | null>(null);
   const [showDocumentPreview, setShowDocumentPreview] = useState(false);
+  const [previewExpanded, setPreviewExpanded] = useState(false);
   const [sources, setSources] = useState<Source[]>([]);
   const [pendingEdit, setPendingEdit] = useState<PendingEdit | null>(null);
   const [pendingDraft, setPendingDraft] = useState<ChapterDraft | null>(null);
@@ -449,7 +468,9 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
         setAttachments(archive?.attachments ?? []);
         setProcessEntireDocument(false);
         setSelectedAttachmentId(archive?.attachments?.[0]?.id ?? null);
+        setGeneratedPreview(null);
         setShowDocumentPreview(false);
+        setPreviewExpanded(false);
         setLastGeneralRequest(null);
         historyLoadedRef.current = true;
       })
@@ -502,9 +523,11 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
       setAttachments([]);
       setProcessEntireDocument(false);
       setSelectedAttachmentId(null);
+      setGeneratedPreview(null);
       setLastGeneralRequest(null);
       setAttachmentError(null);
       setShowDocumentPreview(false);
+      setPreviewExpanded(false);
       setShowChatHistory(false);
     } catch (error) {
       setAttachmentError(`New chat could not be created: ${readableError(error)}`);
@@ -518,7 +541,9 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
     }
     historyLoadedRef.current = false;
     setActiveConversationKey(id);
+    setGeneratedPreview(null);
     setShowDocumentPreview(false);
+    setPreviewExpanded(false);
     setShowChatHistory(false);
   }
 
@@ -624,6 +649,28 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
   }
 
   const selectedAttachment = attachments.find((attachment) => attachment.id === selectedAttachmentId) ?? null;
+  const previewDocument = generatedPreview ?? selectedAttachment;
+
+  function openAttachmentPreview(id: string): void {
+    if (!attachments.some((attachment) => attachment.id === id)) return;
+    setGeneratedPreview(null);
+    setSelectedAttachmentId(id);
+    setShowDocumentPreview(true);
+    setShowMobileContext(true);
+  }
+
+  function openGeneratedHtmlPreview(content: string): void {
+    const preview: PreviewDocument = {
+      name: "Generated HTML",
+      content,
+      kind: "html",
+    };
+    setGeneratedPreview(preview);
+    setSelectedAttachmentId(null);
+    setShowDocumentPreview(true);
+    setPreviewExpanded(true);
+    setShowMobileContext(true);
+  }
 
   async function streamGeneralResponse(
     instruction: string,
@@ -1133,11 +1180,7 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
                           <button
                             key={attachment.id}
                             type="button"
-                            onClick={() => {
-                              if (!attachments.some((item) => item.id === attachment.id)) return;
-                              setSelectedAttachmentId(attachment.id);
-                              setShowDocumentPreview(true);
-                            }}
+                            onClick={() => openAttachmentPreview(attachment.id)}
                             className="min-h-12 max-w-full rounded-lg border border-cyan-500/30 px-3 text-[11px] font-semibold text-cyan-200"
                           >
                             {attachment.name}
@@ -1160,7 +1203,7 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
                   </>
                 ) : message.role === "assistant" ? (
                   <>
-                    {renderAssistantContent(message.content, message.format === "markdown")}
+                    {renderAssistantContent(message.content, message.format === "markdown", openGeneratedHtmlPreview)}
                     {message.content.trim() && (
                       <div className="mt-3 flex justify-end">
                         <CopyMessageButton content={message.content} />
@@ -1334,10 +1377,7 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
                     <div key={attachment.id} className="flex max-w-full items-center gap-1 rounded-lg border border-cyan-500/30 bg-cyan-500/10 px-1.5 py-1 text-xs text-cyan-100">
                       <button
                         type="button"
-                        onClick={() => {
-                          setSelectedAttachmentId(attachment.id);
-                          setShowDocumentPreview(true);
-                        }}
+                        onClick={() => openAttachmentPreview(attachment.id)}
                         className="min-h-12 max-w-[12rem] truncate rounded-md px-2 text-left text-cyan-100"
                         title={`Preview ${attachment.name}`}
                       >
@@ -1410,7 +1450,16 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
         </div>
       </section>
 
-      <aside className={`${showMobileContext ? "absolute inset-x-0 bottom-0 top-12 z-20 block" : "hidden"} max-h-[70dvh] w-full shrink-0 overflow-y-auto border-t border-slate-800 bg-shell-950 p-4 shadow-2xl lg:static lg:inset-auto lg:z-auto lg:block lg:max-h-none lg:w-[22rem] lg:border-t-0 lg:p-6 lg:shadow-none`}>
+      <aside className={`${showMobileContext ? "absolute inset-x-0 bottom-0 top-12 z-20 block" : "hidden"} ${previewExpanded ? "max-h-[90dvh]" : "max-h-[70dvh]"} relative w-full shrink-0 overflow-y-auto border-t border-slate-800 bg-shell-950 p-4 shadow-2xl lg:static lg:inset-auto lg:z-auto lg:block lg:max-h-none lg:border-t-0 lg:p-6 lg:shadow-none ${previewExpanded ? "lg:w-[min(62vw,52rem)]" : "lg:w-[22rem]"}`}>
+        <button
+          type="button"
+          onClick={() => setPreviewExpanded((current) => !current)}
+          className="absolute left-2 top-1/2 z-30 hidden min-h-12 min-w-12 -translate-y-1/2 items-center justify-center rounded-full border border-slate-700 bg-shell-950 text-lg text-cyan-300 shadow-xl lg:flex"
+          aria-label={previewExpanded ? "Collapse preview panel" : "Expand preview panel"}
+          title={previewExpanded ? "Collapse preview panel" : "Expand preview panel"}
+        >
+          {previewExpanded ? "⤡" : "⤢"}
+        </button>
         <div className="mb-6">
           <div className="flex items-start justify-between gap-3">
             <div>
@@ -1459,25 +1508,35 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
           )}
         </div>
 
-        {attachments.length > 0 && (
+        {(attachments.length > 0 || generatedPreview) && (
           <div className="mb-6 border-b border-slate-800 pb-5">
             <div className="flex items-center justify-between gap-3">
-              <p className="text-xs font-semibold uppercase tracking-widest text-slate-500">Documents</p>
-              {selectedAttachment && (
+              <p className="text-xs font-semibold uppercase tracking-widest text-slate-500">{generatedPreview ? "Preview" : "Documents"}</p>
+              {previewDocument && (
                 <button type="button" onClick={() => setShowDocumentPreview((current) => !current)} className="min-h-12 rounded-lg border border-slate-700 px-3 text-[11px] font-semibold text-cyan-300">
                   {showDocumentPreview ? "Hide preview" : "View preview"}
                 </button>
               )}
             </div>
             <div className="mt-2 space-y-1">
+              {generatedPreview && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowDocumentPreview(true);
+                    setShowMobileContext(true);
+                  }}
+                  className="flex min-h-12 w-full items-center justify-between gap-2 rounded-xl border border-cyan-400/50 bg-cyan-400/10 px-3 text-left text-xs text-cyan-100"
+                >
+                  <span className="truncate">{generatedPreview.name}</span>
+                  <span className="shrink-0 uppercase text-[10px] text-slate-500">HTML</span>
+                </button>
+              )}
               {attachments.map((attachment) => (
                 <button
                   key={attachment.id}
                   type="button"
-                  onClick={() => {
-                    setSelectedAttachmentId(attachment.id);
-                    setShowDocumentPreview(true);
-                  }}
+                  onClick={() => openAttachmentPreview(attachment.id)}
                   className={`flex min-h-12 w-full items-center justify-between gap-2 rounded-xl border px-3 text-left text-xs ${selectedAttachmentId === attachment.id ? "border-cyan-400/50 bg-cyan-400/10 text-cyan-100" : "border-slate-800 text-slate-400"}`}
                 >
                   <span className="truncate">{attachment.name}</span>
@@ -1485,13 +1544,18 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
                 </button>
               ))}
             </div>
-            {showDocumentPreview && selectedAttachment && (
+            {showDocumentPreview && previewDocument && (
               <div className="mt-3">
                 <div className="mb-2 flex items-center justify-between gap-2">
-                  <p className="truncate text-xs font-semibold text-slate-300">{selectedAttachment.name}</p>
-                  <button type="button" onClick={() => setShowDocumentPreview(false)} className="min-h-12 min-w-12 rounded-lg text-slate-400" aria-label="Close document preview">×</button>
+                  <p className="truncate text-xs font-semibold text-slate-300">{previewDocument.name}</p>
+                  <div className="flex items-center gap-1">
+                    <button type="button" onClick={() => setPreviewExpanded((current) => !current)} className="min-h-12 rounded-lg border border-slate-700 px-3 text-[11px] font-semibold text-cyan-300 lg:hidden">
+                      {previewExpanded ? "Collapse" : "Expand"}
+                    </button>
+                    <button type="button" onClick={() => setShowDocumentPreview(false)} className="min-h-12 min-w-12 rounded-lg text-slate-400" aria-label="Close document preview">×</button>
+                  </div>
                 </div>
-                <DocumentPreview attachment={selectedAttachment} />
+                <DocumentPreview attachment={previewDocument} />
               </div>
             )}
           </div>
