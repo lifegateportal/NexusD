@@ -6,7 +6,8 @@ import { NEXUSLM_SCRIPTURE_FORMATTING_RULES } from "@/lib/scripture-formatter";
 import { getEbookModel, getEbookTemperature } from "@/lib/ebook-model-selector";
 import { finalizeNexusLMScripture } from "@/lib/scripture-verse";
 import { NEXUSLM_WRITING_STYLES } from "@/lib/nexuslm-writing-styles";
-import { sanitizeNexusLMText } from "@/lib/nexuslm-response";
+import { NEXUSLM_RESPONSE_LENGTHS, sanitizeNexusLMText } from "@/lib/nexuslm-response";
+import { VoiceDNASchema } from "@/lib/schemas/ebook";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
@@ -22,6 +23,7 @@ const RequestSchema = z.object({
   targetAudience: z.string().max(500).optional().default(""),
   coreThesis: z.string().max(2000).optional().default(""),
   voiceTone: z.string().max(500).optional().default(""),
+  voiceDNA: VoiceDNASchema.optional(),
   authorInstructions: z.string().max(4000).optional().default(""),
   desiredChapters: z.number().int().min(3).max(12).optional().default(6),
   oneChapterPerSlot: z.boolean().optional().default(true),
@@ -40,12 +42,22 @@ const SectionSchema = z.object({
 const ChapterSchema = z.object({
   number: z.number().int().positive(),
   title: z.string().default(""),
+  intro: z.string().default(""),
+  epigraph: z.string().default(""),
   sections: z.array(SectionSchema).default([]),
+  forwardQuestion: z.string().default(""),
+  keyTakeaways: z.array(z.string()).default([]),
+  reflectionQuestions: z.array(z.string()).default([]),
 });
 
 const SlotChapterSchema = z.object({
   title: z.string().default(""),
+  intro: z.string().default(""),
+  epigraph: z.string().default(""),
   sections: z.array(SectionSchema).default([]),
+  forwardQuestion: z.string().default(""),
+  keyTakeaways: z.array(z.string()).default([]),
+  reflectionQuestions: z.array(z.string()).default([]),
 });
 
 const SimpleBookSchema = z.object({
@@ -81,6 +93,27 @@ type UncoveredTeachingBlock = {
   wordCount: number;
   excerpt: string;
 };
+
+function voiceDnaBlock(
+  voiceDNA: z.infer<typeof VoiceDNASchema> | undefined,
+  fallbackTone: string,
+): string {
+  if (!voiceDNA && !fallbackTone.trim()) return "";
+  return `\n\nVOICE DNA — APPLY THROUGHOUT THE MANUSCRIPT:
+- Tone: ${voiceDNA?.toneProfile || fallbackTone || "warm, clear, and reader-facing"}
+- Sentence pattern: ${voiceDNA?.sentencePattern || "mixed"}
+- Teaching style: ${voiceDNA?.teachingStyle || "develop ideas through concrete movement and reflection"}
+- Pacing fingerprint: ${voiceDNA?.pacingFingerprint || "build deliberately toward meaningful landings"}
+- Narrative device: ${voiceDNA?.narrativeDevice || "use specific moments to carry the teaching"}
+- Emotional arc: ${voiceDNA?.emotionalArc || "move from honest tension toward grounded hope"}
+- Opening pattern: ${voiceDNA?.openingPattern || "enter through a concrete moment or compelling question"}
+- Closing pattern: ${voiceDNA?.closingPattern || "land the section with a memorable implication or invitation"}
+- Preferred terminology: ${(voiceDNA?.preferredTerminology ?? []).slice(0, 10).join(", ") || "Use the source's natural vocabulary"}
+- Signature phrases: ${(voiceDNA?.signaturePhrases ?? []).slice(0, 8).join(" | ") || "Use distinctive source language only when natural"}
+- Avoid words: ${(voiceDNA?.avoidWords ?? []).slice(0, 20).join(", ") || "None recorded"}
+- Avoid structures: ${(voiceDNA?.avoidStructures ?? []).slice(0, 10).join(" | ") || "None recorded"}
+- Preserve the author's distinctive voice without copying long transcript passages verbatim.`;
+}
 
 function nonEmptySubtitle(targetAudience: string, coreThesis: string): string {
   const audience = targetAudience.trim();
@@ -308,6 +341,8 @@ function normalizeSlotChapter(object: z.infer<typeof SlotChapterSchema>, chapter
   return {
     number: chapterNumber,
     title: (object.title || `Chapter ${chapterNumber}`).trim(),
+    intro: object.intro || "",
+    epigraph: object.epigraph || "",
     sections: (object.sections ?? [])
       .filter((section) => (section.body || "").trim().length > 0)
       .map((section, sectionIndex) => ({
@@ -316,6 +351,9 @@ function normalizeSlotChapter(object: z.infer<typeof SlotChapterSchema>, chapter
         heading: (section.heading || `Section ${sectionIndex + 1}`).trim(),
         body: section.body || "",
       })),
+    forwardQuestion: object.forwardQuestion || "",
+    keyTakeaways: object.keyTakeaways ?? [],
+    reflectionQuestions: object.reflectionQuestions ?? [],
   };
 }
 
@@ -341,7 +379,12 @@ async function normalizeGeneratedChapter(
   return {
     number: chapterNumber,
     title: sanitizeNexusLMText(object.title.trim()) || `Chapter ${chapterNumber}`,
+    intro: await normalizeGeneratedText(object.intro ?? "", instruction),
+    epigraph: await normalizeGeneratedText(object.epigraph ?? "", instruction),
     sections: sections.filter((section) => section.body.trim().length > 0),
+    forwardQuestion: await normalizeGeneratedText(object.forwardQuestion ?? "", instruction),
+    keyTakeaways: await Promise.all((object.keyTakeaways ?? []).map((value) => normalizeGeneratedText(String(value), instruction))),
+    reflectionQuestions: await Promise.all((object.reflectionQuestions ?? []).map((value) => normalizeGeneratedText(String(value), instruction))),
   };
 }
 
@@ -392,7 +435,9 @@ export async function POST(req: NextRequest) {
 
   const usingSlots = input.oneChapterPerSlot && slotBlocks.length > 0;
   const transcriptForPrompt = usingSlots ? "" : input.rawTranscript;
-  const maxTokens = 24000;
+  const responseLength = NEXUSLM_RESPONSE_LENGTHS["long-form"];
+  const maxTokens = responseLength.draftTokens;
+  const voiceProfile = voiceDnaBlock(input.voiceDNA, input.voiceTone);
 
   const system = `Return only one valid JSON object matching the active schema. Do not wrap it in markdown fences and do not include reasoning outside the JSON object.
 You are NexusLM, a professional book ghostwriter.
@@ -400,6 +445,7 @@ Presentation form: ${NEXUSLM_WRITING_STYLES["book-prose"].label}. ${NEXUSLM_WRIT
 The source material constrains factual, theological, biographical, and scriptural truth, but it does not constrain your creative judgment about the chapter's title, introduction, section architecture, body prose, transitions, emphasis, or ending. Do not treat an existing outline, manuscript chapter, chapter premise, key point, or prior wording as mandatory. Choose the strongest material and shape a coherent chapter freely.
 You may create original framing, synthesis, transitions, imagery, rhetorical movement, and reader-facing introduction when these clarify and develop ideas supported by the sources. Do not invent concrete facts, quotations, scripture references, testimonies, doctrine, or claims that the sources do not support.
 Write polished reader-facing book prose and remove live-audience language. Trust your editorial judgment about what the chapter needs instead of mechanically preserving transcript order or filling a predetermined premise.
+The JSON wrapper is transport only. Inside each chapter field, prioritize the same finished, immersive, reader-facing quality as a strong NexusLM chapter draft. Develop the material with specific transitions, varied rhythm, concrete supported detail, meaningful emphasis, and a satisfying ending. Do not compress chapters into notes, generic advice, transcript commentary, or a thin summary merely because the response must be valid JSON.
 CHAPTER OPENING PLACEMENT: Do not write a separate premise, overview, thesis summary, or chapter-preview block before the body. The actual chapter introduction belongs in the opening paragraphs of Section 1, written as finished reader-facing prose that enters the chapter's material directly. Section 1 must begin with the chapter body, not planning language or a summary of what the chapter will discuss.
 SERIES-SERMON TO BOOK TRANSFORMATION: Sermon transcripts may recap earlier messages. Treat that recap as source context, not as mandatory chapter-opening material. Do not open with "last week," "as we saw," "continuing this series," or a replay of an earlier chapter. If the recap helps orient the reader, compress it into the shortest useful bridge and pivot quickly to this chapter's new movement. Write for a reader who may not have attended the sermon, and do not make the book repeat live-series catch-up.
 
@@ -408,7 +454,8 @@ NON-NEGOTIABLE BOOK RULE:
 
 ${EM_DASH_MINIMIZATION_RULES}
 ${NEXUSLM_SCRIPTURE_FORMATTING_RULES}
-Return a complete source-grounded book object. Its sections must contain readable prose in the body field, not planning notes, generic advice, transcript commentary, or a thin summary. Do not expose source IDs, slot labels, retrieval markers, or internal routing labels in any field.`;
+${voiceProfile}
+Return a complete source-grounded book object. Populate intro, epigraph, forwardQuestion, keyTakeaways, and reflectionQuestions when the source and author instructions support them; leave a field empty rather than inventing material. Its sections must contain readable prose in the body field, not planning notes, generic advice, transcript commentary, or a thin summary. Do not expose source IDs, slot labels, retrieval markers, or internal routing labels in any field. ${responseLength.instruction}`;
 
   const chapterRoutingBlock = usingSlots
     ? `CHAPTER-SLOT ASSIGNMENT (HARD RULE):
@@ -433,12 +480,14 @@ TARGET AUDIENCE: ${input.targetAudience || "(not provided)"}
 CORE THESIS: ${input.coreThesis || "(not provided)"}
 VOICE TONE: ${input.voiceTone || "(not provided)"}
 AUTHOR INSTRUCTIONS: ${input.authorInstructions || "(not provided)"}
+${voiceProfile}
 
 AUTHOR CONFIGURATION APPLICATION:
 - Use TARGET AUDIENCE and AUTHOR INSTRUCTIONS as high-priority guidance for presentation choices.
 - Honor these directives in chapter flow, section voice, framing, and rhetorical delivery.
 - Do not invent new ideas, examples, facts, or theology to satisfy directives.
 - Treat transcript order, source blocks, and prior claims as source guidance rather than a mandatory outline when a stronger source-grounded structure serves the reader.
+- Give every chapter a complete reader-facing arc. Use the rich chapter fields for genuine editorial value, not filler or planning notes.
 ${chapterRoutingBlock}
 
 SOURCE MATERIAL:
@@ -476,6 +525,7 @@ HARD ASSIGNMENT:
 - Use only this slot's transcript material.
 - Output ONLY a chapter object (not a full book object).
 - These source and output boundaries are the only hard constraints. Within them, choose the strongest title, section architecture, body prose, transitions, emphasis, pacing, and ending freely.
+- Populate intro, epigraph, forwardQuestion, keyTakeaways, and reflectionQuestions when supported. These fields must be finished reader-facing material, never planning notes.
 
 CHAPTER CONTEXT:
 CHAPTER NUMBER: ${chapterNumber}

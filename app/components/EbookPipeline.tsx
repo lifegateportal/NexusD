@@ -109,13 +109,18 @@ type SimpleBookResponse = {
   chapters: Array<{
     number: number;
     title: string;
+    intro?: string;
     premise?: string;
+    epigraph?: string;
     sections: Array<{
       sectionNumber: number;
       heading: string;
       body: string;
       keyClaims?: string[];
     }>;
+    forwardQuestion?: string;
+    keyTakeaways?: string[];
+    reflectionQuestions?: string[];
   }>;
 };
 
@@ -3530,6 +3535,7 @@ export function EbookPipeline({
             oneChapterPerSlot: true,
             eBookModel: selectedEbookModel,
             llmTemperature: simpleDirectTemperature,
+            voiceDNA: simpleVoiceDNA,
           });
 
           if (!bookTitleFromRuns) bookTitleFromRuns = (simple.bookTitle || "").trim();
@@ -3556,12 +3562,12 @@ export function EbookPipeline({
           const builtChapter: ChapterDraft = {
             number: chapterNumber,
             title: (chapter.title || `Chapter ${chapterNumber}`).trim(),
-            intro: chapter.premise?.trim() || "",
-            epigraph: "",
+            intro: chapter.intro?.trim() || chapter.premise?.trim() || "",
+            epigraph: chapter.epigraph?.trim() || "",
             sections: builtSections,
-            forwardQuestion: "",
-            keyTakeaways: [],
-            reflectionQuestions: [],
+            forwardQuestion: chapter.forwardQuestion?.trim() || "",
+            keyTakeaways: (chapter.keyTakeaways ?? []).map((value) => value.trim()).filter(Boolean),
+            reflectionQuestions: (chapter.reflectionQuestions ?? []).map((value) => value.trim()).filter(Boolean),
             totalWordCount: builtSections.reduce((sum, section) => sum + section.wordCount, 0),
             status: "complete" as const,
           };
