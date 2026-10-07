@@ -1,6 +1,7 @@
 export type NexusLMChatMessage = {
   role: "user" | "assistant" | "system";
   content: string;
+  format?: "plain" | "markdown";
 };
 
 export type NexusLMChatArchive = {

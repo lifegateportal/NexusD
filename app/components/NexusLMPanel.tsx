@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { ChapterDraftSchema, EbookManifestSchema } from "@/lib/schemas/ebook";
 import type { EbookManifest } from "@/lib/schemas/ebook";
 import type { ChapterDraft } from "@/lib/schemas/ebook";
@@ -26,9 +26,16 @@ type NexusLMPanelProps = {
 };
 
 type Mode = "ask" | "socratic" | "plan" | "draft" | "edit";
+type ContextMode = "auto" | "general" | "book";
 type Persona = "editorial-coach" | "skeptical-reviewer" | "socratic-teacher" | "voice-guardian";
-type Message = { role: "user" | "assistant" | "system"; content: string };
+type Message = { role: "user" | "assistant" | "system"; content: string; format?: "plain" | "markdown" };
 type Source = { id: string; label: string; excerpt: string };
+type ChatAttachment = { id: string; name: string; content: string; size: number };
+type GeneralRequest = {
+  instruction: string;
+  mode: "ask" | "socratic" | "plan";
+  attachments: ChatAttachment[];
+};
 type LibraryPatch = {
   slug: string;
   title?: string;
@@ -171,7 +178,7 @@ function compactHistory(history: Message[]): Array<{ role: "user" | "assistant";
 function initialMessage(manifest: EbookManifest | null): Message {
   return manifest
     ? { role: "system", content: `NexusLM is connected to “${manifest.bookTitle}”. Ask about the manuscript, challenge its thinking, or request a focused edit.` }
-    : { role: "system", content: "NexusLM is ready. Upload a transcript in the Pipeline tab, then ask questions or draft a chapter before running the full pipeline." };
+    : { role: "system", content: "NexusLM is ready for general conversation. Ask anything, attach a text file, or connect a book when you want source-grounded manuscript help." };
 }
 
 function formatChapterDraft(chapter: ChapterDraft): string {
@@ -181,35 +188,115 @@ function formatChapterDraft(chapter: ChapterDraft): string {
   return sanitizeNexusLMText(`CHAPTER ${chapter.number}: ${sanitizeNexusLMText(chapter.title)}\n\n${chapter.intro ? `${sanitizeNexusLMText(chapter.intro)}\n\n` : ""}${sections}${chapter.forwardQuestion ? `\n\nForward question: ${sanitizeNexusLMText(chapter.forwardQuestion)}` : ""}`);
 }
 
-function renderAssistantContent(content: string) {
-  return content.split("\n").map((line, index) => {
+function CopyMessageButton({ content }: { content: string }) {
+  const [status, setStatus] = useState<"idle" | "copied" | "failed">("idle");
+
+  async function copy() {
+    try {
+      await navigator.clipboard.writeText(content);
+      setStatus("copied");
+      window.setTimeout(() => setStatus("idle"), 1600);
+    } catch {
+      setStatus("failed");
+    }
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={() => void copy()}
+      className="min-h-12 rounded-lg border border-slate-700 px-3 text-[11px] font-semibold text-slate-400"
+      aria-label="Copy response"
+    >
+      {status === "copied" ? "Copied" : status === "failed" ? "Copy failed" : "Copy"}
+    </button>
+  );
+}
+
+function renderInlineMarkdown(text: string) {
+  return text.split(/(`[^`]+`|\*\*[^*]+\*\*|\[[^\]]+\]\(https?:\/\/[^)\s]+\))/g).map((part, index) => {
+    if (part.startsWith("`") && part.endsWith("`")) {
+      return <code key={`inline-code-${index}`} className="rounded bg-slate-800 px-1.5 py-0.5 text-cyan-200">{part.slice(1, -1)}</code>;
+    }
+    if (part.startsWith("**") && part.endsWith("**")) {
+      return <strong key={`bold-${index}`} className="font-semibold text-slate-100">{part.slice(2, -2)}</strong>;
+    }
+    const link = part.match(/^\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)$/);
+    if (link) {
+      return <a key={`link-${index}`} href={link[2]} target="_blank" rel="noreferrer" className="text-cyan-300 underline underline-offset-2">{link[1]}</a>;
+    }
+    return part;
+  });
+}
+
+function renderAssistantContent(content: string, markdown = false) {
+  const lines = content.split("\n");
+  const rendered: ReactNode[] = [];
+  let codeLines: string[] = [];
+  let inCodeBlock = false;
+
+  const pushCodeBlock = (key: string) => {
+    const code = codeLines.join("\n");
+    rendered.push(
+      <div key={key} className="my-3 overflow-hidden rounded-xl border border-slate-700 bg-slate-950">
+        <div className="flex items-center justify-between border-b border-slate-800 px-3 py-2">
+          <span className="text-[10px] font-semibold uppercase tracking-widest text-slate-500">Code</span>
+          <CopyMessageButton content={code} />
+        </div>
+        <pre className="overflow-x-auto p-4 text-xs leading-6 text-slate-200"><code>{code}</code></pre>
+      </div>,
+    );
+    codeLines = [];
+  };
+
+  lines.forEach((line, index) => {
     const raw = line.trim();
-    if (!raw) return <div key={`space-${index}`} className="h-3" aria-hidden="true" />;
+    if (markdown && raw.startsWith("```")) {
+      if (inCodeBlock) {
+        pushCodeBlock(`code-${index}`);
+      }
+      inCodeBlock = !inCodeBlock;
+      return;
+    }
+    if (markdown && inCodeBlock) {
+      codeLines.push(line);
+      return;
+    }
+    if (!raw) {
+      rendered.push(<div key={`space-${index}`} className="h-3" aria-hidden="true" />);
+      return;
+    }
 
     const heading = raw.match(/^#{1,3}\s+(.+)$/);
     if (heading) {
-      const text = cleanAssistantLine(heading[1]);
-      return text ? <h3 key={`heading-${index}`} className="mt-5 text-base font-semibold tracking-tight text-slate-100 first:mt-0">{text}</h3> : null;
+      const text = markdown ? heading[1] : cleanAssistantLine(heading[1]);
+      rendered.push(text ? <h3 key={`heading-${index}`} className="mt-5 text-base font-semibold tracking-tight text-slate-100 first:mt-0">{markdown ? renderInlineMarkdown(text) : text}</h3> : null);
+      return;
     }
 
-    const cleaned = cleanAssistantLine(raw.replace(/^>\s?/, ""));
-    if (!cleaned) return null;
+    const cleaned = markdown ? raw.replace(/^>\s?/, "") : cleanAssistantLine(raw.replace(/^>\s?/, ""));
+    if (!cleaned) return;
     if (raw.startsWith("> ")) {
-      return <blockquote key={`quote-${index}`} className="my-3 border-l-2 border-cyan-400/60 pl-4 text-slate-300">{cleaned}</blockquote>;
+      rendered.push(<blockquote key={`quote-${index}`} className="my-3 border-l-2 border-cyan-400/60 pl-4 text-slate-300">{markdown ? renderInlineMarkdown(cleaned) : cleaned}</blockquote>);
+      return;
     }
 
     const listItem = cleaned.match(/^(?:[-*+]\s+|\d+[.)]\s+)(.+)$/);
-    return (
+    rendered.push(
       <p key={`paragraph-${index}`} className={`leading-7 text-slate-300 ${listItem ? "pl-4" : ""}`}>
-        {listItem ? `• ${listItem[1]}` : cleaned}
-      </p>
+        {listItem ? `• ${markdown ? renderInlineMarkdown(listItem[1]) : listItem[1]}` : markdown ? renderInlineMarkdown(cleaned) : cleaned}
+      </p>,
     );
   });
+
+  if (inCodeBlock) pushCodeBlock("code-open");
+  return rendered;
 }
 
 export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, transcripts, onManifestChange }: NexusLMPanelProps) {
   const [messages, setMessages] = useState<Message[]>([initialMessage(manifest)]);
   const [input, setInput] = useState("");
+  const [contextMode, setContextMode] = useState<ContextMode>("auto");
   const [mode, setMode] = useState<Mode>("ask");
   const [persona, setPersona] = useState<Persona>("editorial-coach");
   const [agent, setAgent] = useState<NexusLMAgent>("NexusChat");
@@ -217,6 +304,10 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
   const [responseLength, setResponseLength] = useState<NexusLMResponseLength>("default");
   const [nexusLMTemperature, setNexusLMTemperature] = useState(0.3);
   const [loading, setLoading] = useState(false);
+  const [canAbort, setCanAbort] = useState(false);
+  const [attachments, setAttachments] = useState<ChatAttachment[]>([]);
+  const [attachmentError, setAttachmentError] = useState<string | null>(null);
+  const [lastGeneralRequest, setLastGeneralRequest] = useState<GeneralRequest | null>(null);
   const [sources, setSources] = useState<Source[]>([]);
   const [pendingEdit, setPendingEdit] = useState<PendingEdit | null>(null);
   const [pendingDraft, setPendingDraft] = useState<ChapterDraft | null>(null);
@@ -227,7 +318,12 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
   const [selectedTranscriptLabel, setSelectedTranscriptLabel] = useState("");
   const [showMobileContext, setShowMobileContext] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const abortControllerRef = useRef<AbortController | null>(null);
   const historyLoadedRef = useRef(false);
+  const hasBookContext = Boolean(manifest || transcripts.length > 0);
+  const useBookContext = contextMode === "book" || (contextMode === "auto" && hasBookContext);
 
   useEffect(() => {
     setUndoSnapshot(manifest?.jobId ? loadEbookUndoSnapshot(manifest.jobId) : null);
@@ -261,15 +357,132 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
   }, [messages, loading]);
 
+  async function addFiles(fileList: FileList | File[]): Promise<void> {
+    const files = Array.from(fileList);
+    if (files.length === 0) return;
+    if (attachments.length + files.length > 8) {
+      setAttachmentError("You can attach up to 8 text files per message.");
+      return;
+    }
+
+    const accepted: ChatAttachment[] = [];
+    for (const file of files) {
+      const extension = file.name.toLowerCase().split(".").pop() ?? "";
+      const isText = file.type.startsWith("text/")
+        || ["csv", "css", "json", "js", "jsx", "md", "tsx", "ts", "xml", "yaml", "yml"].includes(extension);
+      if (!isText) {
+        setAttachmentError(`${file.name} is not a text file. Use TXT, Markdown, CSV, JSON, or source files for now.`);
+        continue;
+      }
+      if (file.size > 400_000) {
+        setAttachmentError(`${file.name} is too large. Each attachment must be 400 KB or smaller.`);
+        continue;
+      }
+      try {
+        const content = await file.text();
+        if (!content.trim()) {
+          setAttachmentError(`${file.name} is empty.`);
+          continue;
+        }
+        accepted.push({
+          id: `${file.name}-${file.lastModified}-${accepted.length}`,
+          name: file.name,
+          content,
+          size: file.size,
+        });
+      } catch (error) {
+        setAttachmentError(`${file.name} could not be read: ${readableError(error)}`);
+      }
+    }
+
+    if (accepted.length > 0) {
+      setAttachments((current) => [...current, ...accepted]);
+      setAttachmentError(null);
+    }
+  }
+
+  function stopGenerating(): void {
+    abortControllerRef.current?.abort();
+  }
+
+  async function streamGeneralResponse(
+    instruction: string,
+    activeMode: "ask" | "socratic" | "plan",
+    nextMessages: Message[],
+    requestAttachments: ChatAttachment[],
+  ): Promise<void> {
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
+    setCanAbort(true);
+    setMessages([...nextMessages, { role: "assistant", content: "", format: "markdown" }]);
+    let answer = "";
+
+    const updateAnswer = (content: string) => {
+      setMessages((current) => {
+        const last = current[current.length - 1];
+        if (last?.role === "assistant" && last.format === "markdown") {
+          return [...current.slice(0, -1), { ...last, content }];
+        }
+        return [...current, { role: "assistant", content, format: "markdown" }];
+      });
+    };
+
+    try {
+      const response = await fetch("/api/nexuslm/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        signal: controller.signal,
+        body: JSON.stringify({
+          query: instruction,
+          mode: activeMode,
+          persona: PERSONAS[persona].label,
+          agent,
+          writingStyle,
+          responseLength,
+          llmTemperature: nexusLMTemperature,
+          attachments: requestAttachments.map(({ name, content }) => ({ name, content })),
+          history: compactHistory(nextMessages),
+        }),
+      });
+
+      if (!response.ok) {
+        const payload = await response.json().catch(() => null) as { error?: string } | null;
+        throw new Error(payload?.error ?? `Request failed (${response.status})`);
+      }
+      if (!response.body) throw new Error("NexusLM returned no response stream.");
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        answer += decoder.decode(value, { stream: true });
+        updateAnswer(answer);
+      }
+      answer += decoder.decode();
+      updateAnswer(answer);
+      if (!answer.trim()) throw new Error("NexusLM returned an empty response.");
+    } catch (error) {
+      const stopped = error instanceof DOMException && error.name === "AbortError";
+      updateAnswer(stopped ? "Response stopped." : readableError(error));
+    } finally {
+      abortControllerRef.current = null;
+      setCanAbort(false);
+    }
+  }
+
   async function clearConversation() {
     await deleteNexusLMChat(conversationKey);
     setMessages([initialMessage(manifest)]);
+    setAttachments([]);
+    setAttachmentError(null);
+    setLastGeneralRequest(null);
   }
 
   function downloadLatestResponse(extension: "md" | "txt" | "html") {
-    const answer = messages.slice().reverse().find((message) => message.role === "assistant")?.content;
-    if (!answer) return;
-    const cleanAnswer = sanitizeNexusLMText(answer);
+    const latest = messages.slice().reverse().find((message) => message.role === "assistant");
+    if (!latest?.content) return;
+    const cleanAnswer = latest.format === "markdown" ? latest.content.trim() : sanitizeNexusLMText(latest.content);
     const title = (manifest?.bookTitle ?? pipelineSnapshot?.bookTitle ?? "nexuslm-response")
       .toLowerCase()
       .replace(/[^a-z0-9]+/g, "-")
@@ -302,27 +515,56 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
     URL.revokeObjectURL(url);
   }
 
-  async function send(requestText?: string, requestMode?: Mode, draftTranscriptScope: "all" | "selected" = "all") {
+  function retryLastResponse(): void {
+    if (!lastGeneralRequest || loading) return;
+    void send(lastGeneralRequest.instruction, lastGeneralRequest.mode, "all", { retry: true, forceGeneral: true });
+  }
+
+  async function send(
+    requestText?: string,
+    requestMode?: Mode,
+    draftTranscriptScope: "all" | "selected" = "all",
+    options?: { retry?: boolean; forceGeneral?: boolean },
+  ) {
     const instruction = (requestText ?? input).trim();
     if (!instruction || loading) return;
     const activeMode = requestMode ?? inferMode(instruction, mode);
-    if (!manifest && transcripts.length === 0) {
-      setMessages((current) => [...current, { role: "assistant", content: "Upload at least one transcript before starting a NexusLM conversation." }]);
+    const requestUsesBook = options?.forceGeneral ? false : useBookContext;
+    if (contextMode === "book" && !options?.forceGeneral && !hasBookContext) {
+      setMessages((current) => [...current,
+        { role: "user", content: instruction },
+        { role: "assistant", content: "Book context is not connected. Switch Context to General, or load a manuscript/transcript first." },
+      ]);
+      return;
+    }
+    if ((activeMode === "edit" || activeMode === "draft") && !requestUsesBook) {
+      setMessages((current) => [...current,
+        { role: "user", content: instruction },
+        { role: "assistant", content: "This is a book action. Switch Context to Book and load a manuscript or transcript before using it." },
+      ]);
       return;
     }
     if (activeMode === "edit" && !manifest) {
-      setMessages((current) => [...current, { role: "assistant", content: "Load or finish a manuscript before requesting an edit." }]);
+      setMessages((current) => [...current,
+        { role: "user", content: instruction },
+        { role: "assistant", content: "Load or finish a manuscript before requesting an edit." },
+      ]);
       return;
     }
 
     const userMessage = `${instruction}\n\n[Mode: ${MODES[activeMode].label}] [Persona: ${PERSONAS[persona].label}]`;
-    const nextMessages = [...messages, { role: "user" as const, content: instruction }];
+    const retryBase = options?.retry && messages[messages.length - 1]?.role === "assistant"
+      ? messages.slice(0, -1)
+      : messages;
+    const nextMessages = options?.retry
+      ? retryBase
+      : [...messages, { role: "user" as const, content: instruction }];
     setMessages(nextMessages);
     setInput("");
     setLoading(true);
 
     try {
-      if (manifest && isAuditIntent(instruction)) {
+      if (requestUsesBook && manifest && isAuditIntent(instruction)) {
         const res = await fetch("/api/ebook/audit", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -332,6 +574,17 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
         if (!res.ok || json.error) throw new Error(json.error ?? `Request failed (${res.status})`);
         setAuditReport(json);
         setMessages((current) => [...current, { role: "assistant", content: formatAuditReport(json) }]);
+        return;
+      }
+
+      if (!requestUsesBook) {
+        const generalMode = activeMode === "socratic" || activeMode === "plan" ? activeMode : "ask";
+        const requestAttachments = attachments.map((attachment) => ({ ...attachment }));
+        setLastGeneralRequest({ instruction, mode: generalMode, attachments: requestAttachments });
+        setSources([]);
+        setAttachments([]);
+        setAttachmentError(null);
+        await streamGeneralResponse(instruction, generalMode, nextMessages, requestAttachments);
         return;
       }
 
@@ -614,7 +867,7 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
           <div className="flex items-center gap-2">
             <button type="button" onClick={() => void clearConversation()} className="min-h-12 px-2 text-xs font-semibold text-slate-500">Clear</button>
             <button type="button" onClick={() => setShowMobileContext((current) => !current)} className="min-h-12 px-2 text-xs font-semibold text-cyan-300">
-              {showMobileContext ? "Hide sources" : `Sources (${transcripts.length})`}
+              {showMobileContext ? "Hide context" : useBookContext ? `Sources (${transcripts.length})` : "Context"}
             </button>
           </div>
         </div>
@@ -626,7 +879,32 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
                 : message.role === "system"
                   ? "rounded-xl border border-slate-800 bg-slate-900/50 px-4 py-3 text-sm leading-6 text-slate-400"
                   : "rounded-xl border border-slate-800 bg-slate-950/50 px-5 py-5 text-sm leading-7 shadow-[0_12px_40px_rgba(0,0,0,0.14)]"}>
-                {message.role === "assistant" ? renderAssistantContent(message.content) : message.content}
+                {message.role === "user" ? (
+                  <>
+                    <p className="whitespace-pre-wrap">{message.content}</p>
+                    <div className="mt-2 flex justify-end">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setInput(message.content);
+                          inputRef.current?.focus();
+                        }}
+                        className="min-h-12 rounded-lg border border-cyan-500/30 px-3 text-[11px] font-semibold text-cyan-200"
+                      >
+                        Edit
+                      </button>
+                    </div>
+                  </>
+                ) : message.role === "assistant" ? (
+                  <>
+                    {renderAssistantContent(message.content, message.format === "markdown")}
+                    {message.content.trim() && (
+                      <div className="mt-3 flex justify-end">
+                        <CopyMessageButton content={message.content} />
+                      </div>
+                    )}
+                  </>
+                ) : message.content}
               </div>
             ))}
             {loading && <div className="text-sm text-slate-500">NexusLM is thinking...</div>}
@@ -760,19 +1038,79 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
                 </div>
               </div>
             )}
-            <div className="rounded-2xl border border-slate-700 bg-slate-900 shadow-[0_8px_30px_rgba(0,0,0,0.22)] focus-within:border-cyan-400/60">
+            {lastGeneralRequest && !loading && (
+              <div className="mb-2 flex items-center justify-between gap-3 rounded-xl border border-slate-800 bg-slate-900/70 px-3 py-2">
+                <p className="truncate text-xs text-slate-500">Retry the last general response</p>
+                <button type="button" onClick={retryLastResponse} className="min-h-12 shrink-0 rounded-lg border border-slate-700 px-3 text-xs font-semibold text-slate-300">
+                  Retry
+                </button>
+              </div>
+            )}
+            <div
+              className="rounded-2xl border border-slate-700 bg-slate-900 shadow-[0_8px_30px_rgba(0,0,0,0.22)] focus-within:border-cyan-400/60"
+              onDragOver={(event) => event.preventDefault()}
+              onDrop={(event) => {
+                event.preventDefault();
+                void addFiles(event.dataTransfer.files);
+              }}
+            >
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept=".txt,.md,.csv,.json,.css,.js,.jsx,.ts,.tsx,.xml,.yaml,.yml,text/*"
+                multiple
+                className="hidden"
+                onChange={(event) => {
+                  void addFiles(event.target.files ?? []);
+                  event.currentTarget.value = "";
+                }}
+              />
+              {attachments.length > 0 && (
+                <div className="flex flex-wrap gap-2 px-3 pt-3">
+                  {attachments.map((attachment) => (
+                    <span key={attachment.id} className="flex max-w-full items-center gap-2 rounded-lg border border-cyan-500/30 bg-cyan-500/10 px-2 py-1.5 text-xs text-cyan-100">
+                      <span className="max-w-[12rem] truncate">{attachment.name}</span>
+                      <button type="button" onClick={() => setAttachments((current) => current.filter((item) => item.id !== attachment.id))} className="min-h-12 min-w-12 rounded-md text-cyan-300" aria-label={`Remove ${attachment.name}`}>
+                        ×
+                      </button>
+                    </span>
+                  ))}
+                </div>
+              )}
+              {attachmentError && (
+                <p className="px-3 pt-2 text-xs text-amber-300" role="alert">{attachmentError}</p>
+              )}
               <textarea
+                ref={inputRef}
                 value={input}
                 onChange={(event) => setInput(event.target.value)}
+                onPaste={(event) => {
+                  if (event.clipboardData.files.length > 0) {
+                    event.preventDefault();
+                    void addFiles(event.clipboardData.files);
+                  }
+                }}
                 onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void send(); } }}
-                placeholder={manifest || transcripts.length > 0 ? "Ask NexusLM about your book..." : "Upload a transcript to begin..."}
-                disabled={(!manifest && transcripts.length === 0) || loading}
+                placeholder={useBookContext ? "Ask NexusLM about your book, or switch to General..." : "Ask NexusLM anything..."}
+                disabled={loading}
                 rows={2}
                 className="block w-full resize-none rounded-t-2xl border-0 bg-transparent px-4 py-3 text-base leading-6 text-slate-100 outline-none placeholder:text-slate-600 focus:ring-0"
               />
               <div className="flex items-center justify-between gap-3 px-3 pb-2">
-                <p className="text-[11px] text-slate-500">Enter to send · Shift+Enter for a new line</p>
-                <button type="button" onClick={() => void send()} disabled={(!manifest && transcripts.length === 0) || !input.trim() || loading} className="min-h-10 rounded-xl bg-cyan-400 px-4 text-sm font-bold text-slate-950 disabled:cursor-not-allowed disabled:opacity-40">Send</button>
+                <div className="flex min-w-0 items-center gap-2">
+                  <button type="button" onClick={() => fileInputRef.current?.click()} disabled={loading} className="min-h-12 min-w-12 rounded-xl border border-slate-700 px-3 text-xs font-semibold text-slate-300 disabled:opacity-40" aria-label="Attach a text file">
+                    +
+                  </button>
+                  <p className="truncate text-[11px] text-slate-500">Enter to send · Shift+Enter for a new line · drop or paste text files</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => (loading ? stopGenerating() : void send())}
+                  disabled={loading ? !canAbort : !input.trim()}
+                  className={`min-h-12 rounded-xl px-4 text-sm font-bold disabled:cursor-not-allowed disabled:opacity-40 ${loading && canAbort ? "border border-rose-400/40 bg-rose-500/10 text-rose-200" : "bg-cyan-400 text-slate-950"}`}
+                >
+                  {loading ? (canAbort ? "Stop" : "Working...") : "Send"}
+                </button>
               </div>
             </div>
           </div>
@@ -784,12 +1122,39 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
           <div className="flex items-start justify-between gap-3">
             <div>
               <p className="text-xs font-bold uppercase tracking-[0.2em] text-cyan-300">NexusLM</p>
-              <h2 className="mt-2 text-lg font-semibold text-slate-100">Your book, in conversation</h2>
-              <p className="mt-2 text-xs leading-5 text-slate-500">Ask questions, test the thinking, or make a focused edit.</p>
+              <h2 className="mt-2 text-lg font-semibold text-slate-100">Your AI workspace</h2>
+              <p className="mt-2 text-xs leading-5 text-slate-500">Ask anything, work with files, or switch into book editing when you need it.</p>
             </div>
             <button type="button" onClick={() => void clearConversation()} className="min-h-12 shrink-0 rounded-xl border border-slate-700 px-3 text-xs font-semibold text-slate-400">Clear history</button>
           </div>
         </div>
+
+        <p className="block text-xs font-semibold uppercase tracking-widest text-slate-500">Context</p>
+        <div className="mt-2 grid grid-cols-3 gap-2">
+          {([
+            ["auto", "Auto"],
+            ["general", "General"],
+            ["book", "Book"],
+          ] as const).map(([value, label]) => (
+            <button
+              key={value}
+              type="button"
+              onClick={() => setContextMode(value)}
+              className={`min-h-12 rounded-xl border px-2 text-xs font-semibold ${contextMode === value ? "border-cyan-400/60 bg-cyan-400/10 text-cyan-300" : "border-slate-700 text-slate-400"}`}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+        <p className="mt-2 text-xs leading-5 text-slate-500">
+          {contextMode === "general"
+            ? "Book and transcript context is ignored for this conversation."
+            : contextMode === "book"
+              ? "Ground answers in the connected manuscript and transcript sources."
+              : hasBookContext
+                ? "Book context is active because a manuscript or transcript is connected."
+                : "No book is connected, so NexusLM is in general conversation mode."}
+        </p>
 
         <label className="block text-xs font-semibold uppercase tracking-widest text-slate-500" htmlFor="nexuslm-persona">Persona</label>
         <select id="nexuslm-persona" value={persona} onChange={(event) => setPersona(event.target.value as Persona)} className="mt-2 min-h-12 w-full rounded-xl border border-slate-700 bg-slate-900 px-3 text-base text-slate-200">
@@ -801,6 +1166,7 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
           {Object.entries(NEXUSLM_AGENTS).map(([value, item]) => <option key={value} value={value}>{item.label}</option>)}
         </select>
         <p className="mt-2 text-xs leading-5 text-slate-500">{NEXUSLM_AGENTS[agent].description}</p>
+        <p className="mt-1 text-[11px] font-semibold text-cyan-300/80">NexusLM models: DeepSeek Chat and DeepSeek Reasoner only.</p>
 
         <label className="mt-6 block text-xs font-semibold uppercase tracking-widest text-slate-500" htmlFor="nexuslm-writing-style">Writing form</label>
         <select id="nexuslm-writing-style" value={writingStyle} onChange={(event) => setWritingStyle(event.target.value as NexusLMWritingStyle)} className="mt-2 min-h-12 w-full rounded-xl border border-slate-700 bg-slate-900 px-3 text-base text-slate-200">

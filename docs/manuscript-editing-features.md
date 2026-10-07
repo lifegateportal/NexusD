@@ -21,6 +21,25 @@ The approval request uses optimistic version locking. If another tab changes the
 
 The previous manifest is saved in the current browser's ebook workspace storage, while the applied summary remains in the manifest's rolling `changeLog`. Manual manuscript saves and pipeline checkpoints continue to use the existing project persistence flow.
 
+## General-purpose NexusLM chat ✅ COMPLETED
+
+**Location:** Ebook workspace → NexusLM tab
+
+NexusLM is not limited to book questions. Use the same composer for:
+
+- General conversation, explanations, brainstorming, writing, rewriting, planning, analysis, translation, and coding guidance
+- Markdown responses with headings, lists, links, quotes, and code blocks
+- Text, Markdown, CSV, JSON, YAML, and source-file attachments (up to 8 files, 400 KB per file)
+- Streaming responses with **Stop**, **Retry**, **Copy**, and Markdown/TXT/HTML export controls
+
+Use the **Context** control to choose:
+
+- **Auto:** use connected manuscript/transcript context when available; otherwise use general chat
+- **General:** ignore the connected book and have a normal assistant conversation
+- **Book:** require manuscript/transcript context and use the source-grounded NexusLM book workflows
+
+NexusLM uses only the configured **DeepSeek Chat** and **DeepSeek Reasoner** agents. Manuscript edits remain approval-gated through the preview, diff, version-lock, and undo workflow above. Web search, arbitrary code execution, and automatic external actions are not enabled by this chat surface.
+
 ## 1. Audio Source Manager ✅ COMPLETED
 
 **Location:** Pipeline → Review section → Audio Sources tab
