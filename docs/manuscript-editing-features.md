@@ -38,6 +38,7 @@ NexusLM is not limited to book questions. Use the same composer for:
 - A browser-persisted **Manuscript workspace** that can capture any assistant response as a chapter, preserve its raw Markdown/rich content, reorder or edit chapters, and assemble them into a direct-download PDF without opening Book Studio.
 - Direct PDF generation through `/api/nexuslm/export`, with strict validation for title metadata, ordered chapters, templates, and payload size.
 - Generated HTML remains a first-class artifact: use **Preview** on an HTML code block to render it directly in the app, then use **Print / Save PDF (exact preview)** to preserve the assistant's HTML/CSS design rather than flattening it into the book template.
+- The chat composer keeps **Context** and the **Nexus agent** in the active chat box, with persona, writing form, response length, mode, temperature, and response exports grouped under **Customize**. The side workspace is reserved for saved chats, previews, manuscript assembly, transcripts, and consulted sources.
 
 Use the **Context** control to choose:
 

@@ -1359,7 +1359,7 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
           <div className="flex items-center gap-2">
             <button type="button" onClick={() => void clearConversation()} className="min-h-12 px-2 text-xs font-semibold text-slate-500">Clear</button>
             <button type="button" onClick={() => setShowMobileContext((current) => !current)} className="min-h-12 px-2 text-xs font-semibold text-cyan-300">
-              {showMobileContext ? "Hide context" : useBookContext ? `Sources (${transcripts.length})` : "Context"}
+              {showMobileContext ? "Hide workspace" : "Workspace"}
             </button>
           </div>
         </div>
@@ -1580,6 +1580,107 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
                 void addFiles(event.dataTransfer.files);
               }}
             >
+              <div className="border-b border-slate-800 px-3 pb-3 pt-3">
+                <div className="flex min-w-0 flex-wrap items-center gap-2">
+                  <span className="shrink-0 px-1 text-[10px] font-bold uppercase tracking-widest text-slate-500">Context</span>
+                  <div className="flex min-w-0 max-w-full overflow-x-auto rounded-xl border border-slate-800 bg-slate-950/70 p-1" role="group" aria-label="Conversation context">
+                    {([
+                      ["auto", "Auto"],
+                      ["general", "General"],
+                      ["book", "Book"],
+                    ] as const).map(([value, label]) => (
+                      <button
+                        key={value}
+                        type="button"
+                        onClick={() => setContextMode(value)}
+                        className={`min-h-10 shrink-0 rounded-lg px-3 text-xs font-semibold ${contextMode === value ? "bg-cyan-400/15 text-cyan-200" : "text-slate-500"}`}
+                      >
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                  <label className="sr-only" htmlFor="nexuslm-agent-composer">Nexus agent</label>
+                  <select
+                    id="nexuslm-agent-composer"
+                    value={agent}
+                    onChange={(event) => setAgent(event.target.value as NexusLMAgent)}
+                    aria-label="Nexus agent"
+                    className="min-h-12 min-w-[10rem] flex-1 rounded-xl border border-slate-800 bg-slate-950/70 px-3 text-base text-slate-200 sm:flex-none"
+                  >
+                    {Object.entries(NEXUSLM_AGENTS).map(([value, item]) => <option key={value} value={value}>{item.label}</option>)}
+                  </select>
+                  <details className="relative min-w-0 flex-1 sm:flex-none">
+                    <summary className="flex min-h-12 cursor-pointer list-none items-center justify-center rounded-xl border border-slate-800 bg-slate-950/70 px-3 text-xs font-semibold text-slate-300">
+                      Customize
+                    </summary>
+                    <div className="absolute bottom-full right-0 z-40 mb-2 w-[min(22rem,calc(100vw-2rem))] rounded-2xl border border-slate-700 bg-shell-950 p-4 shadow-2xl">
+                      <div className="space-y-4">
+                        <div>
+                          <label className="text-[10px] font-bold uppercase tracking-widest text-slate-500" htmlFor="nexuslm-persona-composer">Persona</label>
+                          <select id="nexuslm-persona-composer" value={persona} onChange={(event) => setPersona(event.target.value as Persona)} className="mt-2 min-h-12 w-full rounded-xl border border-slate-700 bg-slate-900 px-3 text-base text-slate-200">
+                            {Object.entries(PERSONAS).map(([value, item]) => <option key={value} value={value}>{item.label}</option>)}
+                          </select>
+                        </div>
+                        <div>
+                          <label className="text-[10px] font-bold uppercase tracking-widest text-slate-500" htmlFor="nexuslm-writing-style-composer">Writing form</label>
+                          <select id="nexuslm-writing-style-composer" value={writingStyle} onChange={(event) => setWritingStyle(event.target.value as NexusLMWritingStyle)} className="mt-2 min-h-12 w-full rounded-xl border border-slate-700 bg-slate-900 px-3 text-base text-slate-200">
+                            {Object.entries(NEXUSLM_WRITING_STYLES).map(([value, item]) => <option key={value} value={value}>{item.label}</option>)}
+                          </select>
+                        </div>
+                        <div>
+                          <label className="text-[10px] font-bold uppercase tracking-widest text-slate-500" htmlFor="nexuslm-response-length-composer">Response length</label>
+                          <select id="nexuslm-response-length-composer" value={responseLength} onChange={(event) => setResponseLength(event.target.value as NexusLMResponseLength)} className="mt-2 min-h-12 w-full rounded-xl border border-slate-700 bg-slate-900 px-3 text-base text-slate-200">
+                            {Object.entries(NEXUSLM_RESPONSE_LENGTHS).map(([value, item]) => <option key={value} value={value}>{item.label}</option>)}
+                          </select>
+                          <p className="mt-1 text-[11px] leading-5 text-slate-500">{NEXUSLM_RESPONSE_LENGTHS[responseLength].description}</p>
+                        </div>
+                        <div>
+                          <label className="text-[10px] font-bold uppercase tracking-widest text-slate-500" htmlFor="nexuslm-mode-composer">Mode</label>
+                          <select id="nexuslm-mode-composer" value={mode} onChange={(event) => setMode(event.target.value as Mode)} className="mt-2 min-h-12 w-full rounded-xl border border-slate-700 bg-slate-900 px-3 text-base text-slate-200">
+                            {Object.entries(MODES).map(([value, item]) => <option key={value} value={value}>{item.label}</option>)}
+                          </select>
+                        </div>
+                        <div>
+                          <label className="text-[10px] font-bold uppercase tracking-widest text-slate-500" htmlFor="nexuslm-temperature-composer">Temperature</label>
+                          <input
+                            id="nexuslm-temperature-composer"
+                            type="number"
+                            min={0}
+                            max={1}
+                            step={0.01}
+                            value={nexusLMTemperature}
+                            onChange={(event) => {
+                              const next = Number.parseFloat(event.target.value);
+                              if (Number.isNaN(next)) return;
+                              setNexusLMTemperature(Number(Math.min(1, Math.max(0, next)).toFixed(2)));
+                            }}
+                            className="mt-2 min-h-12 w-full rounded-xl border border-slate-700 bg-slate-900 px-3 text-base text-slate-200"
+                          />
+                        </div>
+                        <div>
+                          <p className="text-[10px] font-bold uppercase tracking-widest text-slate-500">Export latest</p>
+                          <div className="mt-2 grid grid-cols-3 gap-2">
+                            {(["md", "txt", "html"] as const).map((extension) => (
+                              <button key={extension} type="button" onClick={() => downloadLatestResponse(extension)} disabled={!messages.some((message) => message.role === "assistant")} className="min-h-12 rounded-xl border border-slate-700 px-2 text-xs font-semibold text-slate-300 disabled:opacity-40">
+                                {extension === "md" ? "MD" : extension.toUpperCase()}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </details>
+                </div>
+                <p className="mt-2 truncate px-1 text-[11px] text-slate-500">
+                  {contextMode === "general"
+                    ? "General conversation · book sources ignored"
+                    : contextMode === "book" && hasBookContext
+                      ? "Book context active · manuscript and transcript sources available"
+                      : contextMode === "auto" && hasBookContext
+                        ? "Auto context · connected book sources will be used"
+                        : "General conversation · no connected book sources"}
+                </p>
+              </div>
               <input
                 ref={fileInputRef}
                 type="file"
@@ -1670,7 +1771,7 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
         </div>
       </section>
 
-      <aside className={`${showMobileContext ? "absolute inset-x-0 bottom-0 top-12 z-20 block" : "hidden"} ${previewExpanded ? "max-h-[90dvh]" : "max-h-[70dvh]"} relative w-full shrink-0 overflow-y-auto border-t border-slate-800 bg-shell-950 p-4 shadow-2xl lg:static lg:inset-auto lg:z-auto lg:block lg:max-h-none lg:border-t-0 lg:p-6 lg:shadow-none ${previewExpanded ? "lg:w-[min(62vw,52rem)]" : "lg:w-[22rem]"}`}>
+      <aside className={`${showMobileContext ? "absolute inset-x-0 bottom-0 top-12 z-20 block" : "hidden"} ${previewExpanded ? "max-h-[90dvh]" : "max-h-[70dvh]"} relative w-full shrink-0 overflow-y-auto border-t border-slate-800 bg-shell-950/95 p-4 shadow-2xl lg:static lg:inset-auto lg:z-auto lg:block lg:max-h-none lg:border-t-0 lg:bg-shell-950 lg:p-5 lg:shadow-none ${previewExpanded ? "lg:w-[min(58vw,50rem)]" : "lg:w-[18rem]"}`}>
         <button
           type="button"
           onClick={() => setPreviewExpanded((current) => !current)}
@@ -1684,10 +1785,10 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
           <div className="flex items-start justify-between gap-3">
             <div>
               <p className="text-xs font-bold uppercase tracking-[0.2em] text-cyan-300">NexusLM</p>
-              <h2 className="mt-2 text-lg font-semibold text-slate-100">Your AI workspace</h2>
-              <p className="mt-2 text-xs leading-5 text-slate-500">Ask anything, work with files, or switch into book editing when you need it.</p>
+              <h2 className="mt-2 text-lg font-semibold text-slate-100">Workspace</h2>
+              <p className="mt-2 text-xs leading-5 text-slate-500">Files, saved chats, previews, and manuscript assembly.</p>
             </div>
-            <button type="button" onClick={() => void clearConversation()} className="min-h-12 shrink-0 rounded-xl border border-slate-700 px-3 text-xs font-semibold text-slate-400">Clear history</button>
+            <button type="button" onClick={() => void clearConversation()} className="min-h-12 shrink-0 rounded-xl border border-slate-700 px-3 text-xs font-semibold text-slate-400">Clear</button>
           </div>
         </div>
 
@@ -1728,16 +1829,15 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
           )}
         </div>
 
-        <div className="mb-6 border-b border-slate-800 pb-5">
-          <div className="flex items-start justify-between gap-3">
-            <div>
-              <p className="text-xs font-semibold uppercase tracking-widest text-slate-500">Manuscript workspace</p>
-              <p className="mt-2 text-xs leading-5 text-slate-500">Keep chapters in the form NexusLM created them. HTML designs stay available in the exact preview; this PDF button assembles a readable book proof.</p>
-            </div>
+        <details className="mb-6 border-b border-slate-800 pb-5">
+          <summary className="flex min-h-12 cursor-pointer list-none items-center justify-between gap-3">
+            <span className="text-xs font-semibold uppercase tracking-widest text-slate-500">Manuscript workspace</span>
             <span className="shrink-0 rounded-full border border-cyan-400/30 px-2 py-1 text-[10px] font-semibold text-cyan-200">
               {manuscript.chapters.length} chapters
             </span>
-          </div>
+          </summary>
+          <div className="pb-1">
+            <p className="mt-2 text-xs leading-5 text-slate-500">Keep chapters in the form NexusLM created them. HTML designs stay available in the exact preview; this PDF button assembles a readable book proof.</p>
           <div className="mt-3 space-y-2">
             <input
               value={manuscript.title}
@@ -1824,7 +1924,8 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
                 ))}
             </div>
           )}
-        </div>
+          </div>
+        </details>
 
         {(attachments.length > 0 || generatedPreview) && (
           <div className="mb-6 border-b border-slate-800 pb-5">
@@ -1888,104 +1989,19 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
           </div>
         )}
 
-        <p className="block text-xs font-semibold uppercase tracking-widest text-slate-500">Context</p>
-        <div className="mt-2 grid grid-cols-3 gap-2">
-          {([
-            ["auto", "Auto"],
-            ["general", "General"],
-            ["book", "Book"],
-          ] as const).map(([value, label]) => (
-            <button
-              key={value}
-              type="button"
-              onClick={() => setContextMode(value)}
-              className={`min-h-12 rounded-xl border px-2 text-xs font-semibold ${contextMode === value ? "border-cyan-400/60 bg-cyan-400/10 text-cyan-300" : "border-slate-700 text-slate-400"}`}
-            >
-              {label}
-            </button>
-          ))}
-        </div>
-        <p className="mt-2 text-xs leading-5 text-slate-500">
-          {contextMode === "general"
-            ? "Book and transcript context is ignored for this conversation."
-            : contextMode === "book"
-              ? hasBookContext
-                ? "Ground answers in the connected manuscript and transcript sources."
-                : "No book is connected yet, so NexusLM will handle requests as general conversation."
-              : hasBookContext
-                ? "Book context is active because a manuscript or transcript is connected."
-                : "No book is connected, so NexusLM is in general conversation mode."}
-        </p>
-
-        <label className="block text-xs font-semibold uppercase tracking-widest text-slate-500" htmlFor="nexuslm-persona">Persona</label>
-        <select id="nexuslm-persona" value={persona} onChange={(event) => setPersona(event.target.value as Persona)} className="mt-2 min-h-12 w-full rounded-xl border border-slate-700 bg-slate-900 px-3 text-base text-slate-200">
-          {Object.entries(PERSONAS).map(([value, item]) => <option key={value} value={value}>{item.label}</option>)}
-        </select>
-
-        <label className="mt-6 block text-xs font-semibold uppercase tracking-widest text-slate-500" htmlFor="nexuslm-agent">Agent</label>
-        <select id="nexuslm-agent" value={agent} onChange={(event) => setAgent(event.target.value as NexusLMAgent)} className="mt-2 min-h-12 w-full rounded-xl border border-slate-700 bg-slate-900 px-3 text-base text-slate-200">
-          {Object.entries(NEXUSLM_AGENTS).map(([value, item]) => <option key={value} value={value}>{item.label}</option>)}
-        </select>
-        <p className="mt-2 text-xs leading-5 text-slate-500">{NEXUSLM_AGENTS[agent].description}</p>
-        <p className="mt-1 text-[11px] font-semibold text-cyan-300/80">NexusLM models: DeepSeek Chat and DeepSeek Reasoner only.</p>
-
-        <label className="mt-6 block text-xs font-semibold uppercase tracking-widest text-slate-500" htmlFor="nexuslm-writing-style">Writing form</label>
-        <select id="nexuslm-writing-style" value={writingStyle} onChange={(event) => setWritingStyle(event.target.value as NexusLMWritingStyle)} className="mt-2 min-h-12 w-full rounded-xl border border-slate-700 bg-slate-900 px-3 text-base text-slate-200">
-          {Object.entries(NEXUSLM_WRITING_STYLES).map(([value, item]) => <option key={value} value={value}>{item.label}</option>)}
-        </select>
-        <p className="mt-2 text-xs leading-5 text-slate-500">{NEXUSLM_WRITING_STYLES[writingStyle].description}</p>
-
-        <label className="mt-6 block text-xs font-semibold uppercase tracking-widest text-slate-500" htmlFor="nexuslm-response-length">Response length</label>
-        <select id="nexuslm-response-length" value={responseLength} onChange={(event) => setResponseLength(event.target.value as NexusLMResponseLength)} className="mt-2 min-h-12 w-full rounded-xl border border-slate-700 bg-slate-900 px-3 text-base text-slate-200">
-          {Object.entries(NEXUSLM_RESPONSE_LENGTHS).map(([value, item]) => <option key={value} value={value}>{item.label}</option>)}
-        </select>
-        <p className="mt-2 text-xs leading-5 text-slate-500">{NEXUSLM_RESPONSE_LENGTHS[responseLength].description}</p>
-
-        <label className="mt-6 block text-xs font-semibold uppercase tracking-widest text-slate-500" htmlFor="nexuslm-temperature">NexusLM temperature</label>
-        <input
-          id="nexuslm-temperature"
-          type="number"
-          min={0}
-          max={1}
-          step={0.01}
-          value={nexusLMTemperature}
-          onChange={(event) => {
-            const next = Number.parseFloat(event.target.value);
-            if (Number.isNaN(next)) return;
-            const bounded = Math.min(1, Math.max(0, next));
-            setNexusLMTemperature(Number(bounded.toFixed(2)));
-          }}
-          className="mt-2 min-h-12 w-full rounded-xl border border-slate-700 bg-slate-900 px-3 text-base text-slate-200"
-        />
-        <p className="mt-2 text-xs leading-5 text-slate-500">Controls NexusLM generation randomness. Range: 0.00 to 1.00.</p>
-
-        <div className="mt-6 border-t border-slate-800 pt-5">
-          <p className="text-xs font-semibold uppercase tracking-widest text-slate-500">Download latest response</p>
-          <p className="mt-2 text-xs leading-5 text-slate-500">Save the most recent NexusLM answer without opening Book Studio.</p>
-          <div className="mt-3 grid grid-cols-3 gap-2">
-            {(["md", "txt", "html"] as const).map((extension) => (
-              <button key={extension} type="button" onClick={() => downloadLatestResponse(extension)} disabled={!messages.some((message) => message.role === "assistant")} className="min-h-12 rounded-xl border border-slate-700 px-2 text-xs font-semibold text-slate-300 disabled:cursor-not-allowed disabled:opacity-40">
-                {extension === "md" ? "Markdown" : extension.toUpperCase()}
-              </button>
-            ))}
+        <details className="mt-6 border-t border-slate-800 pt-5">
+          <summary className="flex min-h-12 cursor-pointer list-none items-center justify-between text-xs font-semibold uppercase tracking-widest text-slate-500">
+            <span>Connected context</span>
+            <span className="text-cyan-300">{manifest ? `${manifest.chapters.length} chapters` : "General"}</span>
+          </summary>
+          <div className="pt-2">
+            <p className="text-sm text-slate-200">{manifest?.bookTitle ?? "No book loaded"}</p>
+            {manifest && <p className="mt-1 text-xs text-slate-500">{manifest.chapters.length} chapters · {manifest.totalWordCount.toLocaleString()} words</p>}
+            <p className="mt-3 text-xs text-slate-500">Pipeline: <span className="text-slate-300">{pipelineSnapshot?.stage ?? "not started"}</span></p>
+            <p className="mt-3 text-xs text-slate-500">Manuscript: <span className="text-slate-300">{manifest ? `${manifest.chapters.length} written chapter${manifest.chapters.length === 1 ? "" : "s"}` : "not loaded"}</span></p>
+            <p className="mt-1 text-xs text-slate-500">Transcript sources: <span className="text-slate-300">{transcripts.length}</span></p>
           </div>
-        </div>
-
-        <p className="mt-6 text-xs font-semibold uppercase tracking-widest text-slate-500">Mode</p>
-        <div className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-3">
-          {Object.entries(MODES).map(([value, item]) => (
-            <button key={value} type="button" onClick={() => setMode(value as Mode)} className={`min-h-12 rounded-xl border px-2 text-xs font-semibold ${mode === value ? "border-cyan-400/60 bg-cyan-400/10 text-cyan-300" : "border-slate-700 text-slate-400"}`}>{item.label}</button>
-          ))}
-        </div>
-
-        <div className="mt-6 border-t border-slate-800 pt-5">
-          <p className="text-xs font-semibold uppercase tracking-widest text-slate-500">Connected context</p>
-          <p className="mt-2 text-sm text-slate-200">{manifest?.bookTitle ?? "No book loaded"}</p>
-          {manifest && <p className="mt-1 text-xs text-slate-500">{manifest.chapters.length} chapters · {manifest.totalWordCount.toLocaleString()} words</p>}
-          <p className="mt-3 text-xs text-slate-500">Pipeline: <span className="text-slate-300">{pipelineSnapshot?.stage ?? "not started"}</span></p>
-          <p className="mt-3 text-xs text-slate-500">Manuscript: <span className="text-slate-300">{manifest ? `${manifest.chapters.length} written chapter${manifest.chapters.length === 1 ? "" : "s"}` : "not loaded"}</span></p>
-          <p className="mt-1 text-xs text-slate-500">Transcript sources: <span className="text-slate-300">{transcripts.length}</span></p>
-        </div>
+        </details>
 
         {manifest?.changeLog && manifest.changeLog.length > 0 && (
           <div className="mt-6 border-t border-slate-800 pt-5">
@@ -2006,67 +2022,77 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
           </div>
         )}
 
-        <div className="mt-6 border-t border-slate-800 pt-5">
-          <p className="text-xs font-semibold uppercase tracking-widest text-slate-500">Transcript slots</p>
-          {transcripts.length === 0 ? (
-            <p className="mt-2 text-xs leading-5 text-slate-600">No uploaded transcripts are available yet.</p>
-          ) : (
-            <>
-              <div className="mt-3 grid grid-cols-2 gap-2">
-                {transcripts.map((transcript) => (
-                  <button
-                    key={transcript.label}
-                    type="button"
-                    onClick={() => setSelectedTranscriptLabel(transcript.label)}
-                    className={`min-h-12 rounded-xl border px-3 text-left text-xs font-semibold ${selectedTranscript?.label === transcript.label ? "border-cyan-400/60 bg-cyan-400/10 text-cyan-300" : "border-slate-700 text-slate-400"}`}
-                  >
-                    {transcript.label}
-                    <span className="mt-1 block font-normal text-slate-500">{transcript.text.trim().split(/\s+/).filter(Boolean).length.toLocaleString()} words</span>
-                  </button>
+        <details className="mt-6 border-t border-slate-800 pt-5">
+          <summary className="flex min-h-12 cursor-pointer list-none items-center justify-between text-xs font-semibold uppercase tracking-widest text-slate-500">
+            <span>Transcript slots</span>
+            <span className="text-cyan-300">{transcripts.length}</span>
+          </summary>
+          <div className="pt-2">
+            {transcripts.length === 0 ? (
+              <p className="text-xs leading-5 text-slate-600">No uploaded transcripts are available yet.</p>
+            ) : (
+              <>
+                <div className="grid grid-cols-2 gap-2">
+                  {transcripts.map((transcript) => (
+                    <button
+                      key={transcript.label}
+                      type="button"
+                      onClick={() => setSelectedTranscriptLabel(transcript.label)}
+                      className={`min-h-12 rounded-xl border px-3 text-left text-xs font-semibold ${selectedTranscript?.label === transcript.label ? "border-cyan-400/60 bg-cyan-400/10 text-cyan-300" : "border-slate-700 text-slate-400"}`}
+                    >
+                      {transcript.label}
+                      <span className="mt-1 block font-normal text-slate-500">{transcript.text.trim().split(/\s+/).filter(Boolean).length.toLocaleString()} words</span>
+                    </button>
+                  ))}
+                </div>
+                {selectedTranscript && (
+                  <>
+                    <textarea readOnly value={selectedTranscript.text} aria-label={`${selectedTranscript.label} transcript`} className="mt-3 h-48 w-full resize-y rounded-xl border border-slate-800 bg-slate-900 p-3 text-base leading-5 text-slate-400" />
+                    <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                      <button
+                        type="button"
+                        onClick={() => { setMode("draft"); void send(`Write a complete chapter from ${selectedTranscript.label} only. Shape the introduction and body freely from this slot's material.`, "draft", "selected"); }}
+                        disabled={loading}
+                        className="min-h-12 rounded-xl border border-amber-400/40 bg-amber-400/10 px-3 text-sm font-semibold text-amber-200 disabled:cursor-not-allowed disabled:opacity-40"
+                      >
+                        Draft from {selectedTranscript.label}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => { setMode("draft"); void send("Write a complete chapter using all available transcript slots and the existing manuscript context. Choose the strongest material and shape the chapter freely.", "draft", "all"); }}
+                        disabled={loading}
+                        className="min-h-12 rounded-xl border border-cyan-400/40 bg-cyan-400/10 px-3 text-sm font-semibold text-cyan-200 disabled:cursor-not-allowed disabled:opacity-40"
+                      >
+                        Draft from all slots
+                      </button>
+                    </div>
+                  </>
+                )}
+              </>
+            )}
+          </div>
+        </details>
+
+        <details className="border-t border-slate-800 pt-5">
+          <summary className="flex min-h-12 cursor-pointer list-none items-center justify-between text-xs font-semibold uppercase tracking-widest text-slate-500">
+            <span>Sources consulted</span>
+            <span className="text-cyan-300">{sources.length}</span>
+          </summary>
+          <div className="pt-2">
+            {sources.length === 0 ? (
+              <p className="text-xs leading-5 text-slate-600">Ask a question to see the manuscript and transcript excerpts NexusLM used.</p>
+            ) : (
+              <div className="space-y-3">
+                {sources.map((source) => (
+                  <article key={source.id} className="rounded-xl border border-slate-800 bg-slate-900/70 p-3">
+                    <p className="text-xs font-semibold text-cyan-300">[{source.id}] {source.label}</p>
+                    <p className="mt-1 line-clamp-5 text-xs leading-5 text-slate-400">{source.excerpt}</p>
+                  </article>
                 ))}
               </div>
-              {selectedTranscript && (
-                <>
-                  <textarea readOnly value={selectedTranscript.text} aria-label={`${selectedTranscript.label} transcript`} className="mt-3 h-48 w-full resize-y rounded-xl border border-slate-800 bg-slate-900 p-3 text-base leading-5 text-slate-400" />
-                  <div className="mt-3 grid gap-2 sm:grid-cols-2">
-                    <button
-                      type="button"
-                      onClick={() => { setMode("draft"); void send(`Write a complete chapter from ${selectedTranscript.label} only. Shape the introduction and body freely from this slot's material.`, "draft", "selected"); }}
-                      disabled={loading}
-                      className="min-h-12 rounded-xl border border-amber-400/40 bg-amber-400/10 px-3 text-sm font-semibold text-amber-200 disabled:cursor-not-allowed disabled:opacity-40"
-                    >
-                      Draft from {selectedTranscript.label}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => { setMode("draft"); void send("Write a complete chapter using all available transcript slots and the existing manuscript context. Choose the strongest material and shape the chapter freely.", "draft", "all"); }}
-                      disabled={loading}
-                      className="min-h-12 rounded-xl border border-cyan-400/40 bg-cyan-400/10 px-3 text-sm font-semibold text-cyan-200 disabled:cursor-not-allowed disabled:opacity-40"
-                    >
-                      Draft from all slots
-                    </button>
-                  </div>
-                </>
-              )}
-            </>
-          )}
-        </div>
-
-        <div className="border-t border-slate-800 pt-5">
-          <p className="text-xs font-semibold uppercase tracking-widest text-slate-500">Sources consulted</p>
-          {sources.length === 0 ? (
-            <p className="mt-2 text-xs leading-5 text-slate-600">Ask a question to see the manuscript and transcript excerpts NexusLM used.</p>
-          ) : (
-            <div className="mt-3 space-y-3">
-              {sources.map((source) => (
-                <article key={source.id} className="rounded-xl border border-slate-800 bg-slate-900/70 p-3">
-                  <p className="text-xs font-semibold text-cyan-300">[{source.id}] {source.label}</p>
-                  <p className="mt-1 line-clamp-5 text-xs leading-5 text-slate-400">{source.excerpt}</p>
-                </article>
-              ))}
-            </div>
-          )}
-        </div>
+            )}
+          </div>
+        </details>
       </aside>
     </div>
   );
