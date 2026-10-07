@@ -804,22 +804,8 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
     const instruction = (requestText ?? input).trim();
     if (!instruction || loading) return;
     const activeMode = requestMode ?? inferMode(instruction, mode);
-    const requestUsesBook = options?.forceGeneral ? false : useBookContext;
-    if (contextMode === "book" && !options?.forceGeneral && !hasBookContext) {
-      setMessages((current) => [...current,
-        { role: "user", content: instruction },
-        { role: "assistant", content: "Book context is not connected. Switch Context to General, or load a manuscript/transcript first." },
-      ]);
-      return;
-    }
-    if ((activeMode === "edit" || activeMode === "draft") && !requestUsesBook) {
-      setMessages((current) => [...current,
-        { role: "user", content: instruction },
-        { role: "assistant", content: "This is a book action. Switch Context to Book and load a manuscript or transcript before using it." },
-      ]);
-      return;
-    }
-    if (activeMode === "edit" && !manifest) {
+    const requestUsesBook = options?.forceGeneral ? false : useBookContext && hasBookContext;
+    if (requestUsesBook && activeMode === "edit" && !manifest) {
       setMessages((current) => [...current,
         { role: "user", content: instruction },
         { role: "assistant", content: "Load or finish a manuscript before requesting an edit." },
@@ -1582,7 +1568,9 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
           {contextMode === "general"
             ? "Book and transcript context is ignored for this conversation."
             : contextMode === "book"
-              ? "Ground answers in the connected manuscript and transcript sources."
+              ? hasBookContext
+                ? "Ground answers in the connected manuscript and transcript sources."
+                : "No book is connected yet, so NexusLM will handle requests as general conversation."
               : hasBookContext
                 ? "Book context is active because a manuscript or transcript is connected."
                 : "No book is connected, so NexusLM is in general conversation mode."}

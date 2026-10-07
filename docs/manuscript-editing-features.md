@@ -39,9 +39,11 @@ Use the **Context** control to choose:
 
 - **Auto:** use connected manuscript/transcript context when available; otherwise use general chat
 - **General:** ignore the connected book and have a normal assistant conversation
-- **Book:** require manuscript/transcript context and use the source-grounded NexusLM book workflows
+- **Book:** use manuscript/transcript context and source-grounded book workflows when a book is connected
 
 NexusLM uses only the configured **DeepSeek Chat** and **DeepSeek Reasoner** agents. Manuscript edits remain approval-gated through the preview, diff, version-lock, and undo workflow above. Web search, arbitrary code execution, and automatic external actions are not enabled by this chat surface.
+
+General conversation accepts the user's instruction directly without requiring a NexusLM mode. Requests such as writing a chapter, drafting an article, revising text, creating HTML, or generating code are handled as ordinary assistant requests. If **Book** is selected without a connected manuscript or transcript, NexusLM falls back to general conversation instead of redirecting the user.
 
 ## 1. Audio Source Manager ✅ COMPLETED
 
