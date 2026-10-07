@@ -1283,6 +1283,13 @@ export default function HomePage() {
     setActiveNav("ebook");
   }, []);
 
+  const handleEbookPipelineReset = useCallback(() => {
+    setEbookTranscriptImports([]);
+    setEbookImportNotice(null);
+    setEbookManifest(null);
+    setEbookSnapshot(null);
+  }, []);
+
   const handleEbookTranscriptImportHandled = useCallback((
     requestId: string,
     result: { ok: boolean; message: string },
@@ -1385,10 +1392,11 @@ export default function HomePage() {
                     <EbookPipeline
                       key={ebookPipelineKey}
                       ebookManifest={ebookManifest}
-                      transcriptImport={ebookTranscriptImports[0] ?? null}
+                      transcriptImports={ebookTranscriptImports}
                       onManifestReady={handleEbookManifestReady}
                       onPipelineSnapshotChange={setEbookSnapshot}
                       onTranscriptImportHandled={handleEbookTranscriptImportHandled}
+                      onPipelineReset={handleEbookPipelineReset}
                       onSaveProject={handleSaveProject}
                     />
                   </div>
