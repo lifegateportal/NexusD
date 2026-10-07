@@ -1693,41 +1693,38 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
                 }}
               />
               {attachments.length > 0 && (
-                <div className="flex flex-wrap gap-2 px-3 pt-3">
-                  {attachments.map((attachment) => (
-                    <div key={attachment.id} className="flex max-w-full items-center gap-1 rounded-lg border border-cyan-500/30 bg-cyan-500/10 px-1.5 py-1 text-xs text-cyan-100">
-                      <button
-                        type="button"
-                        onClick={() => openAttachmentPreview(attachment.id)}
-                        className="min-h-12 max-w-[12rem] truncate rounded-md px-2 text-left text-cyan-100"
-                        title={`Preview ${attachment.name}`}
-                      >
-                        {attachment.name}
-                      </button>
-                      <button type="button" onClick={() => {
-                        setAttachments((current) => current.filter((item) => item.id !== attachment.id));
-                        setSelectedAttachmentId((current) => current === attachment.id ? (attachments.find((item) => item.id !== attachment.id)?.id ?? null) : current);
-                      }} className="min-h-12 min-w-12 rounded-md text-cyan-300" aria-label={`Remove ${attachment.name}`}>
-                        ×
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              )}
-              {attachments.length > 0 && (
-                <div className="mx-3 mt-3 flex items-center justify-between gap-3 rounded-xl border border-slate-800 bg-slate-950/60 px-3 py-2">
-                  <div className="min-w-0">
-                    <p className="text-xs font-semibold text-slate-300">Read every section</p>
-                    <p className="mt-1 text-[11px] leading-5 text-slate-500">Use full-document processing for summaries, themes, and transcript-wide analysis.</p>
+                <div className="flex min-w-0 items-center gap-2 border-b border-slate-800 px-3 py-1.5">
+                  <div className="flex min-w-0 flex-1 items-center gap-2 overflow-x-auto py-0.5">
+                    {attachments.map((attachment) => (
+                      <div key={attachment.id} className="flex shrink-0 items-center gap-1 rounded-lg border border-cyan-500/30 bg-cyan-500/10 text-xs text-cyan-100">
+                        <button
+                          type="button"
+                          onClick={() => openAttachmentPreview(attachment.id)}
+                          className="min-h-12 max-w-[12rem] truncate rounded-md px-2 text-left text-cyan-100"
+                          title={`Preview ${attachment.name}`}
+                        >
+                          {attachment.name}
+                        </button>
+                        <button type="button" onClick={() => {
+                          setAttachments((current) => current.filter((item) => item.id !== attachment.id));
+                          setSelectedAttachmentId((current) => current === attachment.id ? (attachments.find((item) => item.id !== attachment.id)?.id ?? null) : current);
+                        }} className="min-h-12 min-w-12 rounded-md text-cyan-300" aria-label={`Remove ${attachment.name}`}>
+                          ×
+                        </button>
+                      </div>
+                    ))}
                   </div>
                   <button
                     type="button"
                     role="switch"
                     aria-checked={processEntireDocument}
                     onClick={() => setProcessEntireDocument((current) => !current)}
+                    title="Read every document section for transcript-wide analysis"
                     className={`min-h-12 shrink-0 rounded-xl border px-3 text-xs font-bold ${processEntireDocument ? "border-cyan-400/60 bg-cyan-400/15 text-cyan-200" : "border-slate-700 text-slate-400"}`}
                   >
-                    {processEntireDocument ? "On" : "Off"}
+                    <span className="sm:hidden">All</span>
+                    <span className="hidden sm:inline">Read all</span>
+                    {processEntireDocument ? " · On" : " · Off"}
                   </button>
                 </div>
               )}
