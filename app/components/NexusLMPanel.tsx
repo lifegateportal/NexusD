@@ -323,8 +323,23 @@ function readDataUrl(file: File): Promise<string> {
   });
 }
 
+function looksLikeHtmlDocument(content: string): boolean {
+  const start = content.replace(/^\uFEFF/, "").trimStart().slice(0, 4000);
+  return /^<!doctype\s+html\b/i.test(start)
+    || /^<html(?:\s[^>]*)?>/i.test(start)
+    || (/<head(?:\s[^>]*)?>/i.test(start) && /<body(?:\s[^>]*)?>/i.test(content));
+}
+
+function attachmentKind(attachment: ChatAttachment): ChatAttachment["kind"] {
+  return attachment.kind === "text" && looksLikeHtmlDocument(attachment.content)
+    ? "html"
+    : attachment.kind;
+}
+
 function DocumentPreview({ attachment }: { attachment: ChatAttachment }) {
-  if (attachment.kind === "pdf") {
+  const kind = attachmentKind(attachment);
+
+  if (kind === "pdf") {
     return attachment.previewDataUrl ? (
       <iframe
         title={attachment.name}
@@ -338,7 +353,7 @@ function DocumentPreview({ attachment }: { attachment: ChatAttachment }) {
     );
   }
 
-  if (attachment.kind === "html") {
+  if (kind === "html") {
     return (
       <iframe
         title={attachment.name}
@@ -545,7 +560,8 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
     for (const file of files) {
       const extension = file.name.toLowerCase().split(".").pop() ?? "";
       const isPdf = extension === "pdf" || file.type === "application/pdf";
-      const isHtml = extension === "html" || extension === "htm" || file.type === "text/html";
+      const isHtmlFilename = /\.(?:html?|xhtml)(?:\.txt)?$/i.test(file.name);
+      const isHtml = isHtmlFilename || file.type === "text/html";
       const isText = file.type.startsWith("text/")
         || ["csv", "css", "json", "js", "jsx", "md", "tsx", "ts", "xml", "yaml", "yml", "srt", "log"].includes(extension);
       if (!isText && !isHtml && !isPdf) {
@@ -576,13 +592,14 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
           setAttachmentError(`${file.name} is empty.`);
           continue;
         }
+        const detectedKind = isPdf || !looksLikeHtmlDocument(content) ? (isPdf ? "pdf" : "text") : "html";
         accepted.push({
           id: `${file.name}-${file.lastModified}-${accepted.length}`,
           name: file.name,
           content,
           size: file.size,
-          kind: isPdf ? "pdf" : isHtml ? "html" : "text",
-          mimeType: file.type || (isPdf ? "application/pdf" : isHtml ? "text/html" : "text/plain"),
+          kind: isPdf ? "pdf" : isHtml || detectedKind === "html" ? "html" : "text",
+          mimeType: file.type || (isPdf ? "application/pdf" : isHtml || detectedKind === "html" ? "text/html" : "text/plain"),
           previewDataUrl,
         });
       } catch (error) {
@@ -1464,7 +1481,7 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
                   className={`flex min-h-12 w-full items-center justify-between gap-2 rounded-xl border px-3 text-left text-xs ${selectedAttachmentId === attachment.id ? "border-cyan-400/50 bg-cyan-400/10 text-cyan-100" : "border-slate-800 text-slate-400"}`}
                 >
                   <span className="truncate">{attachment.name}</span>
-                  <span className="shrink-0 uppercase text-[10px] text-slate-500">{attachment.kind}</span>
+                  <span className="shrink-0 uppercase text-[10px] text-slate-500">{attachmentKind(attachment)}</span>
                 </button>
               ))}
             </div>
