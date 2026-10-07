@@ -1771,7 +1771,7 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
         </div>
       </section>
 
-      <aside className={`${showMobileContext ? "absolute inset-x-0 bottom-0 top-12 z-20 block" : "hidden"} ${previewExpanded ? "max-h-[90dvh]" : "max-h-[70dvh]"} relative w-full shrink-0 overflow-y-auto border-t border-slate-800 bg-shell-950/95 p-4 shadow-2xl lg:static lg:inset-auto lg:z-auto lg:block lg:max-h-none lg:border-t-0 lg:bg-shell-950 lg:p-5 lg:shadow-none ${previewExpanded ? "lg:w-[min(58vw,50rem)]" : "lg:w-[18rem]"}`}>
+      <aside className={`${showMobileContext ? "relative block" : "hidden"} ${previewExpanded ? "max-h-[70dvh]" : "max-h-[48dvh]"} w-full shrink-0 overflow-y-auto border-t border-slate-800 bg-shell-950/95 p-4 shadow-2xl lg:static lg:block lg:max-h-none lg:border-t-0 lg:bg-shell-950 lg:p-5 lg:shadow-none ${previewExpanded ? "lg:w-[min(58vw,50rem)]" : "lg:w-[18rem]"}`}>
         <button
           type="button"
           onClick={() => setPreviewExpanded((current) => !current)}
