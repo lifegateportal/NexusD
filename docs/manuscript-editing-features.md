@@ -50,6 +50,8 @@ NexusLM uses only the configured **DeepSeek Chat** and **DeepSeek Reasoner** age
 
 General conversation accepts the user's instruction directly without requiring a NexusLM mode. Requests such as writing a chapter, drafting an article, revising text, creating HTML, or generating code are handled as ordinary assistant requests. If **Book** is selected without a connected manuscript or transcript, NexusLM falls back to general conversation instead of redirecting the user.
 
+Book-mode Scripture is user-directed rather than locked to one sermon template. Ask for every passage in standalone blockquotes when that is the desired presentation; ask for inline citations, lists, devotional prose, or another form when that better fits the chapter. Scripture wording remains source-grounded, and unavailable-provider notices are never presented as Bible text.
+
 ### Long-form and format-preserving workflow
 
 1. Choose **General** (or leave Context on **Auto** without a connected book).

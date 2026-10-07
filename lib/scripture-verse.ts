@@ -1,4 +1,9 @@
-import { formatScriptureReference, normalizeScriptureBlockquotes, parseMarkdownBlockquote } from "@/lib/scripture-formatter";
+import {
+  formatScriptureReference,
+  normalizeScriptureBlockquotes,
+  parseMarkdownBlockquote,
+  requestsStandaloneScriptureBlockquotes,
+} from "@/lib/scripture-formatter";
 
 const BIBLE_API_TRANSLATIONS = new Set(["web", "kjv", "asv", "ylt"]);
 const BOLLS_TRANSLATIONS = new Set(["niv", "nlt", "nkjv", "amp", "msg"]);
@@ -71,6 +76,13 @@ export function stripScriptureMetadata(value: string): string {
     .trim();
 }
 
+export function isBlockedScriptureProviderResponse(value: string): boolean {
+  const normalized = value.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
+  return /biblica,\s*inc\.\s+has prohibited me from using/i.test(normalized)
+    || /bolls\.life is developed and operated/i.test(normalized)
+    || /choose truly free translations/i.test(normalized);
+}
+
 function canonicalReference(parsed: ParsedReference): string {
   return `${parsed.book} ${parsed.chapter}:${parsed.start}${parsed.end > parsed.start ? `–${parsed.end}` : ""}`;
 }
@@ -88,7 +100,7 @@ async function fetchFromBolls(parsed: ParsedReference, translation: string): Pro
     .filter((verse) => verse.verse >= parsed.start && verse.verse <= parsed.end)
     .map((verse) => stripHtml(verse.text.replace(/\n+/g, " ")))
     .filter(Boolean);
-  if (selected.length === 0) return null;
+  if (selected.length === 0 || selected.some(isBlockedScriptureProviderResponse)) return null;
   return { reference: canonicalReference(parsed), translation: translation.toUpperCase(), text: selected.join(" ") };
 }
 
@@ -101,7 +113,9 @@ async function fetchFromBibleApi(reference: string, parsed: ParsedReference, tra
   if (!response.ok) return null;
   const data = await response.json() as { text?: string; error?: string };
   if (data.error || !data.text?.trim()) return null;
-  return { reference: canonicalReference(parsed), translation: translation.toUpperCase(), text: stripScriptureMetadata(data.text.replace(/\n+/g, " ").trim()) };
+  const text = stripScriptureMetadata(data.text.replace(/\n+/g, " ").trim());
+  if (!text || isBlockedScriptureProviderResponse(text)) return null;
+  return { reference: canonicalReference(parsed), translation: translation.toUpperCase(), text };
 }
 
 export async function fetchCanonicalScripture(reference: string, translation: string): Promise<CanonicalScripture | null> {
@@ -126,13 +140,24 @@ function comparableText(value: string): string {
     .trim();
 }
 
-export async function completeScriptureBlockquotes(text: string): Promise<string> {
-  const normalized = normalizeScriptureBlockquotes(text);
+export async function completeScriptureBlockquotes(
+  text: string,
+  options: { normalize?: boolean; verify?: boolean } = {},
+): Promise<string> {
+  const normalized = options.normalize === false ? text : normalizeScriptureBlockquotes(text);
   const paragraphs = normalized.split(/\n{2,}/).filter(Boolean);
   const completed = await Promise.all(paragraphs.map(async (paragraph) => {
     const quote = parseMarkdownBlockquote(paragraph);
     if (!quote?.reference || !quote.translation || !/\d+:\d+/.test(quote.reference)) return paragraph;
     const cleanedQuoteText = stripScriptureMetadata(quote.text);
+    if (isBlockedScriptureProviderResponse(cleanedQuoteText)) {
+      return `> ${formatScriptureReference(quote.reference, quote.translation)}`;
+    }
+    if (options.verify === false) {
+      return cleanedQuoteText === quote.text
+        ? paragraph
+        : `> ${cleanedQuoteText}\n> ${formatScriptureReference(quote.reference, quote.translation)}`;
+    }
     const canonical = await fetchCanonicalScripture(quote.reference, quote.translation);
     if (!canonical) {
       return cleanedQuoteText === quote.text
@@ -143,4 +168,12 @@ export async function completeScriptureBlockquotes(text: string): Promise<string
     return `> ${canonical.text}\n> ${formatScriptureReference(canonical.reference, canonical.translation)}`;
   }));
   return completed.join("\n\n");
+}
+
+export async function finalizeNexusLMScripture(text: string, instruction: string): Promise<string> {
+  const useBlockquoteContract = requestsStandaloneScriptureBlockquotes(instruction);
+  return completeScriptureBlockquotes(text, {
+    normalize: useBlockquoteContract,
+    verify: useBlockquoteContract,
+  });
 }

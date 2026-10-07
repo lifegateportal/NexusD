@@ -243,6 +243,7 @@ FULL-PASSAGE QUOTING — NEXUSLM REQUIREMENT:
 • Do not use an ellipsis to shorten a single-verse or contiguous-range quotation in NexusLM output. Resolve the complete text from the stated translation before returning it.
 • If the stated translation cannot be verified, do not silently fill gaps from another translation and do not present a partial quotation as complete. State that the quotation needs verification or use a citation-only reference.
 • Apply this procedure in order: identify the reference, identify the translation, obtain the canonical passage, compare the draft text, then replace any partial text with the complete canonical passage before delivery.
+• Never reproduce a Bible provider's copyright, licensing, API, or retrieval notice as Scripture. If a provider returns a notice instead of the passage, use the verified source wording or a citation-only reference.
 
 PLACEMENT AND SEQUENCING:
 • INTRODUCTION SENTENCE + BLOCKQUOTE + APPLICATION: Every scripture must follow this 3-part pattern.
@@ -252,3 +253,29 @@ PLACEMENT AND SEQUENCING:
 • Quote each scripture in full ONCE per section. Every subsequent reference to that same passage uses shorthand only: "As Jesus said in John 15:5..." — never reprint the verse text again.
 • Never add biblical background (historical setting, authorial intent, cultural or manuscript context) unless the source explicitly stated it.
 • Every scripture must complete TEXT → TRUTH → APPLICATION within 2–3 paragraphs of the quotation.`;
+
+export const NEXUSLM_SCRIPTURE_FORMATTING_RULES = `SCRIPTURE PRESENTATION — USER-DIRECTED:
+• Follow the user's requested Scripture presentation. Do not impose a fixed introduction, application, placement, or blockquote template unless the user asks for it.
+• If the user asks to quote all, every, or selected Scriptures in block form, use standalone Markdown blockquotes and put each reference on its own citation line.
+• If the user asks for inline citations, a list, devotional prose, a study outline, or another presentation, preserve that requested form instead of converting it to blockquotes.
+• Preserve the supplied wording, punctuation, capitalization, translation, and omissions when they are provided. Do not turn a paraphrase into a quotation, invent a reference, or silently substitute a translation.
+• When the user requests a complete or verbatim passage and the wording cannot be verified, use a citation-only reference or explain that verification is needed rather than fabricating text.
+• Do not add speculative biblical allusions or background that the sources and user request do not support.
+• Never reproduce a Bible provider's copyright, licensing, API, or retrieval notice as Scripture.`;
+
+export function requestsStandaloneScriptureBlockquotes(instruction: string): boolean {
+  const normalized = instruction.toLowerCase();
+  if (/\b(?:do not|don't|without|avoid|no)\b[\s\S]{0,80}\bblock\s*quotes?\b/.test(normalized)) {
+    return false;
+  }
+  if (
+    /\b(?:inline|in-line|prose)\b[\s\S]{0,80}\bblock\s*quotes?\b/.test(normalized)
+    || /\bblock\s*quotes?\b[\s\S]{0,80}\b(?:instead of|rather than)\b[\s\S]{0,80}\b(?:inline|in-line|prose)\b/.test(normalized)
+  ) {
+    return false;
+  }
+
+  const requestsBlockquotes = /\b(?:block\s*quotes?|block\s+form|standalone\s+(?:quotes?|passages?))\b/.test(normalized);
+  const mentionsScripture = /\b(?:scriptures?|bible\s+verses?|verses?|passages?)\b/.test(normalized);
+  return requestsBlockquotes && mentionsScripture;
+}

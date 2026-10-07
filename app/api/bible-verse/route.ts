@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
-import { stripScriptureMetadata } from "@/lib/scripture-verse";
+import { isBlockedScriptureProviderResponse, stripScriptureMetadata } from "@/lib/scripture-verse";
 
 export const runtime = "nodejs";
 export const maxDuration = 15;
@@ -51,6 +51,12 @@ const RequestSchema = z.object({
 
 type BibleApiVerse = { book_name: string; chapter: number; verse: number; text: string };
 type BibleApiResponse = { reference?: string; text?: string; error?: string; verses?: BibleApiVerse[] };
+type VerseLookupResult = {
+  reference: string;
+  text: string;
+  verses?: Array<{ ref: string; text: string }>;
+};
+type ProviderUnavailableResult = { providerUnavailable: true };
 
 function parseRef(reference: string) {
   const m = reference.trim().match(/^((?:[1-3]\s+)?[A-Za-z]+(?:\s+[A-Za-z]+)?)\s+(\d+):(\d+)(?:-(\d+))?$/);
@@ -63,7 +69,7 @@ async function fetchFromBolls(
   reference: string,
   translation: (typeof BOLLS_TRANSLATIONS)[number],
   returnVerses: boolean,
-): Promise<{ reference: string; text: string; verses?: Array<{ ref: string; text: string }> } | null> {
+): Promise<VerseLookupResult | ProviderUnavailableResult | null> {
   const parsed = parseRef(reference);
   if (!parsed) return null;
   const bookId = BOOK_IDS[parsed.book.toLowerCase()];
@@ -77,6 +83,9 @@ async function fetchFromBolls(
   if (filtered.length === 0) return null;
   const makeRef = (v: number) => `${parsed.book} ${parsed.chapter}:${v}`;
   const verses = filtered.map((v) => ({ ref: makeRef(v.verse), text: stripHtml(v.text.replace(/\n+/g, " ")) }));
+  if (verses.some((verse) => isBlockedScriptureProviderResponse(verse.text))) {
+    return { providerUnavailable: true };
+  }
   if (returnVerses && filtered.length > 1) {
     return { reference: `${parsed.book} ${parsed.chapter}:${parsed.start}-${parsed.end}`, text: verses.map((v) => v.text).join(" "), verses };
   }
@@ -98,6 +107,9 @@ export async function POST(req: NextRequest) {
         input.translation as (typeof BOLLS_TRANSLATIONS)[number],
         input.returnVerses,
       );
+      if (result && "providerUnavailable" in result && result.providerUnavailable) {
+        return NextResponse.json({ error: "The requested translation was not returned by the configured provider." }, { status: 503 });
+      }
       if (result) return NextResponse.json(result);
       return NextResponse.json({ error: "Not found" }, { status: 404 });
     }
@@ -108,15 +120,22 @@ export async function POST(req: NextRequest) {
     if (!res.ok) return NextResponse.json({ error: "Not found" }, { status: 404 });
     const data = await res.json() as BibleApiResponse;
     if (data.error || !data.text) return NextResponse.json({ error: data.error ?? "No text returned" }, { status: 404 });
+    const text = data.text.replace(/\n+/g, " ").trim();
+    if (isBlockedScriptureProviderResponse(text)) {
+      return NextResponse.json({ error: "The requested translation was not returned by the configured provider." }, { status: 503 });
+    }
 
     if (input.returnVerses && data.verses && data.verses.length > 0) {
       const verses = data.verses.map((v) => ({
         ref: `${v.book_name} ${v.chapter}:${v.verse}`,
         text: v.text.replace(/\n+/g, " ").trim(),
       }));
+      if (verses.some((verse) => isBlockedScriptureProviderResponse(verse.text))) {
+        return NextResponse.json({ error: "The requested translation was not returned by the configured provider." }, { status: 503 });
+      }
       return NextResponse.json({ reference: data.reference ?? input.reference, verses });
     }
-    return NextResponse.json({ reference: data.reference ?? input.reference, text: data.text.replace(/\n+/g, " ").trim() });
+    return NextResponse.json({ reference: data.reference ?? input.reference, text });
   } catch {
     return NextResponse.json({ error: "Fetch failed" }, { status: 502 });
   }
