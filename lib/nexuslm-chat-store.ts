@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { BookTemplateEnum } from "@/lib/schemas/ebook";
 
 export type NexusLMChatMessage = {
   role: "user" | "assistant" | "system";
@@ -17,12 +18,30 @@ export type NexusLMChatAttachment = {
   previewDataUrl?: string;
 };
 
+export type NexusLMManuscriptChapter = {
+  id: string;
+  number: number;
+  title: string;
+  content: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type NexusLMManuscript = {
+  title: string;
+  subtitle: string;
+  authorName: string;
+  template: z.infer<typeof BookTemplateEnum>;
+  chapters: NexusLMManuscriptChapter[];
+};
+
 export type NexusLMChatArchive = {
   id: string;
   scope: string;
   title: string;
   messages: NexusLMChatMessage[];
   attachments: NexusLMChatAttachment[];
+  manuscript?: NexusLMManuscript;
   createdAt: string;
   updatedAt: string;
 };
@@ -54,12 +73,30 @@ const ChatAttachmentSchema = z.object({
   previewDataUrl: z.string().optional(),
 }).strict();
 
+const ManuscriptChapterSchema = z.object({
+  id: z.string().min(1),
+  number: z.number().int().positive().max(200),
+  title: z.string().trim().min(1).max(300),
+  content: z.string().min(1).max(600_000),
+  createdAt: z.string().datetime(),
+  updatedAt: z.string().datetime(),
+}).strict();
+
+const ManuscriptSchema = z.object({
+  title: z.string().trim().min(1).max(300),
+  subtitle: z.string().max(500),
+  authorName: z.string().trim().min(1).max(200),
+  template: BookTemplateEnum,
+  chapters: z.array(ManuscriptChapterSchema).max(200),
+}).strict();
+
 const ChatArchiveSchema = z.object({
   id: z.string().min(1),
   scope: z.string().min(1),
   title: z.string().min(1),
   messages: z.array(ChatMessageSchema),
   attachments: z.array(ChatAttachmentSchema),
+  manuscript: ManuscriptSchema.optional(),
   createdAt: z.string().datetime(),
   updatedAt: z.string().datetime(),
 }).strict();
@@ -121,6 +158,9 @@ function normalizeArchive(value: unknown): NexusLMChatArchive | null {
     title,
     messages,
     attachments,
+    manuscript: ManuscriptSchema.safeParse(record.manuscript).success
+      ? ManuscriptSchema.parse(record.manuscript)
+      : undefined,
     createdAt,
     updatedAt,
   };
@@ -170,6 +210,7 @@ export async function saveNexusLMChat(
     scope?: string;
     title?: string;
     attachments?: NexusLMChatAttachment[];
+    manuscript?: NexusLMManuscript;
     touchUpdatedAt?: boolean;
   } = {},
 ): Promise<void> {
@@ -189,6 +230,7 @@ export async function saveNexusLMChat(
         title: options.title?.trim() || (existing?.title && existing.title !== "New chat" ? existing.title : derivedTitle),
         messages,
         attachments: options.attachments ?? existing?.attachments ?? [],
+        manuscript: options.manuscript ?? existing?.manuscript,
         createdAt: existing?.createdAt ?? now,
         updatedAt: options.touchUpdatedAt === false ? existing?.updatedAt ?? now : now,
       };
@@ -213,6 +255,7 @@ export async function renameNexusLMChat(id: string, title: string): Promise<void
     scope: archive.scope,
     title: title.trim() || "New chat",
     attachments: archive.attachments,
+    manuscript: archive.manuscript,
     touchUpdatedAt: false,
   });
 }

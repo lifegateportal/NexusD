@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-export const NexusLMResponseLengthSchema = z.enum(["shorter", "default", "longer"]);
+export const NexusLMResponseLengthSchema = z.enum(["shorter", "default", "longer", "long-form"]);
 
 export type NexusLMResponseLength = z.infer<typeof NexusLMResponseLengthSchema>;
 
@@ -39,6 +39,15 @@ export const NEXUSLM_RESPONSE_LENGTHS: Record<NexusLMResponseLength, {
     draftTokens: 32000,
     editTokens: 28000,
     instruction: "Develop the supported material fully. Do not omit relevant manuscript or transcript content merely to be brief.",
+  },
+  "long-form": {
+    label: "Long-form chapter",
+    description: "A complete chapter-sized response for manuscripts, essays, reports, and other substantial work",
+    chatAskTokens: 24000,
+    chatSocraticTokens: 16000,
+    draftTokens: 32000,
+    editTokens: 28000,
+    instruction: "Write a complete, sustained long-form response when the user requests a chapter, manuscript, essay, report, or other substantial work. Develop the structure, transitions, examples, and conclusion fully. Do not substitute an outline, writing advice, refusal, or redirect for the requested draft. If the request is larger than one response, clearly label the part and continue the work in an orderly chapter-by-chapter sequence.",
   },
 };
 

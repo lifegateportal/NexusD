@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { ChapterDraftSchema, EbookManifestSchema } from "@/lib/schemas/ebook";
+import { BOOK_TEMPLATE_IDS, ChapterDraftSchema, EbookManifestSchema } from "@/lib/schemas/ebook";
 import type { EbookManifest } from "@/lib/schemas/ebook";
 import type { ChapterDraft } from "@/lib/schemas/ebook";
 import type { EbookPipelineSnapshot } from "@/app/components/EbookPipeline";
@@ -13,6 +13,8 @@ import {
   renameNexusLMChat,
   saveNexusLMChat,
   type NexusLMChatAttachment,
+  type NexusLMManuscript,
+  type NexusLMManuscriptChapter,
   type NexusLMChatSummary,
 } from "@/lib/nexuslm-chat-store";
 import { NEXUSLM_WRITING_STYLES, type NexusLMWritingStyle } from "@/lib/nexuslm-writing-styles";
@@ -51,7 +53,9 @@ type GeneralRequest = {
   mode: "ask" | "socratic" | "plan";
   attachments: ChatAttachment[];
   processEntireDocument: boolean;
+  responseLength: NexusLMResponseLength;
 };
+type ManuscriptChapter = NexusLMManuscriptChapter;
 type LibraryPatch = {
   slug: string;
   title?: string;
@@ -195,6 +199,32 @@ function initialMessage(manifest: EbookManifest | null): Message {
   return manifest
     ? { role: "system", content: `NexusLM is connected to “${manifest.bookTitle}”. Ask about the manuscript, challenge its thinking, or request a focused edit.` }
     : { role: "system", content: "NexusLM is ready for general conversation. Ask anything, attach a text, HTML, or PDF document, or connect a book when you want source-grounded manuscript help." };
+}
+
+function createEmptyManuscript(manifest: EbookManifest | null, pipelineSnapshot: EbookPipelineSnapshot | null): NexusLMManuscript {
+  return {
+    title: manifest?.bookTitle ?? pipelineSnapshot?.bookTitle ?? "Untitled manuscript",
+    subtitle: manifest?.subtitle ?? "",
+    authorName: manifest?.authorName ?? "NexusLM",
+    template: "popular-nonfiction",
+    chapters: [],
+  };
+}
+
+function extractChapterTitle(content: string, chapterNumber: number): string {
+  const heading = content.match(/^\s*#{1,3}\s*(?:chapter\s+\d+\s*[:.-]?\s*)?(.+?)\s*$/im);
+  if (heading?.[1]?.trim()) return heading[1].trim().slice(0, 300);
+  const labeled = content.match(/^\s*chapter\s+\d+\s*[:.-]\s*(.+?)\s*$/im);
+  if (labeled?.[1]?.trim()) return labeled[1].trim().slice(0, 300);
+  return `Chapter ${chapterNumber}`;
+}
+
+function isLongFormRequest(instruction: string): boolean {
+  return /\b(?:write|draft|compose|create|generate|produce|develop|complete)\b[\s\S]{0,100}\b(?:chapter|manuscript|book|essay|report|long[\s-]?form)\b|\b(?:chapter|manuscript|book|essay|report|long[\s-]?form)\b[\s\S]{0,100}\b(?:write|draft|compose|create|generate|produce|develop|complete)\b/i.test(instruction);
+}
+
+function isPdfRequest(instruction: string): boolean {
+  return /\b(?:generate|create|make|export|download|produce|format|turn|render)\b[\s\S]{0,100}\bpdf\b|\bpdf\b[\s\S]{0,100}\b(?:generate|create|make|export|download|produce|format|render)\b/i.test(instruction);
 }
 
 function formatChapterDraft(chapter: ChapterDraft): string {
@@ -347,6 +377,15 @@ function looksLikeHtmlDocument(content: string): boolean {
     || (/<head(?:\s[^>]*)?>/i.test(start) && /<body(?:\s[^>]*)?>/i.test(content));
 }
 
+function extractGeneratedHtml(content: string): string | null {
+  const codeBlockPattern = /```(?:html?|xhtml)?\s*\n([\s\S]*?)```/gi;
+  for (const match of content.matchAll(codeBlockPattern)) {
+    const candidate = match[1].trim();
+    if (looksLikeHtmlDocument(candidate)) return candidate;
+  }
+  return looksLikeHtmlDocument(content) ? content.trim() : null;
+}
+
 function attachmentKind(attachment: Pick<ChatAttachment, "kind" | "content">): ChatAttachment["kind"] {
   return attachment.kind === "text" && looksLikeHtmlDocument(attachment.content)
     ? "html"
@@ -355,6 +394,7 @@ function attachmentKind(attachment: Pick<ChatAttachment, "kind" | "content">): C
 
 function DocumentPreview({ attachment }: { attachment: PreviewDocument }) {
   const kind = attachmentKind(attachment);
+  const htmlFrameRef = useRef<HTMLIFrameElement>(null);
 
   if (kind === "pdf") {
     return attachment.previewDataUrl ? (
@@ -372,12 +412,22 @@ function DocumentPreview({ attachment }: { attachment: PreviewDocument }) {
 
   if (kind === "html") {
     return (
-      <iframe
-        title={attachment.name}
-        srcDoc={attachment.content}
-        sandbox=""
-        className="h-[52dvh] min-h-[22rem] w-full rounded-xl border border-slate-800 bg-white"
-      />
+      <div className="space-y-2">
+        <button
+          type="button"
+          onClick={() => htmlFrameRef.current?.contentWindow?.print()}
+          className="min-h-12 rounded-xl border border-cyan-400/40 bg-cyan-400/10 px-3 text-xs font-semibold text-cyan-200"
+        >
+          Print / Save PDF (exact preview)
+        </button>
+        <iframe
+          ref={htmlFrameRef}
+          title={attachment.name}
+          srcDoc={attachment.content}
+          sandbox="allow-modals"
+          className="h-[52dvh] min-h-[22rem] w-full rounded-xl border border-slate-800 bg-white"
+        />
+      </div>
     );
   }
 
@@ -409,6 +459,8 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
   const [lastGeneralRequest, setLastGeneralRequest] = useState<GeneralRequest | null>(null);
   const [selectedAttachmentId, setSelectedAttachmentId] = useState<string | null>(null);
   const [generatedPreview, setGeneratedPreview] = useState<PreviewDocument | null>(null);
+  const [manuscript, setManuscript] = useState<NexusLMManuscript>(() => createEmptyManuscript(manifest, pipelineSnapshot));
+  const [pdfExporting, setPdfExporting] = useState(false);
   const [showDocumentPreview, setShowDocumentPreview] = useState(false);
   const [previewExpanded, setPreviewExpanded] = useState(false);
   const [sources, setSources] = useState<Source[]>([]);
@@ -424,11 +476,35 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
+  const generatedPreviewUrlRef = useRef<string | null>(null);
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const activeScopeRef = useRef(conversationKey);
   const historyLoadedRef = useRef(false);
   const hasBookContext = Boolean(manifest || transcripts.length > 0);
   const useBookContext = contextMode === "book" || (contextMode === "auto" && hasBookContext);
+
+  function clearGeneratedPreview(): void {
+    if (generatedPreviewUrlRef.current) {
+      URL.revokeObjectURL(generatedPreviewUrlRef.current);
+      generatedPreviewUrlRef.current = null;
+    }
+    setGeneratedPreview(null);
+  }
+
+  function showGeneratedPreview(preview: PreviewDocument): void {
+    if (generatedPreviewUrlRef.current) {
+      URL.revokeObjectURL(generatedPreviewUrlRef.current);
+      generatedPreviewUrlRef.current = null;
+    }
+    if (preview.previewDataUrl?.startsWith("blob:")) {
+      generatedPreviewUrlRef.current = preview.previewDataUrl;
+    }
+    setGeneratedPreview(preview);
+  }
+
+  useEffect(() => () => {
+    if (generatedPreviewUrlRef.current) URL.revokeObjectURL(generatedPreviewUrlRef.current);
+  }, []);
 
   useEffect(() => {
     try {
@@ -466,9 +542,10 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
         if (cancelled) return;
         setMessages(archive?.messages?.length ? archive.messages : [initialMessage(manifest)]);
         setAttachments(archive?.attachments ?? []);
+        setManuscript(archive?.manuscript ?? createEmptyManuscript(manifest, pipelineSnapshot));
         setProcessEntireDocument(false);
         setSelectedAttachmentId(archive?.attachments?.[0]?.id ?? null);
-        setGeneratedPreview(null);
+        clearGeneratedPreview();
         setShowDocumentPreview(false);
         setPreviewExpanded(false);
         setLastGeneralRequest(null);
@@ -489,6 +566,7 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
       void saveNexusLMChat(activeConversationKey, messages, {
         scope: conversationKey,
         attachments,
+        manuscript,
       })
         .then(() => listNexusLMChats(conversationKey).then(setChatHistory))
         .catch((error) => setAttachmentError(`Chat history could not be saved: ${readableError(error)}`));
@@ -496,7 +574,7 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
     return () => {
       if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
     };
-  }, [activeConversationKey, attachments, conversationKey, messages]);
+  }, [activeConversationKey, attachments, conversationKey, manuscript, messages]);
 
   useEffect(() => {
     void listNexusLMChats(conversationKey)
@@ -521,9 +599,10 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
       setActiveConversationKey(id);
       setMessages([initialMessage(manifest)]);
       setAttachments([]);
+      setManuscript(createEmptyManuscript(manifest, pipelineSnapshot));
       setProcessEntireDocument(false);
       setSelectedAttachmentId(null);
-      setGeneratedPreview(null);
+      clearGeneratedPreview();
       setLastGeneralRequest(null);
       setAttachmentError(null);
       setShowDocumentPreview(false);
@@ -541,7 +620,7 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
     }
     historyLoadedRef.current = false;
     setActiveConversationKey(id);
-    setGeneratedPreview(null);
+    clearGeneratedPreview();
     setShowDocumentPreview(false);
     setPreviewExpanded(false);
     setShowChatHistory(false);
@@ -653,7 +732,7 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
 
   function openAttachmentPreview(id: string): void {
     if (!attachments.some((attachment) => attachment.id === id)) return;
-    setGeneratedPreview(null);
+    clearGeneratedPreview();
     setSelectedAttachmentId(id);
     setShowDocumentPreview(true);
     setShowMobileContext(true);
@@ -665,11 +744,118 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
       content,
       kind: "html",
     };
-    setGeneratedPreview(preview);
+    showGeneratedPreview(preview);
     setSelectedAttachmentId(null);
     setShowDocumentPreview(true);
     setPreviewExpanded(true);
     setShowMobileContext(true);
+  }
+
+  function addResponseAsChapter(content: string): void {
+    const trimmed = content.trim();
+    if (!trimmed) return;
+    if (trimmed.length > 600_000) {
+      setAttachmentError("This response is too large for one manuscript chapter. Save it as HTML or Markdown, then add a shorter section.");
+      return;
+    }
+    const now = new Date().toISOString();
+    setManuscript((current) => {
+      const number = current.chapters.reduce((highest, chapter) => Math.max(highest, chapter.number), 0) + 1;
+      const chapter: ManuscriptChapter = {
+        id: typeof crypto !== "undefined" && "randomUUID" in crypto ? crypto.randomUUID() : `chapter-${Date.now()}-${number}`,
+        number,
+        title: extractChapterTitle(trimmed, number),
+        content: trimmed,
+        createdAt: now,
+        updatedAt: now,
+      };
+      return { ...current, chapters: [...current.chapters, chapter] };
+    });
+    setAttachmentError(null);
+  }
+
+  function updateManuscriptField(field: "title" | "subtitle" | "authorName" | "template", value: string): void {
+    setManuscript((current) => ({
+      ...current,
+      [field]: field === "template" ? value as NexusLMManuscript["template"] : value,
+    }));
+  }
+
+  function updateManuscriptChapter(id: string, patch: Partial<Pick<ManuscriptChapter, "title" | "content">>): void {
+    setManuscript((current) => ({
+      ...current,
+      chapters: current.chapters.map((chapter) => chapter.id === id
+        ? { ...chapter, ...patch, updatedAt: new Date().toISOString() }
+        : chapter),
+    }));
+  }
+
+  function removeManuscriptChapter(id: string): void {
+    setManuscript((current) => ({ ...current, chapters: current.chapters.filter((chapter) => chapter.id !== id) }));
+  }
+
+  function moveManuscriptChapter(id: string, direction: -1 | 1): void {
+    setManuscript((current) => {
+      const chapters = [...current.chapters].sort((a, b) => a.number - b.number);
+      const index = chapters.findIndex((chapter) => chapter.id === id);
+      const nextIndex = index + direction;
+      if (index < 0 || nextIndex < 0 || nextIndex >= chapters.length) return current;
+      [chapters[index], chapters[nextIndex]] = [chapters[nextIndex], chapters[index]];
+      const now = new Date().toISOString();
+      return {
+        ...current,
+        chapters: chapters.map((chapter, chapterIndex) => ({
+          ...chapter,
+          number: chapterIndex + 1,
+          updatedAt: now,
+        })),
+      };
+    });
+  }
+
+  async function exportManuscriptPdf(chapters = manuscript.chapters): Promise<void> {
+    if (chapters.length === 0) {
+      setAttachmentError("Add at least one response as a chapter before generating a manuscript PDF.");
+      return;
+    }
+    setPdfExporting(true);
+    setAttachmentError(null);
+    try {
+      const response = await fetch("/api/nexuslm/export", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          title: manuscript.title,
+          subtitle: manuscript.subtitle,
+          authorName: manuscript.authorName,
+          template: manuscript.template,
+          chapters: chapters.map((chapter) => ({
+            number: chapter.number,
+            title: chapter.title,
+            content: chapter.content,
+          })),
+        }),
+      });
+      if (!response.ok) {
+        const payload = await response.json().catch(() => null) as { error?: string } | null;
+        throw new Error(payload?.error ?? `PDF generation failed (${response.status})`);
+      }
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      showGeneratedPreview({
+        name: `${manuscript.title || "NexusLM manuscript"}.pdf`,
+        content: "",
+        kind: "pdf",
+        previewDataUrl: url,
+      });
+      setShowDocumentPreview(true);
+      setPreviewExpanded(true);
+      setShowMobileContext(true);
+    } catch (error) {
+      setAttachmentError(readableError(error));
+    } finally {
+      setPdfExporting(false);
+    }
   }
 
   async function streamGeneralResponse(
@@ -678,6 +864,7 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
     nextMessages: Message[],
     requestAttachments: ChatAttachment[],
     shouldProcessEntireDocument: boolean,
+    requestResponseLength: NexusLMResponseLength,
   ): Promise<void> {
     const controller = new AbortController();
     abortControllerRef.current = controller;
@@ -706,7 +893,7 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
           persona: PERSONAS[persona].label,
           agent,
           writingStyle,
-          responseLength,
+          responseLength: requestResponseLength,
           llmTemperature: nexusLMTemperature,
           processEntireDocument: shouldProcessEntireDocument,
           attachments: requestAttachments.map(({ name, content, kind, mimeType }) => ({ name, content, kind, mimeType })),
@@ -731,6 +918,23 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
       answer += decoder.decode();
       updateAnswer(answer);
       if (!answer.trim()) throw new Error("NexusLM returned an empty response.");
+      if (isPdfRequest(instruction)) {
+        const htmlArtifact = extractGeneratedHtml(answer);
+        if (htmlArtifact) {
+          openGeneratedHtmlPreview(htmlArtifact);
+        } else {
+          const number = manuscript.chapters.reduce((highest, chapter) => Math.max(highest, chapter.number), 0) + 1;
+          const now = new Date().toISOString();
+          await exportManuscriptPdf([...manuscript.chapters, {
+            id: `preview-${Date.now()}`,
+            number,
+            title: extractChapterTitle(answer, number),
+            content: answer.trim(),
+            createdAt: now,
+            updatedAt: now,
+          }]);
+        }
+      }
     } catch (error) {
       const stopped = error instanceof DOMException && error.name === "AbortError";
       updateAnswer(stopped ? "Response stopped." : readableError(error));
@@ -792,6 +996,7 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
       forceGeneral: true,
       requestAttachments: lastGeneralRequest.attachments,
       processEntireDocument: lastGeneralRequest.processEntireDocument,
+      responseLength: lastGeneralRequest.responseLength,
     });
   }
 
@@ -799,10 +1004,18 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
     requestText?: string,
     requestMode?: Mode,
     draftTranscriptScope: "all" | "selected" = "all",
-    options?: { retry?: boolean; forceGeneral?: boolean; requestAttachments?: ChatAttachment[]; processEntireDocument?: boolean },
+    options?: {
+      retry?: boolean;
+      forceGeneral?: boolean;
+      requestAttachments?: ChatAttachment[];
+      processEntireDocument?: boolean;
+      responseLength?: NexusLMResponseLength;
+    },
   ) {
     const instruction = (requestText ?? input).trim();
     if (!instruction || loading) return;
+    const requestResponseLength = options?.responseLength
+      ?? (responseLength === "default" && isLongFormRequest(instruction) ? "long-form" : responseLength);
     const activeMode = requestMode ?? inferMode(instruction, mode);
     const requestUsesBook = options?.forceGeneral ? false : useBookContext && hasBookContext;
     if (requestUsesBook && activeMode === "edit" && !manifest) {
@@ -859,10 +1072,11 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
           mode: generalMode,
           attachments: requestAttachmentsSnapshot,
           processEntireDocument: shouldProcessEntireDocument,
+          responseLength: requestResponseLength,
         });
         setSources([]);
         setAttachmentError(null);
-        await streamGeneralResponse(instruction, generalMode, nextMessages, requestAttachmentsSnapshot, shouldProcessEntireDocument);
+        await streamGeneralResponse(instruction, generalMode, nextMessages, requestAttachmentsSnapshot, shouldProcessEntireDocument, requestResponseLength);
         return;
       }
 
@@ -882,7 +1096,7 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
             persona: PERSONAS[persona].label,
             agent,
             writingStyle,
-            responseLength,
+            responseLength: requestResponseLength,
             llmTemperature: nexusLMTemperature,
             book: {
               title: manifest?.bookTitle ?? pipelineSnapshot?.bookTitle ?? "Untitled book",
@@ -912,7 +1126,7 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
             persona: PERSONAS[persona].label,
             agent,
             writingStyle,
-            responseLength,
+            responseLength: requestResponseLength,
             llmTemperature: nexusLMTemperature,
             book: { title: manifest?.bookTitle ?? pipelineSnapshot?.bookTitle ?? "Untitled book", chapters: manifest?.chapters.map((chapter) => ({ number: chapter.number, title: chapter.title })) ?? [] },
             manuscript: manifest ? { frontMatter: manifest.frontMatter, chapters: manifest.chapters } : null,
@@ -935,7 +1149,7 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
           manifest,
           instruction: `${MODES[activeMode].prompt}\nPersona: ${PERSONAS[persona].description}\n\nUser request:\n${userMessage}`,
           history: compactHistory(nextMessages),
-          responseLength,
+          responseLength: requestResponseLength,
           llmTemperature: nexusLMTemperature,
           pipeline: pipelineSnapshot ?? undefined,
           manifestVersion: (manifest as Record<string, unknown>).__version as string | undefined,
@@ -1191,7 +1405,27 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
                   <>
                     {renderAssistantContent(message.content, message.format === "markdown", openGeneratedHtmlPreview)}
                     {message.content.trim() && (
-                      <div className="mt-3 flex justify-end">
+                      <div className="mt-3 flex flex-wrap justify-end gap-2">
+                        <button
+                          type="button"
+                          onClick={() => addResponseAsChapter(message.content)}
+                          disabled={loading}
+                          className="min-h-12 rounded-lg border border-cyan-400/40 px-3 text-[11px] font-semibold text-cyan-200 disabled:opacity-40"
+                        >
+                          Add as chapter
+                        </button>
+                        {extractGeneratedHtml(message.content) && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const html = extractGeneratedHtml(message.content);
+                              if (html) openGeneratedHtmlPreview(html);
+                            }}
+                            className="min-h-12 rounded-lg border border-violet-400/40 px-3 text-[11px] font-semibold text-violet-200"
+                          >
+                            Preview design
+                          </button>
+                        )}
                         <CopyMessageButton content={message.content} />
                       </div>
                     )}
@@ -1494,6 +1728,104 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
           )}
         </div>
 
+        <div className="mb-6 border-b border-slate-800 pb-5">
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-widest text-slate-500">Manuscript workspace</p>
+              <p className="mt-2 text-xs leading-5 text-slate-500">Keep chapters in the form NexusLM created them. HTML designs stay available in the exact preview; this PDF button assembles a readable book proof.</p>
+            </div>
+            <span className="shrink-0 rounded-full border border-cyan-400/30 px-2 py-1 text-[10px] font-semibold text-cyan-200">
+              {manuscript.chapters.length} chapters
+            </span>
+          </div>
+          <div className="mt-3 space-y-2">
+            <input
+              value={manuscript.title}
+              onChange={(event) => updateManuscriptField("title", event.target.value)}
+              aria-label="Manuscript title"
+              placeholder="Manuscript title"
+              className="min-h-12 w-full rounded-xl border border-slate-700 bg-slate-900 px-3 text-base text-slate-200"
+            />
+            <input
+              value={manuscript.subtitle}
+              onChange={(event) => updateManuscriptField("subtitle", event.target.value)}
+              aria-label="Manuscript subtitle"
+              placeholder="Subtitle (optional)"
+              className="min-h-12 w-full rounded-xl border border-slate-700 bg-slate-900 px-3 text-base text-slate-200"
+            />
+            <input
+              value={manuscript.authorName}
+              onChange={(event) => updateManuscriptField("authorName", event.target.value)}
+              aria-label="Manuscript author"
+              placeholder="Author name"
+              className="min-h-12 w-full rounded-xl border border-slate-700 bg-slate-900 px-3 text-base text-slate-200"
+            />
+            <select
+              value={manuscript.template}
+              onChange={(event) => updateManuscriptField("template", event.target.value)}
+              aria-label="PDF template"
+              className="min-h-12 w-full rounded-xl border border-slate-700 bg-slate-900 px-3 text-base text-slate-200"
+            >
+              {BOOK_TEMPLATE_IDS.map((template) => (
+                <option key={template} value={template}>{template.replace(/-/g, " ")}</option>
+              ))}
+            </select>
+          </div>
+          <div className="mt-3 flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={() => {
+                const latest = messages.slice().reverse().find((message) => message.role === "assistant" && message.content.trim());
+                if (latest) addResponseAsChapter(latest.content);
+              }}
+              disabled={loading || !messages.some((message) => message.role === "assistant" && message.content.trim())}
+              className="min-h-12 rounded-xl border border-cyan-400/40 px-3 text-xs font-semibold text-cyan-200 disabled:opacity-40"
+            >
+              Add latest response
+            </button>
+            <button
+              type="button"
+              onClick={() => void exportManuscriptPdf()}
+              disabled={pdfExporting || manuscript.chapters.length === 0}
+              className="min-h-12 rounded-xl bg-cyan-300 px-3 text-xs font-bold text-slate-950 disabled:opacity-40"
+            >
+              {pdfExporting ? "Generating PDF..." : "Generate PDF"}
+            </button>
+          </div>
+          {manuscript.chapters.length > 0 && (
+            <div className="mt-3 space-y-3">
+              {manuscript.chapters
+                .slice()
+                .sort((a, b) => a.number - b.number)
+                .map((chapter, index) => (
+                  <div key={chapter.id} className="rounded-xl border border-slate-800 bg-slate-900/70 p-3">
+                    <div className="flex items-center justify-between gap-2">
+                      <p className="truncate text-xs font-semibold text-slate-300">Chapter {chapter.number}</p>
+                      <div className="flex shrink-0 gap-1">
+                        <button type="button" onClick={() => moveManuscriptChapter(chapter.id, -1)} disabled={index === 0} className="min-h-12 min-w-12 rounded-lg border border-slate-700 text-xs text-slate-400 disabled:opacity-30" aria-label={`Move ${chapter.title} up`}>↑</button>
+                        <button type="button" onClick={() => moveManuscriptChapter(chapter.id, 1)} disabled={index === manuscript.chapters.length - 1} className="min-h-12 min-w-12 rounded-lg border border-slate-700 text-xs text-slate-400 disabled:opacity-30" aria-label={`Move ${chapter.title} down`}>↓</button>
+                        <button type="button" onClick={() => removeManuscriptChapter(chapter.id)} className="min-h-12 min-w-12 rounded-lg border border-rose-500/30 text-xs text-rose-300" aria-label={`Remove ${chapter.title}`}>×</button>
+                      </div>
+                    </div>
+                    <input
+                      value={chapter.title}
+                      onChange={(event) => updateManuscriptChapter(chapter.id, { title: event.target.value })}
+                      aria-label={`Title for chapter ${chapter.number}`}
+                      className="mt-2 min-h-12 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 text-base text-slate-200"
+                    />
+                    <textarea
+                      value={chapter.content}
+                      onChange={(event) => updateManuscriptChapter(chapter.id, { content: event.target.value })}
+                      aria-label={`Content for chapter ${chapter.number}`}
+                      className="mt-2 h-32 w-full resize-y rounded-lg border border-slate-700 bg-slate-950 p-3 text-base leading-6 text-slate-300"
+                    />
+                    <p className="mt-1 text-[10px] text-slate-500">{chapter.content.split(/\s+/).filter(Boolean).length.toLocaleString()} words · raw response preserved</p>
+                  </div>
+                ))}
+            </div>
+          )}
+        </div>
+
         {(attachments.length > 0 || generatedPreview) && (
           <div className="mb-6 border-b border-slate-800 pb-5">
             <div className="flex items-center justify-between gap-3">
@@ -1515,7 +1847,7 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
                   className="flex min-h-12 w-full items-center justify-between gap-2 rounded-xl border border-cyan-400/50 bg-cyan-400/10 px-3 text-left text-xs text-cyan-100"
                 >
                   <span className="truncate">{generatedPreview.name}</span>
-                  <span className="shrink-0 uppercase text-[10px] text-slate-500">HTML</span>
+                  <span className="shrink-0 uppercase text-[10px] text-slate-500">{generatedPreview.kind}</span>
                 </button>
               )}
               {attachments.map((attachment) => (
@@ -1535,6 +1867,15 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
                 <div className="mb-2 flex items-center justify-between gap-2">
                   <p className="truncate text-xs font-semibold text-slate-300">{previewDocument.name}</p>
                   <div className="flex items-center gap-1">
+                    {generatedPreview?.previewDataUrl && previewDocument === generatedPreview && (
+                      <a
+                        href={generatedPreview.previewDataUrl}
+                        download={generatedPreview.name}
+                        className="min-h-12 rounded-lg border border-cyan-400/40 px-3 py-3 text-[11px] font-semibold text-cyan-200"
+                      >
+                        Download
+                      </a>
+                    )}
                     <button type="button" onClick={() => setPreviewExpanded((current) => !current)} className="min-h-12 rounded-lg border border-slate-700 px-3 text-[11px] font-semibold text-cyan-300 lg:hidden">
                       {previewExpanded ? "Collapse" : "Expand"}
                     </button>
