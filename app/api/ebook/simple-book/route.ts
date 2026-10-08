@@ -24,7 +24,7 @@ const RequestSchema = z.object({
   coreThesis: z.string().max(2000).optional().default(""),
   voiceTone: z.string().max(500).optional().default(""),
   voiceDNA: VoiceDNASchema.optional(),
-  authorInstructions: z.string().max(4000).optional().default(""),
+  authorInstructions: z.string().max(12000).optional().default(""),
   desiredChapters: z.number().int().min(3).max(12).optional().default(6),
   oneChapterPerSlot: z.boolean().optional().default(true),
   eBookModel: z.enum(["deepseek", "gemini"]).default("deepseek"),
@@ -113,6 +113,31 @@ function voiceDnaBlock(
 - Avoid words: ${(voiceDNA?.avoidWords ?? []).slice(0, 20).join(", ") || "None recorded"}
 - Avoid structures: ${(voiceDNA?.avoidStructures ?? []).slice(0, 10).join(" | ") || "None recorded"}
 - Preserve the author's distinctive voice without copying long transcript passages verbatim.`;
+}
+
+const SIMPLE_DIRECT_SCRIPTURE_INSTRUCTION = `SCRIPTURE OUTPUT — MANDATORY:
+- Render every Scripture passage as a standalone Markdown blockquote, never inline.
+- Quote the complete cited verse or contiguous verse range, never a clause, excerpt, ellipsis, or partial quotation.
+- Put the full citation on its own blockquote line: > — Book Chapter:Verse (Translation).
+- Preserve the stated translation and verify the complete passage before returning it. Never silently substitute a translation or attach a reference to incomplete wording.`;
+
+function buildAuthorRequestBlock(
+  authorInstructions: string,
+  targetAudience: string,
+): string {
+  return `AUTHOR'S DIRECT BOOK REQUEST — FOLLOW THIS LIKE THE USER'S NEXUSLM CHAT MESSAGE:
+${authorInstructions.trim() || "No additional instructions were provided. Use your own editorial judgment."}
+
+TARGET AUDIENCE:
+${targetAudience.trim() || "(not specified)"}
+
+Treat the direct request as the active writing brief, not as optional metadata. Follow it when deciding voice, structure, pacing, emphasis, examples, Scripture presentation, and what to omit. You have authority to interpret, synthesize, reorder, and shape the source into a finished book chapter. Do not mechanically include every transcript example. If this request conflicts with default style preferences or Voice DNA, follow the author's direct request. Preserve source-grounded factual integrity, but do not let the transcript's order or wording limit the quality of the writing.
+
+${SIMPLE_DIRECT_SCRIPTURE_INSTRUCTION}`;
+}
+
+function buildScriptureFinalizationInstruction(authorInstructions: string): string {
+  return `${SIMPLE_DIRECT_SCRIPTURE_INSTRUCTION}\n\nAUTHOR'S SCRIPTURE INSTRUCTIONS:\n${authorInstructions.trim() || "(none)"}`;
 }
 
 function nonEmptySubtitle(targetAudience: string, coreThesis: string): string {
@@ -390,7 +415,11 @@ async function normalizeGeneratedChapter(
 
 async function normalizeSimpleBook(object: z.infer<typeof SimpleBookSchema>, input: z.infer<typeof RequestSchema>) {
   const chapters = await Promise.all((object.chapters ?? []).map((chapter, chapterIndex) =>
-    normalizeGeneratedChapter(chapter, chapterIndex + 1, input.authorInstructions)
+    normalizeGeneratedChapter(
+      chapter,
+      chapterIndex + 1,
+      buildScriptureFinalizationInstruction(input.authorInstructions),
+    )
   ));
 
   return {
@@ -438,6 +467,7 @@ export async function POST(req: NextRequest) {
   const responseLength = NEXUSLM_RESPONSE_LENGTHS["default"];
   const maxTokens = responseLength.draftTokens;
   const voiceProfile = voiceDnaBlock(input.voiceDNA, input.voiceTone);
+  const authorRequestBlock = buildAuthorRequestBlock(input.authorInstructions, input.targetAudience);
 
   const system = `Return only one valid JSON object matching the active schema. Do not wrap it in markdown fences and do not include reasoning outside the JSON object.
 You are NexusLM, a professional book ghostwriter.
@@ -455,7 +485,7 @@ NON-NEGOTIABLE BOOK RULE:
 ${EM_DASH_MINIMIZATION_RULES}
 ${NEXUSLM_SCRIPTURE_FORMATTING_RULES}
 ${voiceProfile}
-Return a complete source-grounded book object. Populate intro, epigraph, forwardQuestion, keyTakeaways, and reflectionQuestions when the source and author instructions support them; leave a field empty rather than inventing material. Its sections must contain readable prose in the body field, not planning notes, generic advice, transcript commentary, or a thin summary. Do not expose source IDs, slot labels, retrieval markers, or internal routing labels in any field. ${responseLength.instruction}`;
+Return a complete source-grounded book object. Populate intro, epigraph, forwardQuestion, keyTakeaways, and reflectionQuestions when the source and author request support them; leave a field empty rather than inventing material. Its sections must contain readable prose in the body field, not planning notes, generic advice, transcript commentary, or a thin summary. Do not expose source IDs, slot labels, retrieval markers, or internal routing labels in any field. ${responseLength.instruction}`;
 
   const chapterRoutingBlock = usingSlots
     ? `CHAPTER-SLOT ASSIGNMENT (HARD RULE):
@@ -476,22 +506,20 @@ Return a complete source-grounded book object. Populate intro, epigraph, forward
   const prompt = `Create a complete, source-grounded book draft with the same editorial freedom and finished-prose quality as a NexusLM chapter draft.
 
 DESIRED CHAPTER COUNT: ${input.desiredChapters}
-TARGET AUDIENCE: ${input.targetAudience || "(not provided)"}
 CORE THESIS: ${input.coreThesis || "(not provided)"}
 VOICE TONE: ${input.voiceTone || "(not provided)"}
-AUTHOR INSTRUCTIONS: ${input.authorInstructions || "(not provided)"}
 ${voiceProfile}
 
-AUTHOR CONFIGURATION APPLICATION:
-- Use TARGET AUDIENCE and AUTHOR INSTRUCTIONS as high-priority guidance for presentation choices.
-- Honor these directives in chapter flow, section voice, framing, and rhetorical delivery.
-- Do not invent new ideas, examples, facts, or theology to satisfy directives.
-- Treat transcript order, source blocks, and prior claims as source guidance rather than a mandatory outline when a stronger source-grounded structure serves the reader.
-- Give every chapter a complete reader-facing arc. Use the rich chapter fields for genuine editorial value, not filler or planning notes.
+SOURCE-TO-BOOK AUTHORITY:
+- The transcript is source material, not a script, outline, or checklist.
+- Decide what deserves space, what should be compressed, and what should be omitted.
+- Give every chapter a coherent reader-facing arc without padding or mechanical transcript coverage.
 ${chapterRoutingBlock}
 
 SOURCE MATERIAL:
-${sourceBlock}`;
+${sourceBlock}
+
+${authorRequestBlock}`;
 
   const storyIntegrationBlock = `LIVE EXAMPLES AND STORIES:
 - Use examples, testimonies, and personal stories selectively when they clarify the chapter's strongest movement.
@@ -528,15 +556,8 @@ HARD ASSIGNMENT:
 
 CHAPTER CONTEXT:
 CHAPTER NUMBER: ${chapterNumber}
-TARGET AUDIENCE: ${input.targetAudience || "(not provided)"}
 CORE THESIS: ${input.coreThesis || "(not provided)"}
 VOICE TONE: ${input.voiceTone || "(not provided)"}
-AUTHOR INSTRUCTIONS: ${input.authorInstructions || "(not provided)"}
-
-AUTHOR CONFIGURATION APPLICATION (HARD RULE):
-- Treat TARGET AUDIENCE and AUTHOR INSTRUCTIONS as high-priority presentation directives for this chapter.
-- Apply them to chapter shape, section emphasis, sentence rhythm, and reader-facing clarity.
-- Never invent source content to satisfy them; keep strict transcript grounding.
 
 TEACHING BLOCK COVERAGE GUIDANCE:
 - Use the significant teaching blocks as source guidance for coverage, not as a predetermined outline or checklist.
@@ -555,13 +576,15 @@ SECTION FLOW:
 - Give the final section a satisfying closure without mechanically re-listing prior points.
 
 SCRIPTURE PRESENTATION:
-${NEXUSLM_SCRIPTURE_FORMATTING_RULES}
+${SIMPLE_DIRECT_SCRIPTURE_INSTRUCTION}
 
 SOURCE SLOT:
 SOURCE ID: ${slot.sourceId}
 LABEL: ${slot.label}
 TRANSCRIPT:
-${slot.text}${priorClaimsBlock}`;
+${slot.text}${priorClaimsBlock}
+
+${authorRequestBlock}`;
 
         let chapterObject: z.infer<typeof SlotChapterSchema> | null = null;
         let lastGenerationError = "";
@@ -631,7 +654,11 @@ ${slot.text}${priorClaimsBlock}`;
           );
         }
 
-        const normalizedChapter = await normalizeGeneratedChapter(chapterObject, chapterNumber, input.authorInstructions);
+        const normalizedChapter = await normalizeGeneratedChapter(
+          chapterObject,
+          chapterNumber,
+          buildScriptureFinalizationInstruction(input.authorInstructions),
+        );
         if (normalizedChapter.sections.length === 0) {
           return NextResponse.json(
             { error: `Simple book generation failed: slot ${chapterNumber} produced no section content` },

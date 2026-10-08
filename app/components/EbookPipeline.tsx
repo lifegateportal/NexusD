@@ -4779,12 +4779,12 @@ export function EbookPipeline({
             <textarea
               value={authorInstructions}
               onChange={(e) => setAuthorInstructions(e.target.value)}
-              placeholder="e.g. Write in a direct pastoral voice with short chapters and strong section hooks. Keep examples concrete, use prayer moments sparingly, and end each chapter with one forward-facing question."
+              placeholder="Write this like a direct NexusLM request: choose the voice, structure, pacing, examples, Scripture format, and what to omit."
               rows={4}
               className="w-full rounded-xl border border-slate-700/60 bg-slate-950/70 px-3 py-2 text-base text-slate-100 placeholder:text-slate-600 outline-none focus:border-violet-500/40 resize-none"
               disabled={isRunning}
             />
-            <p className="mt-1 text-[10px] text-slate-600">Use this like a chat prompt for presentation: voice, structure, emphasis, pacing, and reader experience. Source facts still stay locked to your transcript.</p>
+            <p className="mt-1 text-[10px] text-slate-600">Sent to the writer as your direct book request, like a NexusLM chat message. The LM decides how to shape, synthesize, and trim the source.</p>
           </div>
 
           {/* Simple direct mode toggle */}
