@@ -58,7 +58,7 @@ export async function POST(req: NextRequest) {
 Apply this configuration as high-priority guidance for HOW this material is presented: voice, framing, emphasis, pacing, structure, and reader experience.
 
 ${simpleDirectMode
-  ? "In Simple Direct mode, treat these directives as the author's direct writing request, like a NexusLM chat message. Follow them directly when shaping the introduction, conclusion, and chapter insights; use broad editorial judgment rather than reducing them to metadata."
+  ? "In Simple Direct mode, use these directives with broad editorial judgment when shaping the reader's experience."
   : "⚠️ CRITICAL BOUNDARY: These directives shape presentation, not source truth. They do NOT override SOURCE-LOCK-RULES. Never fabricate examples, background, or theological context. Intro/conclusion must stay grounded in what the author actually taught in the master transcript."}`
     : "";
 

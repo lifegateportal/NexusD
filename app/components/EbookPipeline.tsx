@@ -1953,7 +1953,7 @@ export function EbookPipeline({
   const [authorInstructions, setAuthorInstructions] = useState("");
   const [targetAudience, setTargetAudience] = useState("");
   const [useSimpleDirectBookMode, setUseSimpleDirectBookMode] = useState(false);
-  const [selectedEbookModel, setSelectedEbookModel] = useState<"deepseek" | "gemini">("gemini");
+  const [selectedEbookModel, setSelectedEbookModel] = useState<"deepseek" | "gemini">("deepseek");
   const [simpleDirectTemperature, setSimpleDirectTemperature] = useState(0.3);
   const [oneChapterPerUpload, setOneChapterPerUpload] = useState(false);
   // Proposal 2: single-call chapter writer — set true to try, false to revert to per-section
@@ -4779,12 +4779,12 @@ export function EbookPipeline({
             <textarea
               value={authorInstructions}
               onChange={(e) => setAuthorInstructions(e.target.value)}
-              placeholder="Write this like a direct NexusLM request: choose the voice, structure, pacing, examples, Scripture format, and what to omit."
+              placeholder="e.g. Write in a direct pastoral voice with short chapters and strong section hooks. Keep examples concrete, use prayer moments sparingly, and end each chapter with one forward-facing question."
               rows={4}
               className="w-full rounded-xl border border-slate-700/60 bg-slate-950/70 px-3 py-2 text-base text-slate-100 placeholder:text-slate-600 outline-none focus:border-violet-500/40 resize-none"
               disabled={isRunning}
             />
-            <p className="mt-1 text-[10px] text-slate-600">Sent to the writer as your direct book request, like a NexusLM chat message. The LM decides how to shape, synthesize, and trim the source.</p>
+            <p className="mt-1 text-[10px] text-slate-600">Use this like a chat prompt for presentation: voice, structure, emphasis, pacing, and reader experience. Source facts still stay locked to your transcript.</p>
           </div>
 
           {/* Simple direct mode toggle */}
@@ -4827,8 +4827,8 @@ export function EbookPipeline({
               disabled={isRunning}
               className="w-full rounded-xl border border-slate-700/60 bg-slate-950/70 px-3 py-2 text-base text-slate-100 outline-none focus:border-violet-500/40 disabled:opacity-60 disabled:cursor-not-allowed"
             >
-              <option value="gemini">Nexus-Chat (default)</option>
-              <option value="deepseek">NexusR1</option>
+              <option value="deepseek">NexusR1 (default)</option>
+              <option value="gemini">Nexus-Chat</option>
             </select>
             <p className="text-[10px] text-slate-600">Select which LLM to use for chapter generation, voice analysis, and front/back matter.</p>
           </div>
