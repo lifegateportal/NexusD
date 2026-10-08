@@ -318,6 +318,7 @@ ${sourcePrompt}`;
               temperature,
               maxRetries: 2,
               maxTokens,
+              abortSignal: request.signal,
               system,
               prompt,
             });

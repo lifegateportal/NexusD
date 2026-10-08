@@ -554,6 +554,7 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
   const [showMobileContext, setShowMobileContext] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const stickToBottomRef = useRef(true);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
   const generatedPreviewUrlRef = useRef<string | null>(null);
@@ -668,8 +669,24 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
   }, [selectedTranscriptLabel, transcripts]);
 
   useEffect(() => {
+    if (!stickToBottomRef.current) return;
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
   }, [messages, loading]);
+
+  useEffect(() => {
+    const textarea = inputRef.current;
+    if (!textarea) return;
+    const maxHeight = window.matchMedia("(min-width: 1024px)").matches ? 192 : 160;
+    textarea.style.height = "auto";
+    textarea.style.height = `${Math.min(textarea.scrollHeight, maxHeight)}px`;
+    textarea.style.overflowY = textarea.scrollHeight > maxHeight ? "auto" : "hidden";
+  }, [input]);
+
+  function handleConversationScroll(): void {
+    const element = scrollRef.current;
+    if (!element) return;
+    stickToBottomRef.current = element.scrollHeight - element.scrollTop - element.clientHeight < 64;
+  }
 
   async function startNewConversation(): Promise<void> {
     if (loading) return;
@@ -1173,7 +1190,8 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
       }
     } catch (error) {
       const stopped = error instanceof DOMException && error.name === "AbortError";
-      updateAnswer(stopped ? "Response stopped." : readableError(error));
+      const status = stopped ? "Response stopped." : readableError(error);
+      updateAnswer(answer.trim() ? `${answer}\n\n${status}` : status);
     } finally {
       abortControllerRef.current = null;
       setCanAbort(false);
@@ -1282,6 +1300,7 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
         content: instruction,
         attachments: requestUsesBook ? undefined : requestAttachments.map(({ id, name }) => ({ id, name })),
       }];
+    stickToBottomRef.current = true;
     setMessages(nextMessages);
     setInput("");
     setLoading(true);
@@ -1599,8 +1618,14 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
             </button>
           </div>
         </div>
-        <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto px-4 py-5 lg:px-8 lg:py-7" style={{ WebkitOverflowScrolling: "touch" }}>
-          <div className="mx-auto flex max-w-4xl flex-col gap-5">
+        <div
+          ref={scrollRef}
+          onScroll={handleConversationScroll}
+          aria-busy={loading}
+          className="min-h-0 flex-1 overflow-y-auto px-4 py-5 lg:px-8 lg:py-7"
+          style={{ WebkitOverflowScrolling: "touch" }}
+        >
+          <div className="mx-auto flex max-w-6xl flex-col gap-5">
             {messages.map((message, index) => (
               <div key={`${message.role}-${index}`} className={message.role === "user"
                 ? "max-w-[88%] self-end rounded-2xl border border-cyan-500/30 bg-cyan-500/10 px-4 py-3 text-sm leading-6 text-cyan-50"
@@ -1680,12 +1705,16 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
                 ) : message.content}
               </div>
             ))}
-            {loading && <div className="text-sm text-slate-500">{processEntireDocument ? "NexusLM is reading every document section..." : "NexusLM is thinking..."}</div>}
+            {loading && (
+              <div className="text-sm text-slate-500" role="status" aria-live="polite">
+                {processEntireDocument ? "NexusLM is reading every document section..." : "NexusLM is thinking..."}
+              </div>
+            )}
           </div>
         </div>
 
         <div className="shrink-0 bg-shell-950 px-3 pb-[max(env(safe-area-inset-bottom),0.75rem)] pt-2 lg:px-8 lg:pb-5 lg:pt-3">
-          <div className="mx-auto max-w-4xl">
+          <div className="mx-auto max-w-6xl">
             {undoSnapshot && (
               <div className="mb-3 flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-amber-500/30 bg-amber-500/10 p-4">
                 <div>
@@ -1888,11 +1917,17 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
                       void addFiles(event.clipboardData.files);
                     }
                   }}
-                  onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void send(); } }}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
+                      event.preventDefault();
+                      void send();
+                    }
+                  }}
                   placeholder={useBookContext ? "Ask NexusLM about your book, or switch to General..." : "Ask NexusLM anything..."}
+                  aria-label="Message NexusLM"
                   disabled={loading}
                   rows={1}
-                  className="block min-h-12 w-full resize-none rounded-xl border-0 bg-transparent px-2 py-3 text-base leading-6 text-slate-100 outline-none placeholder:text-slate-600 focus:ring-0 lg:min-h-[4.5rem] lg:px-4"
+                  className="block min-h-12 max-h-40 w-full resize-none overflow-y-hidden rounded-xl border-0 bg-transparent px-2 py-3 text-base leading-6 text-slate-100 outline-none placeholder:text-slate-600 focus:ring-0 lg:max-h-48 lg:min-h-[4.5rem] lg:px-4"
                 />
                 <div className="mt-2 flex min-w-0 items-center gap-2">
                   <div className="flex min-w-0 flex-1 items-center gap-2 overflow-x-auto">
@@ -2004,7 +2039,7 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
         </div>
       </section>
 
-      <aside className={`${showMobileContext ? "relative block" : "hidden"} ${previewExpanded ? "max-h-[70dvh]" : "max-h-[48dvh]"} w-full shrink-0 overflow-y-auto border-t border-slate-800 bg-shell-950/95 p-4 shadow-2xl lg:static lg:block lg:max-h-none lg:border-t-0 lg:bg-shell-950 lg:p-5 lg:shadow-none ${previewExpanded ? "lg:w-[min(58vw,50rem)]" : "lg:w-[18rem]"}`}>
+      <aside className={`${showMobileContext ? "relative block" : "hidden"} ${previewExpanded ? "max-h-[70dvh]" : "max-h-[48dvh]"} w-full shrink-0 overflow-y-auto border-t border-slate-800 bg-shell-950/95 p-4 shadow-2xl lg:static lg:block lg:max-h-none lg:border-t-0 lg:bg-shell-950 lg:p-5 lg:shadow-none ${previewExpanded ? "lg:w-[min(58vw,50rem)]" : "lg:w-[16rem] xl:w-[18rem]"}`}>
         <button
           type="button"
           onClick={() => setPreviewExpanded((current) => !current)}
