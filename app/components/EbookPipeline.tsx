@@ -3377,8 +3377,8 @@ export function EbookPipeline({
             return next;
           });
 
-          // ── Per-slot signal filter — skipped in Simple Direct mode so that
-          //    chapter generation receives full raw slot transcript content. ──
+          // ── Per-slot signal filter — Simple Direct keeps the full raw
+          //    source boundary for the NexusLM writer. ──
           let slotText = rawText;
           if (!simpleDirectRun) {
             try {
@@ -3397,7 +3397,7 @@ export function EbookPipeline({
               addLog(`  ⚠ ${label} signal filter skipped — using raw text`);
             }
           } else {
-            addLog(`  ↷ ${label} Simple Direct mode — skipping signal filter, using full raw transcript`);
+            addLog(`  ↷ ${label} Simple Direct mode — preserving the full raw slot for NexusLM writing and source mapping`);
           }
 
           rawTranscriptResults.push({ label, text: rawText });
@@ -3439,8 +3439,8 @@ export function EbookPipeline({
       if (simpleDirectRun) {
         filteredTranscript = masterTranscript;
         setSignalFilterState("skipped");
-        setSignalFilterDetail("Simple Direct mode bypasses signal filtering");
-        addLog("Simple Direct mode — skipping final combined signal filter pass");
+        setSignalFilterDetail("Simple Direct mode preserves full transcript boundaries for model-directed writing");
+        addLog("Simple Direct mode — preserving full transcript boundaries for model-directed writing");
         (acc as EbookJobState & { filteredTranscript: string; filterRemovedCount: number }).filteredTranscript = filteredTranscript;
         (acc as EbookJobState & { filteredTranscript: string; filterRemovedCount: number }).filterRemovedCount = 0;
         await checkpoint("analyzing");
@@ -3738,11 +3738,9 @@ export function EbookPipeline({
           allQuotes: [],
         };
 
-        const frontMatterTranscript = typeof teachingTranscript === "string" && teachingTranscript
-          ? teachingTranscript
-          : slotWriteList
-              .map((t) => `[${t.label}]\n${t.text}`)
-              .join("\n\n═══════════════════════════════════════\n\n");
+        const frontMatterTranscript = slotWriteList
+          .map((t) => `[${t.label}]\n${t.text}`)
+          .join("\n\n═══════════════════════════════════════\n\n");
         const simpleFrontMatterResponse = await postJson<SimpleDirectFrontMatterResponse>("/api/ebook/frontmatter", {
           masterTranscript: frontMatterTranscript.slice(0, 14000),
           architecture: simpleArchitecture,
