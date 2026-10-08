@@ -94,7 +94,7 @@ export async function POST(request: NextRequest) {
           "Content-Disposition": `attachment; filename="${filename}.${extension}"`,
           "Content-Length": String(artifact.byteLength),
           "Cache-Control": "no-store",
-          "X-NexusLM-Export-Mode": format === "docx" ? "editable-html-text" : "visual-html-render",
+          "X-NexusLM-Export-Mode": "editable-html-render",
         },
       });
     }

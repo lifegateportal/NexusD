@@ -1994,7 +1994,7 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
             </span>
           </summary>
           <div className="pb-1">
-            <p className="mt-2 text-xs leading-5 text-slate-500">Keep chapters in the form NexusLM created them. HTML designs stay available in the exact preview; this PDF button assembles a readable book proof.</p>
+            <p className="mt-2 text-xs leading-5 text-slate-500">Keep chapters in the form NexusLM created them. HTML designs stay available in the exact preview; manuscript exports use the selected book template, while HTML exports preserve the visual design.</p>
           <div className="mt-3 space-y-2">
             <input
               value={manuscript.title}

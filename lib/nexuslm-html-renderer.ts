@@ -1,14 +1,6 @@
 import chromium from "@sparticuz/chromium";
 import { chromium as playwrightChromium, type Page } from "playwright-core";
-import {
-  AlignmentType,
-  Document as DocxDocument,
-  HeadingLevel,
-  Packer,
-  Paragraph,
-  TextRun,
-} from "docx";
-import { htmlToNexusLMDocumentText } from "@/lib/nexuslm-artifacts";
+import htmlToDocx, { type HtmlToDocxOptions } from "html-to-docx";
 
 const CSS_PX_PER_INCH = 96;
 const DEFAULT_PAGE_SIZE = { widthInches: 8.27, heightInches: 11.69 };
@@ -18,6 +10,19 @@ const DEFAULT_VIEWPORT = {
 };
 const MAX_RENDERED_HEIGHT_PX = 120_000;
 const RENDER_TIMEOUT_MS = 30_000;
+const DOCX_STYLE_PROPERTIES = [
+  "color",
+  "background-color",
+  "text-align",
+  "font-weight",
+  "font-family",
+  "font-size",
+  "line-height",
+  "margin-left",
+  "margin-right",
+  "display",
+  "width",
+] as const;
 
 type PageSize = {
   widthInches: number;
@@ -58,6 +63,13 @@ function pageSizeFromHtml(html: string): PageSize {
   const normalized = sizeDeclaration.toLowerCase().replace(/\s+/g, " ");
   const named = KNOWN_PAGE_SIZES[normalized];
   if (named) return named;
+  const namedWithOrientation = normalized.match(/^(a4|letter|legal)\s+(portrait|landscape)$/);
+  if (namedWithOrientation) {
+    const base = KNOWN_PAGE_SIZES[namedWithOrientation[1]];
+    return namedWithOrientation[2] === "landscape"
+      ? { widthInches: base.heightInches, heightInches: base.widthInches }
+      : base;
+  }
 
   const lengths = normalized.split(" ").map(parseLength).filter((value): value is number => value !== null);
   if (lengths.length >= 2) {
@@ -65,6 +77,34 @@ function pageSizeFromHtml(html: string): PageSize {
   }
 
   return DEFAULT_PAGE_SIZE;
+}
+
+function pageMarginsFromHtml(html: string): NonNullable<HtmlToDocxOptions["margins"]> {
+  const pageRule = html.match(/@page\b[^{}]*\{([\s\S]*?)\}/i)?.[1] ?? "";
+  const marginDeclaration = pageRule.match(/\bmargin\s*:\s*([^;]+)/i)?.[1]?.trim();
+  if (!marginDeclaration) {
+    return { top: 0, right: 0, bottom: 0, left: 0 };
+  }
+
+  const values = marginDeclaration
+    .split(/\s+/)
+    .map(parseLength)
+    .filter((value): value is number => value !== null);
+  if (values.length === 0) return { top: 0, right: 0, bottom: 0, left: 0 };
+  const [top, right = top, bottom = top, left = right] = values.length === 1
+    ? [values[0], values[0], values[0], values[0]]
+    : values.length === 2
+      ? [values[0], values[1], values[0], values[1]]
+      : values.length === 3
+        ? [values[0], values[1], values[2], values[1]]
+        : values;
+  const toTwips = (inches: number) => Math.round(inches * 1440);
+  return {
+    top: toTwips(top),
+    right: toTwips(right),
+    bottom: toTwips(bottom),
+    left: toTwips(left),
+  };
 }
 
 function renderSetupStyle(): string {
@@ -209,90 +249,80 @@ export async function renderHtmlToPdfBuffer(html: string): Promise<Buffer> {
   return renderHtmlPdf(html, pageSize);
 }
 
-function parseMarkdownRuns(text: string): TextRun[] {
-  const runs: TextRun[] = [];
-  const pattern = /(\*\*(.+?)\*\*|__(.+?)__|(?<!\*)\*([^*\n]+?)\*(?!\*)|(?<!_)_([^_\n]+?)_(?!_))/g;
-  let lastIndex = 0;
-  let match: RegExpExecArray | null;
-  while ((match = pattern.exec(text)) !== null) {
-    if (match.index > lastIndex) runs.push(new TextRun({ text: text.slice(lastIndex, match.index), size: 22 }));
-    if (match[2] || match[3]) {
-      runs.push(new TextRun({ text: match[2] ?? match[3], bold: true, size: 22 }));
-    } else if (match[4] || match[5]) {
-      runs.push(new TextRun({ text: match[4] ?? match[5], italics: true, size: 22 }));
-    }
-    lastIndex = match.index + match[0].length;
-  }
-  if (lastIndex < text.length) runs.push(new TextRun({ text: text.slice(lastIndex), size: 22 }));
-  return runs.length > 0 ? runs : [new TextRun({ text, size: 22 })];
-}
-
-function createEditableHtmlParagraph(line: string): Paragraph {
-  const trimmed = line.trim();
-  const heading = trimmed.match(/^(#{1,6})\s+(.+)$/);
-  if (heading) {
-    const headingLevels = [
-      HeadingLevel.HEADING_1,
-      HeadingLevel.HEADING_2,
-      HeadingLevel.HEADING_3,
-      HeadingLevel.HEADING_4,
-      HeadingLevel.HEADING_5,
-      HeadingLevel.HEADING_6,
-    ];
-    return new Paragraph({
-      heading: headingLevels[heading[1].length - 1],
-      children: parseMarkdownRuns(heading[2]),
-      spacing: { before: 240, after: 120 },
-    });
-  }
-
-  const quote = trimmed.match(/^(?:>\s?)+(.+)$/);
-  if (quote) {
-    return new Paragraph({
-      children: [new TextRun({ text: quote[1], italics: true, size: 22 })],
-      indent: { left: 720, right: 360 },
-      spacing: { before: 120, after: 120 },
-    });
-  }
-
-  const listItem = trimmed.match(/^[-*+]\s+(.+)$/);
-  if (listItem) {
-    return new Paragraph({
-      children: [new TextRun({ text: `• ${listItem[1]}`, size: 22 })],
-      indent: { left: 360, hanging: 180 },
-      spacing: { after: 80 },
-    });
-  }
-
-  return new Paragraph({
-    children: parseMarkdownRuns(trimmed),
-    alignment: AlignmentType.LEFT,
-    spacing: { after: 160, line: 276 },
+async function inlineComputedStyles(html: string): Promise<string> {
+  const executablePath = await chromium.executablePath();
+  const browser = await playwrightChromium.launch({
+    args: [...chromium.args, "--no-sandbox", "--disable-setuid-sandbox"],
+    executablePath,
+    headless: true,
   });
+
+  try {
+    const context = await browser.newContext({
+      viewport: DEFAULT_VIEWPORT,
+      deviceScaleFactor: 1,
+      javaScriptEnabled: false,
+      colorScheme: "light",
+    });
+    const page = await context.newPage();
+    await page.route("**/*", async (route) => {
+      const url = route.request().url();
+      if (url.startsWith("data:")
+        || url.startsWith("blob:")
+        || url.startsWith("about:blank")) {
+        await route.continue();
+        return;
+      }
+      await route.abort();
+    });
+    const safeHtml = html.replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, "");
+    await page.setContent(injectRenderSetup(safeHtml), {
+      timeout: RENDER_TIMEOUT_MS,
+      waitUntil: "load",
+    });
+    await waitForRenderedAssets(page);
+    const inlinedHtml = await page.evaluate((styleProperties) => {
+      const elements = Array.from(document.body?.querySelectorAll<HTMLElement>("*") ?? []);
+      for (const element of elements) {
+        const computed = window.getComputedStyle(element);
+        const declarations = styleProperties
+          .map((property) => {
+            const value = computed.getPropertyValue(property).trim();
+            if (!value || value === "transparent" || /^rgba\([^)]*,\s*0\)$/i.test(value)) return "";
+            return `${property}:${value}`;
+          })
+          .filter(Boolean);
+        if (declarations.length === 0) continue;
+        const existing = element.getAttribute("style")?.trim() ?? "";
+        element.setAttribute("style", `${existing}${existing && !existing.endsWith(";") ? ";" : ""}${declarations.join(";")}`);
+      }
+      return document.documentElement?.outerHTML ?? document.body?.outerHTML ?? "";
+    }, DOCX_STYLE_PROPERTIES);
+    await context.close();
+    if (!inlinedHtml.trim()) throw new Error("The HTML design has no editable document content.");
+    return inlinedHtml;
+  } finally {
+    await browser.close();
+  }
 }
 
 export async function renderHtmlToEditableDocxBuffer(html: string): Promise<Buffer> {
-  const text = htmlToNexusLMDocumentText(html);
-  if (!text.trim()) throw new Error("The HTML design has no editable text content.");
+  if (!html.trim()) throw new Error("The HTML design is empty.");
+  if (!/<(?:body|main|article|section|p|h[1-6]|div)\b/i.test(html)) {
+    throw new Error("The HTML design has no editable document content.");
+  }
 
-  const children = text
-    .split(/\n+/)
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .map(createEditableHtmlParagraph);
-
-  const document = new DocxDocument({
-    sections: [{
-      properties: {
-        page: {
-          size: { width: 11906, height: 16838 },
-          margin: { top: 1080, right: 1080, bottom: 1080, left: 1080 },
-        },
-      },
-      children,
-    }],
+  const pageSize = pageSizeFromHtml(html);
+  const editableHtml = await inlineComputedStyles(html);
+  return htmlToDocx(editableHtml, null, {
+    title: "NexusLM document",
+    creator: "NexusLM",
+    description: "Editable document exported from a NexusLM HTML design.",
+    pageSize: {
+      width: Math.round(pageSize.widthInches * 1440),
+      height: Math.round(pageSize.heightInches * 1440),
+    },
+    margins: pageMarginsFromHtml(html),
+    table: { row: { cantSplit: true } },
   });
-  return Packer.toBuffer(document);
 }
-
-export const renderHtmlToVisualDocxBuffer = renderHtmlToEditableDocxBuffer;
