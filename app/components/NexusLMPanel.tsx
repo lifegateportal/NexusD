@@ -35,6 +35,7 @@ type NexusLMPanelProps = {
   pipelineSnapshot: EbookPipelineSnapshot | null;
   transcripts: Array<{ label: string; text: string }>;
   onManifestChange: (manifest: EbookManifest, summary: string) => void;
+  onOpenManuscript: () => void;
 };
 
 type Mode = "ask" | "socratic" | "plan" | "draft" | "edit";
@@ -210,6 +211,41 @@ function createEmptyManuscript(manifest: EbookManifest | null, pipelineSnapshot:
     authorName: manifest?.authorName ?? "NexusLM",
     template: "popular-nonfiction",
     chapters: [],
+  };
+}
+
+function createEmptyManifest(conversationKey: string, pipelineSnapshot: EbookPipelineSnapshot | null): EbookManifest {
+  return {
+    jobId: conversationKey,
+    bookTitle: pipelineSnapshot?.bookTitle ?? "Untitled book",
+    subtitle: "",
+    authorName: "the Author",
+    frontMatter: {
+      preface: "",
+      introduction: "",
+      conclusion: "",
+      aboutAuthor: null,
+      resourcesList: [],
+      scriptureIndex: [],
+    },
+    chapters: [],
+    totalWordCount: 0,
+    allQuotes: [],
+    generatedAt: new Date().toISOString(),
+    selectedTemplate: "devotional",
+    printSpec: {
+      trimSize: "6x9",
+      runningHeaders: true,
+      bleed: false,
+      cropMarks: false,
+      editableProof: false,
+      folioStyle: "center",
+      frontMatterNumbering: "arabic",
+      sectionOrnament: "rule",
+      bodyTextAlign: "template",
+      bodyFontFamily: "template",
+      fontSizeScale: 1,
+    },
   };
 }
 
@@ -461,7 +497,7 @@ function DocumentPreview({
   );
 }
 
-export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, transcripts, onManifestChange }: NexusLMPanelProps) {
+export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, transcripts, onManifestChange, onOpenManuscript }: NexusLMPanelProps) {
   const [messages, setMessages] = useState<Message[]>([initialMessage(manifest)]);
   const [activeConversationKey, setActiveConversationKey] = useState(conversationKey);
   const [chatHistory, setChatHistory] = useState<NexusLMChatSummary[]>([]);
@@ -782,19 +818,41 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
       setAttachmentError("This response is too large for one manuscript chapter. Save it as HTML or Markdown, then add a shorter section.");
       return;
     }
-    const now = new Date().toISOString();
-    setManuscript((current) => {
-      const number = current.chapters.reduce((highest, chapter) => Math.max(highest, chapter.number), 0) + 1;
-      const chapter: ManuscriptChapter = {
-        id: typeof crypto !== "undefined" && "randomUUID" in crypto ? crypto.randomUUID() : `chapter-${Date.now()}-${number}`,
-        number,
-        title: extractChapterTitle(trimmed, number),
-        content: trimmed,
-        createdAt: now,
-        updatedAt: now,
-      };
-      return { ...current, chapters: [...current.chapters, chapter] };
-    });
+    const baseManifest = manifest ?? createEmptyManifest(conversationKey, pipelineSnapshot);
+    const number = baseManifest.chapters.reduce((highest, chapter) => Math.max(highest, chapter.number), 0) + 1;
+    const wordCount = trimmed.split(/\s+/).filter(Boolean).length;
+    const chapter: ChapterDraft = {
+      number,
+      title: extractChapterTitle(trimmed, number),
+      intro: "",
+      epigraph: "",
+      sections: [{
+        chapterNumber: number,
+        sectionNumber: 1,
+        heading: "",
+        body: trimmed,
+        wordCount,
+        status: "complete",
+      }],
+      forwardQuestion: "",
+      keyTakeaways: [],
+      reflectionQuestions: [],
+      totalWordCount: wordCount,
+      status: "complete",
+    };
+    const chapters = [...baseManifest.chapters, chapter].sort((left, right) => left.number - right.number);
+    const nextManifest = {
+      ...baseManifest,
+      chapters,
+      totalWordCount: chapters.reduce((total, item) => total + (item.totalWordCount ?? 0), 0),
+    };
+    const parsed = EbookManifestSchema.safeParse(nextManifest);
+    if (!parsed.success) {
+      setAttachmentError("The response could not be added to Ebook Studio because the chapter data was invalid.");
+      return;
+    }
+    onManifestChange(parsed.data, `Chapter ${number} moved into Ebook Studio.`);
+    onOpenManuscript();
     setAttachmentError(null);
   }
 
@@ -1529,7 +1587,7 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
                           disabled={loading}
                           className="min-h-12 rounded-lg border border-cyan-400/40 px-3 text-[11px] font-semibold text-cyan-200 disabled:opacity-40"
                         >
-                          Add as chapter
+                          Add as chapter to Ebook Studio
                         </button>
                         {extractGeneratedHtml(message.content) && (
                           <button
