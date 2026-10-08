@@ -27,7 +27,7 @@ const RequestSchema = z.object({
   authorInstructions: z.string().max(12000).optional().default(""),
   desiredChapters: z.number().int().min(3).max(12).optional().default(6),
   oneChapterPerSlot: z.boolean().optional().default(true),
-  eBookModel: z.enum(["deepseek", "gemini"]).default("deepseek"),
+  eBookModel: z.enum(["deepseek", "gemini"]).default("gemini"),
   llmTemperature: z.number().min(0).max(1).optional(),
 });
 
@@ -532,18 +532,11 @@ ${authorRequestBlock}`;
       const sourceSegments: SimpleSourceSegment[] = [];
       const sectionSourceLinks: SimpleSectionSourceLink[] = [];
       const uncoveredTeachingBlocks: UncoveredTeachingBlock[] = [];
-      let allSectionClaims: string[] = [];
 
       for (let i = 0; i < slotBlocks.length; i++) {
-        const slot = slotBlocks[i];
-        const chapterNumber = i + 1;
-          const teachingBlocks = buildTeachingBlocks(slot.fullText);
-        const teachingBlockManifest = teachingBlocks.length > 0
-          ? teachingBlocks.map((b) => `- ${b.id} (${b.wordCount} words): ${b.excerpt}`).join("\n")
-          : "- B1: (no extracted block; use full transcript coverage)";
-        const priorClaimsBlock = allSectionClaims.length > 0
-          ? `\n\nPRIOR CHAPTER CLAIMS (DO NOT REPEAT IN FULL):\n${allSectionClaims.slice(-30).map((c) => `- ${c}`).join("\n")}`
-          : "";
+       const slot = slotBlocks[i];
+       const chapterNumber = i + 1;
+       const teachingBlocks = buildTeachingBlocks(slot.fullText);
 
         const slotPrompt = `Transform SOURCE SLOT ${chapterNumber} into one complete chapter.
 
@@ -553,19 +546,12 @@ HARD ASSIGNMENT:
 - Output ONLY a chapter object (not a full book object).
 - These source and output boundaries are the only hard constraints. Within them, choose the strongest title, section architecture, body prose, transitions, emphasis, pacing, and ending freely.
 - Populate intro, epigraph, forwardQuestion, keyTakeaways, and reflectionQuestions when supported. These fields must be finished reader-facing material, never planning notes.
+- Write enough finished prose to fully develop the source's central movement; do not stop at a skeletal summary. Expand supported ideas with explanation, concrete detail, and reader-facing application. Let final length follow the source rather than a fixed word target.
 
 CHAPTER CONTEXT:
 CHAPTER NUMBER: ${chapterNumber}
 CORE THESIS: ${input.coreThesis || "(not provided)"}
 VOICE TONE: ${input.voiceTone || "(not provided)"}
-
-TEACHING BLOCK COVERAGE GUIDANCE:
-- Use the significant teaching blocks as source guidance for coverage, not as a predetermined outline or checklist.
-- Each section must declare coveredBlockIds for source mapping.
-- Combine, sequence, and synthesize related blocks naturally. Do not force minor or repetitive material into the chapter.
-
-SIGNIFICANT TEACHING BLOCKS:
-${teachingBlockManifest}
 
 ${storyIntegrationBlock}
 
@@ -579,10 +565,9 @@ SCRIPTURE PRESENTATION:
 ${SIMPLE_DIRECT_SCRIPTURE_INSTRUCTION}
 
 SOURCE SLOT:
-SOURCE ID: ${slot.sourceId}
 LABEL: ${slot.label}
 TRANSCRIPT:
-${slot.text}${priorClaimsBlock}
+${slot.text}
 
 ${authorRequestBlock}`;
 
@@ -694,10 +679,6 @@ ${authorRequestBlock}`;
         chapters.push(normalizedChapter);
         sourceSegments.push(...slotSegments);
         sectionSourceLinks.push(...slotLinks);
-        allSectionClaims = [
-          ...allSectionClaims,
-          ...normalizedChapter.sections.flatMap((section) => (section.keyClaims ?? []).map((claim) => claim.trim()).filter(Boolean)),
-        ];
       }
 
       const bookFromSlots: z.infer<typeof SimpleBookSchema> = {
