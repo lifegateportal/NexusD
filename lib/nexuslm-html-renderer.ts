@@ -3,12 +3,10 @@ import { chromium as playwrightChromium, type Page } from "playwright-core";
 import {
   AlignmentType,
   Document as DocxDocument,
-  HeadingLevel,
+  ImageRun,
   Packer,
   Paragraph,
-  TextRun,
 } from "docx";
-import { htmlToNexusLMDocumentText } from "@/lib/nexuslm-artifacts";
 
 const CSS_PX_PER_INCH = 96;
 const DEFAULT_PAGE_SIZE = { widthInches: 8.27, heightInches: 11.69 };
@@ -209,84 +207,36 @@ export async function renderHtmlToPdfBuffer(html: string): Promise<Buffer> {
   return renderHtmlPdf(html, pageSize);
 }
 
-function parseMarkdownRuns(text: string): TextRun[] {
-  const runs: TextRun[] = [];
-  const pattern = /(\*\*(.+?)\*\*|__(.+?)__|(?<!\*)\*([^*\n]+?)\*(?!\*)|(?<!_)_([^_\n]+?)_(?!_))/g;
-  let lastIndex = 0;
-  let match: RegExpExecArray | null;
-  while ((match = pattern.exec(text)) !== null) {
-    if (match.index > lastIndex) runs.push(new TextRun({ text: text.slice(lastIndex, match.index), size: 22 }));
-    if (match[2] || match[3]) {
-      runs.push(new TextRun({ text: match[2] ?? match[3], bold: true, size: 22 }));
-    } else if (match[4] || match[5]) {
-      runs.push(new TextRun({ text: match[4] ?? match[5], italics: true, size: 22 }));
-    }
-    lastIndex = match.index + match[0].length;
-  }
-  if (lastIndex < text.length) runs.push(new TextRun({ text: text.slice(lastIndex), size: 22 }));
-  return runs.length > 0 ? runs : [new TextRun({ text, size: 22 })];
-}
-
-function createEditableHtmlParagraph(line: string): Paragraph {
-  const trimmed = line.trim();
-  const heading = trimmed.match(/^(#{1,6})\s+(.+)$/);
-  if (heading) {
-    const headingLevels = [
-      HeadingLevel.HEADING_1,
-      HeadingLevel.HEADING_2,
-      HeadingLevel.HEADING_3,
-      HeadingLevel.HEADING_4,
-      HeadingLevel.HEADING_5,
-      HeadingLevel.HEADING_6,
-    ];
-    return new Paragraph({
-      heading: headingLevels[heading[1].length - 1],
-      children: parseMarkdownRuns(heading[2]),
-      spacing: { before: 240, after: 120 },
-    });
-  }
-
-  const quote = trimmed.match(/^(?:>\s?)+(.+)$/);
-  if (quote) {
-    return new Paragraph({
-      children: [new TextRun({ text: quote[1], italics: true, size: 22 })],
-      indent: { left: 720, right: 360 },
-      spacing: { before: 120, after: 120 },
-    });
-  }
-
-  const listItem = trimmed.match(/^[-*+]\s+(.+)$/);
-  if (listItem) {
-    return new Paragraph({
-      children: [new TextRun({ text: `• ${listItem[1]}`, size: 22 })],
-      indent: { left: 360, hanging: 180 },
-      spacing: { after: 80 },
-    });
-  }
-
-  return new Paragraph({
-    children: parseMarkdownRuns(trimmed),
-    alignment: AlignmentType.LEFT,
-    spacing: { after: 160, line: 276 },
-  });
-}
-
-export async function renderHtmlToEditableDocxBuffer(html: string): Promise<Buffer> {
-  const text = htmlToNexusLMDocumentText(html);
-  if (!text.trim()) throw new Error("The HTML design has no editable text content.");
-
-  const children = text
-    .split(/\n+/)
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .map(createEditableHtmlParagraph);
+export async function renderHtmlToVisualDocxBuffer(html: string): Promise<Buffer> {
+  const rendered = await renderHtmlPages(html);
+  const widthPx = Math.round(rendered.pageSize.widthInches * CSS_PX_PER_INCH);
+  const heightPx = Math.round(rendered.pageSize.heightInches * CSS_PX_PER_INCH);
+  const widthTwips = Math.round(rendered.pageSize.widthInches * 1440);
+  const heightTwips = Math.round(rendered.pageSize.heightInches * 1440);
+  const children = rendered.pages.map((page, index) => new Paragraph({
+    pageBreakBefore: index > 0,
+    alignment: AlignmentType.CENTER,
+    spacing: { before: 0, after: 0, line: 240 },
+    children: [
+      new ImageRun({
+        type: "png",
+        data: page,
+        transformation: { width: widthPx, height: heightPx },
+        altText: {
+          title: "Rendered HTML design",
+          description: "A page rendered from the original NexusLM HTML design.",
+          name: `nexuslm-html-page-${index + 1}`,
+        },
+      }),
+    ],
+  }));
 
   const document = new DocxDocument({
     sections: [{
       properties: {
         page: {
-          size: { width: 11906, height: 16838 },
-          margin: { top: 1080, right: 1080, bottom: 1080, left: 1080 },
+          size: { width: widthTwips, height: heightTwips },
+          margin: { top: 0, right: 0, bottom: 0, left: 0, header: 0, footer: 0 },
         },
       },
       children,
@@ -294,5 +244,3 @@ export async function renderHtmlToEditableDocxBuffer(html: string): Promise<Buff
   });
   return Packer.toBuffer(document);
 }
-
-export const renderHtmlToVisualDocxBuffer = renderHtmlToEditableDocxBuffer;

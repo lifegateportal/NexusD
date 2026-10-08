@@ -1362,7 +1362,6 @@ function EbookPageClient() {
                   handleEbookUpdate(updated);
                   setStatusMsg({ type: "success", text: summary });
                 }}
-                onOpenManuscript={() => setActiveTab("manuscript")}
               />
             </div>
 

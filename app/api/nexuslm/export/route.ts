@@ -3,7 +3,7 @@ import { z } from "zod";
 import { EbookManifestSchema, BookTemplateEnum, PrintSpecSchema } from "@/lib/schemas/ebook";
 import { generateDocxBuffer, generatePdfBuffer } from "@/lib/ebook-generator";
 import { htmlToNexusLMDocumentText, safeNexusLMFilename, type NexusLMArtifactFormat } from "@/lib/nexuslm-artifacts";
-import { renderHtmlToEditableDocxBuffer, renderHtmlToPdfBuffer } from "@/lib/nexuslm-html-renderer";
+import { renderHtmlToPdfBuffer, renderHtmlToVisualDocxBuffer } from "@/lib/nexuslm-html-renderer";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
@@ -81,7 +81,7 @@ export async function POST(request: NextRequest) {
 
     if (input.html) {
       const artifact = format === "docx"
-        ? await renderHtmlToEditableDocxBuffer(input.html)
+        ? await renderHtmlToVisualDocxBuffer(input.html)
         : await renderHtmlToPdfBuffer(input.html);
       const extension = format === "docx" ? "docx" : "pdf";
       const contentType = format === "docx"
@@ -94,7 +94,7 @@ export async function POST(request: NextRequest) {
           "Content-Disposition": `attachment; filename="${filename}.${extension}"`,
           "Content-Length": String(artifact.byteLength),
           "Cache-Control": "no-store",
-          "X-NexusLM-Export-Mode": format === "docx" ? "editable-html-text" : "visual-html-render",
+          "X-NexusLM-Export-Mode": "visual-html-render",
         },
       });
     }
