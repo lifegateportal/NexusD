@@ -21,10 +21,6 @@ import {
 
 const CSS_PX_PER_INCH = 96;
 const DEFAULT_PAGE_SIZE = { widthInches: 8.27, heightInches: 11.69 };
-const DEFAULT_VIEWPORT = {
-  width: Math.round(DEFAULT_PAGE_SIZE.widthInches * CSS_PX_PER_INCH),
-  height: Math.round(DEFAULT_PAGE_SIZE.heightInches * CSS_PX_PER_INCH),
-};
 const RENDER_TIMEOUT_MS = 30_000;
 
 type PageSize = {
@@ -56,15 +52,30 @@ type ParagraphModel = {
   kind: "paragraph";
   heading: number;
   runs: InlineModel[];
+  pageIndex: number;
+  widthTwips: number | null;
   alignment: "left" | "center" | "right" | "justify";
   beforeTwips: number;
   afterTwips: number;
   lineTwips: number | null;
   leftTwips: number;
   rightTwips: number;
+  paddingTopTwips: number;
+  paddingRightTwips: number;
+  paddingBottomTwips: number;
+  paddingLeftTwips: number;
   backgroundColor: string | null;
+  backgroundImage: string | null;
   borderColor: string | null;
   borderWidth: number;
+  borderTopColor: string | null;
+  borderRightColor: string | null;
+  borderBottomColor: string | null;
+  borderLeftColor: string | null;
+  borderTopWidth: number;
+  borderRightWidth: number;
+  borderBottomWidth: number;
+  borderLeftWidth: number;
   pageBreakBefore: boolean;
   list: "bullet" | "number" | null;
 };
@@ -77,6 +88,7 @@ type TableCellModel = {
 
 type TableModel = {
   kind: "table";
+  pageIndex: number;
   rows: TableCellModel[][];
   widthTwips: number | null;
 };
@@ -178,8 +190,13 @@ async function extractDocumentModel(html: string): Promise<DocumentModel> {
   });
 
   try {
+    const pageSize = pageSizeFromHtml(html);
+    const viewport = {
+      width: Math.round(pageSize.widthInches * CSS_PX_PER_INCH),
+      height: Math.round(pageSize.heightInches * CSS_PX_PER_INCH),
+    };
     const context = await browser.newContext({
-      viewport: DEFAULT_VIEWPORT,
+      viewport,
       deviceScaleFactor: 1,
       javaScriptEnabled: false,
       colorScheme: "light",
@@ -204,6 +221,18 @@ async function extractDocumentModel(html: string): Promise<DocumentModel> {
         if (!channels || channels.length < 3) return null;
         return channels.slice(0, 3).map((channel) => Number(channel).toString(16).padStart(2, "0")).join("").toUpperCase();
       }
+      function gradientMidpoint(value: string): string | null {
+        const colors = value.match(/(?:#[0-9a-f]{3,8}|rgba?\([^)]*\))/gi) ?? [];
+        const hexColors = colors.map(toHex).filter((color): color is string => color !== null);
+        if (hexColors.length < 2) return hexColors[0] ?? null;
+        const first = hexColors[0].match(/.{2}/g)?.map((channel) => Number.parseInt(channel, 16)) ?? [];
+        const last = hexColors[hexColors.length - 1].match(/.{2}/g)?.map((channel) => Number.parseInt(channel, 16)) ?? [];
+        if (first.length !== 3 || last.length !== 3) return hexColors[0];
+        return first
+          .map((channel, index) => Math.round((channel + last[index]) / 2).toString(16).padStart(2, "0"))
+          .join("")
+          .toUpperCase();
+      }
       function px(value: string): number {
         const parsed = Number.parseFloat(value);
         return Number.isFinite(parsed) ? parsed : 0;
@@ -219,6 +248,7 @@ async function extractDocumentModel(html: string): Promise<DocumentModel> {
           fontSizePt: Math.max(1, Math.round(fontSizePx * 0.75 * 2) / 2),
           color: toHex(style.color),
           backgroundColor: toHex(style.backgroundColor),
+          backgroundImage: style.backgroundImage !== "none" ? style.backgroundImage : null,
           bold: style.fontWeight === "bold" || Number(style.fontWeight) >= 600,
           italics: style.fontStyle.includes("italic"),
           underline: style.textDecorationLine.includes("underline"),
@@ -231,8 +261,18 @@ async function extractDocumentModel(html: string): Promise<DocumentModel> {
           lineTwips: lineHeightPx > 0 ? Math.round((lineHeightPx / fontSizePx) * 240) : null,
           leftTwips: twips(style.marginLeft),
           rightTwips: twips(style.marginRight),
-          borderColor: toHex(style.borderBottomColor),
-          borderWidth: Math.max(0, Math.round(px(style.borderBottomWidth) * 8)),
+          paddingTopTwips: twips(style.paddingTop),
+          paddingRightTwips: twips(style.paddingRight),
+          paddingBottomTwips: twips(style.paddingBottom),
+          paddingLeftTwips: twips(style.paddingLeft),
+          borderTopColor: toHex(style.borderTopColor),
+          borderRightColor: toHex(style.borderRightColor),
+          borderBottomColor: toHex(style.borderBottomColor),
+          borderLeftColor: toHex(style.borderLeftColor),
+          borderTopWidth: Math.max(0, Math.round(px(style.borderTopWidth) * 8)),
+          borderRightWidth: Math.max(0, Math.round(px(style.borderRightWidth) * 8)),
+          borderBottomWidth: Math.max(0, Math.round(px(style.borderBottomWidth) * 8)),
+          borderLeftWidth: Math.max(0, Math.round(px(style.borderLeftWidth) * 8)),
           pageBreakBefore: style.breakBefore === "page" || style.pageBreakBefore === "always",
         };
       }
@@ -258,7 +298,7 @@ async function extractDocumentModel(html: string): Promise<DocumentModel> {
               fontFamily: style.fontFamily,
               fontSizePt: style.fontSizePt,
               color: style.color,
-              backgroundColor: style.backgroundColor,
+              backgroundColor: style.backgroundColor ?? gradientMidpoint(style.backgroundImage ?? ""),
               bold: style.bold,
               italics: style.italics,
               underline: style.underline,
@@ -282,6 +322,7 @@ async function extractDocumentModel(html: string): Promise<DocumentModel> {
       }
       function paragraphFor(element: Element, list: "bullet" | "number" | null = null): ParagraphModel {
         const style = styleFor(element);
+        const rect = element.getBoundingClientRect();
         const heading = /^H([1-6])$/.test(element.tagName) ? Number(element.tagName.slice(1)) : 0;
         const parentList = element.closest("ol,ul");
         const listKind = list ?? (parentList?.tagName === "OL" ? "number" : parentList?.tagName === "UL" ? "bullet" : null);
@@ -289,28 +330,50 @@ async function extractDocumentModel(html: string): Promise<DocumentModel> {
           kind: "paragraph",
           heading,
           runs: runsFor(element, element.tagName === "PRE"),
+          pageIndex: Math.max(0, Math.floor(Math.max(0, rect.top - 1) / window.innerHeight)),
+          widthTwips: rect.width > 0 ? Math.round(rect.width * 15) : null,
           alignment: style.alignment,
           beforeTwips: style.beforeTwips,
           afterTwips: style.afterTwips,
           lineTwips: style.lineTwips,
           leftTwips: style.leftTwips,
           rightTwips: style.rightTwips,
-          backgroundColor: style.backgroundColor,
-          borderColor: style.borderColor,
-          borderWidth: style.borderWidth,
+          paddingTopTwips: style.paddingTopTwips,
+          paddingRightTwips: style.paddingRightTwips,
+          paddingBottomTwips: style.paddingBottomTwips,
+          paddingLeftTwips: style.paddingLeftTwips,
+          backgroundColor: style.backgroundColor ?? gradientMidpoint(style.backgroundImage ?? ""),
+          backgroundImage: style.backgroundImage,
+          borderColor: style.borderBottomColor,
+          borderWidth: Math.max(
+            style.borderTopWidth,
+            style.borderRightWidth,
+            style.borderBottomWidth,
+            style.borderLeftWidth,
+          ),
+          borderTopColor: style.borderTopColor,
+          borderRightColor: style.borderRightColor,
+          borderBottomColor: style.borderBottomColor,
+          borderLeftColor: style.borderLeftColor,
+          borderTopWidth: style.borderTopWidth,
+          borderRightWidth: style.borderRightWidth,
+          borderBottomWidth: style.borderBottomWidth,
+          borderLeftWidth: style.borderLeftWidth,
           pageBreakBefore: style.pageBreakBefore,
           list: listKind,
         };
       }
       function tableFor(table: HTMLTableElement): TableModel {
+        const rect = table.getBoundingClientRect();
         return {
           kind: "table",
-          widthTwips: table.getBoundingClientRect().width > 0 ? Math.round(table.getBoundingClientRect().width * 15) : null,
+          pageIndex: Math.max(0, Math.floor(Math.max(0, rect.top - 1) / window.innerHeight)),
+          widthTwips: rect.width > 0 ? Math.round(rect.width * 15) : null,
           rows: Array.from(table.rows).map((row) => Array.from(row.cells).map((cell) => {
             const style = styleFor(cell);
             return {
               runs: runsFor(cell),
-              backgroundColor: style.backgroundColor,
+              backgroundColor: style.backgroundColor ?? gradientMidpoint(style.backgroundImage ?? ""),
               widthTwips: cell.getBoundingClientRect().width > 0 ? Math.round(cell.getBoundingClientRect().width * 15) : null,
             };
           })),
@@ -382,8 +445,21 @@ function paragraphFor(model: ParagraphModel): Paragraph {
       ? { left: model.leftTwips || undefined, right: model.rightTwips || undefined }
       : undefined,
     shading: model.backgroundColor ? { type: ShadingType.SOLID, fill: model.backgroundColor } : undefined,
-    border: model.borderColor && model.borderWidth > 0
-      ? { bottom: { style: BorderStyle.SINGLE, size: model.borderWidth, color: model.borderColor, space: 1 } }
+    border: model.borderWidth > 0
+      ? {
+          top: model.borderTopWidth > 0
+            ? { style: BorderStyle.SINGLE, size: model.borderTopWidth, color: model.borderTopColor ?? model.borderColor ?? "B7C3D0", space: 1 }
+            : undefined,
+          right: model.borderRightWidth > 0
+            ? { style: BorderStyle.SINGLE, size: model.borderRightWidth, color: model.borderRightColor ?? model.borderColor ?? "B7C3D0", space: 1 }
+            : undefined,
+          bottom: model.borderBottomWidth > 0
+            ? { style: BorderStyle.SINGLE, size: model.borderBottomWidth, color: model.borderBottomColor ?? model.borderColor ?? "B7C3D0", space: 1 }
+            : undefined,
+          left: model.borderLeftWidth > 0
+            ? { style: BorderStyle.SINGLE, size: model.borderLeftWidth, color: model.borderLeftColor ?? model.borderColor ?? "B7C3D0", space: 1 }
+            : undefined,
+        }
       : undefined,
     pageBreakBefore: model.pageBreakBefore,
     ...(model.heading > 0 ? { heading: [
@@ -398,6 +474,67 @@ function paragraphFor(model: ParagraphModel): Paragraph {
     ...(model.list === "number" ? { numbering: { reference: "nexus-html-numbers", level: 0 } } : {}),
   };
   return new Paragraph(options);
+}
+
+function isBoxedParagraph(model: ParagraphModel): boolean {
+  return Boolean(
+    model.backgroundColor
+      || model.paddingTopTwips
+      || model.paddingRightTwips
+      || model.paddingBottomTwips
+      || model.paddingLeftTwips
+      || model.borderWidth,
+  );
+}
+
+function boxedParagraphFor(model: ParagraphModel): Table {
+  const inner = paragraphFor({
+    ...model,
+    backgroundColor: null,
+    borderColor: null,
+    borderWidth: 0,
+    borderTopWidth: 0,
+    borderRightWidth: 0,
+    borderBottomWidth: 0,
+    borderLeftWidth: 0,
+  });
+  const border = (width: number, color: string | null) => width > 0
+    ? { style: BorderStyle.SINGLE, size: width, color: color ?? "B7C3D0", space: 0 }
+    : { style: BorderStyle.SINGLE, size: 0, color: "FFFFFF", space: 0 };
+  return new Table({
+    rows: [new TableRow({
+      children: [new TableCell({
+        children: [inner],
+        width: model.widthTwips ? { size: model.widthTwips, type: WidthType.DXA } : undefined,
+        margins: {
+          top: model.paddingTopTwips,
+          right: model.paddingRightTwips,
+          bottom: model.paddingBottomTwips,
+          left: model.paddingLeftTwips,
+        },
+        shading: model.backgroundColor
+          ? { type: ShadingType.SOLID, fill: model.backgroundColor }
+          : undefined,
+        borders: {
+          top: border(model.borderTopWidth, model.borderTopColor),
+          right: border(model.borderRightWidth, model.borderRightColor),
+          bottom: border(model.borderBottomWidth, model.borderBottomColor),
+          left: border(model.borderLeftWidth, model.borderLeftColor),
+        },
+        verticalAlign: VerticalAlign.CENTER,
+      })],
+    })],
+    width: model.widthTwips ? { size: model.widthTwips, type: WidthType.DXA } : { size: 100, type: WidthType.PERCENTAGE },
+    layout: TableLayoutType.FIXED,
+    borders: {
+      top: { style: BorderStyle.NIL, size: 0, color: "FFFFFF" },
+      bottom: { style: BorderStyle.NIL, size: 0, color: "FFFFFF" },
+      left: { style: BorderStyle.NIL, size: 0, color: "FFFFFF" },
+      right: { style: BorderStyle.NIL, size: 0, color: "FFFFFF" },
+      insideHorizontal: { style: BorderStyle.NIL, size: 0, color: "FFFFFF" },
+      insideVertical: { style: BorderStyle.NIL, size: 0, color: "FFFFFF" },
+    },
+  });
 }
 
 function tableFor(model: TableModel): Table {
@@ -434,7 +571,17 @@ export async function renderHtmlToEditableDocxBuffer(html: string): Promise<Buff
   }
   const model = await extractDocumentModel(html);
   if (model.blocks.length === 0) throw new Error("The HTML design has no editable document content.");
-  const children = model.blocks.map((block) => block.kind === "table" ? tableFor(block) : paragraphFor(block));
+  const children: Array<Paragraph | Table> = [];
+  let previousPageIndex = 0;
+  for (const block of model.blocks) {
+    if (block.pageIndex > previousPageIndex) {
+      children.push(new Paragraph({ pageBreakBefore: true }));
+    }
+    children.push(block.kind === "table"
+      ? tableFor(block)
+      : isBoxedParagraph(block) ? boxedParagraphFor(block) : paragraphFor(block));
+    previousPageIndex = Math.max(previousPageIndex, block.pageIndex);
+  }
   const document = new DocxDocument({
     creator: "NexusLM",
     title: "NexusLM document",
