@@ -1,7 +1,8 @@
 import chromium from "@sparticuz/chromium";
 import { chromium as playwrightChromium, type Page } from "playwright-core";
-import JSZip from "jszip";
-import htmlToDocx, { type HtmlToDocxOptions } from "html-to-docx";
+import { renderHtmlToEditableDocxBuffer } from "@/lib/nexuslm-editable-docx";
+
+export { renderHtmlToEditableDocxBuffer };
 
 const CSS_PX_PER_INCH = 96;
 const DEFAULT_PAGE_SIZE = { widthInches: 8.27, heightInches: 11.69 };
@@ -11,19 +12,6 @@ const DEFAULT_VIEWPORT = {
 };
 const MAX_RENDERED_HEIGHT_PX = 120_000;
 const RENDER_TIMEOUT_MS = 30_000;
-const DOCX_STYLE_PROPERTIES = [
-  "color",
-  "background-color",
-  "text-align",
-  "font-weight",
-  "font-family",
-  "font-size",
-  "line-height",
-  "margin-left",
-  "margin-right",
-  "display",
-  "width",
-] as const;
 
 type PageSize = {
   widthInches: number;
@@ -78,34 +66,6 @@ function pageSizeFromHtml(html: string): PageSize {
   }
 
   return DEFAULT_PAGE_SIZE;
-}
-
-function pageMarginsFromHtml(html: string): NonNullable<HtmlToDocxOptions["margins"]> {
-  const pageRule = html.match(/@page\b[^{}]*\{([\s\S]*?)\}/i)?.[1] ?? "";
-  const marginDeclaration = pageRule.match(/\bmargin\s*:\s*([^;]+)/i)?.[1]?.trim();
-  if (!marginDeclaration) {
-    return { top: 0, right: 0, bottom: 0, left: 0 };
-  }
-
-  const values = marginDeclaration
-    .split(/\s+/)
-    .map(parseLength)
-    .filter((value): value is number => value !== null);
-  if (values.length === 0) return { top: 0, right: 0, bottom: 0, left: 0 };
-  const [top, right = top, bottom = top, left = right] = values.length === 1
-    ? [values[0], values[0], values[0], values[0]]
-    : values.length === 2
-      ? [values[0], values[1], values[0], values[1]]
-      : values.length === 3
-        ? [values[0], values[1], values[2], values[1]]
-        : values;
-  const toTwips = (inches: number) => Math.round(inches * 1440);
-  return {
-    top: toTwips(top),
-    right: toTwips(right),
-    bottom: toTwips(bottom),
-    left: toTwips(left),
-  };
 }
 
 function renderSetupStyle(): string {
@@ -248,105 +208,4 @@ async function renderHtmlPdf(html: string, pageSize: PageSize): Promise<Buffer> 
 export async function renderHtmlToPdfBuffer(html: string): Promise<Buffer> {
   const pageSize = pageSizeFromHtml(html);
   return renderHtmlPdf(html, pageSize);
-}
-
-async function inlineComputedStyles(html: string): Promise<string> {
-  const executablePath = await chromium.executablePath();
-  const browser = await playwrightChromium.launch({
-    args: [...chromium.args, "--no-sandbox", "--disable-setuid-sandbox"],
-    executablePath,
-    headless: true,
-  });
-
-  try {
-    const context = await browser.newContext({
-      viewport: DEFAULT_VIEWPORT,
-      deviceScaleFactor: 1,
-      javaScriptEnabled: false,
-      colorScheme: "light",
-    });
-    const page = await context.newPage();
-    await page.route("**/*", async (route) => {
-      const url = route.request().url();
-      if (url.startsWith("data:")
-        || url.startsWith("blob:")
-        || url.startsWith("about:blank")) {
-        await route.continue();
-        return;
-      }
-      await route.abort();
-    });
-    const safeHtml = html.replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, "");
-    await page.setContent(injectRenderSetup(safeHtml), {
-      timeout: RENDER_TIMEOUT_MS,
-      waitUntil: "load",
-    });
-    await waitForRenderedAssets(page);
-    const inlinedHtml = await page.evaluate((styleProperties) => {
-      const elements = Array.from(document.body?.querySelectorAll<HTMLElement>("*") ?? []);
-      for (const element of elements) {
-        const computed = window.getComputedStyle(element);
-        const declarations = styleProperties
-          .map((property) => {
-            const value = computed.getPropertyValue(property).trim();
-            if (!value || value === "transparent" || /^rgba\([^)]*,\s*0\)$/i.test(value)) return "";
-            return `${property}:${value}`;
-          })
-          .filter(Boolean);
-        if (declarations.length === 0) continue;
-        const existing = element.getAttribute("style")?.trim() ?? "";
-        element.setAttribute("style", `${existing}${existing && !existing.endsWith(";") ? ";" : ""}${declarations.join(";")}`);
-      }
-      return document.documentElement?.outerHTML ?? document.body?.outerHTML ?? "";
-    }, DOCX_STYLE_PROPERTIES);
-    await context.close();
-    if (!inlinedHtml.trim()) throw new Error("The HTML design has no editable document content.");
-    return inlinedHtml;
-  } finally {
-    await browser.close();
-  }
-}
-
-async function repairDocxPackage(buffer: Buffer): Promise<Buffer> {
-  const zip = await JSZip.loadAsync(buffer);
-  const documentFile = zip.file("word/document.xml");
-  if (!documentFile) throw new Error("The DOCX converter did not produce a document part.");
-
-  let documentXml = await documentFile.async("string");
-  const sectionMatch = documentXml.match(/<w:sectPr\b[\s\S]*?<\/w:sectPr>/);
-  if (!sectionMatch) throw new Error("The DOCX converter did not produce page settings.");
-
-  documentXml = documentXml
-    .replace(sectionMatch[0], "")
-    .replace(/\s+\w+:\w+="undefined"/g, "")
-    .replace("</w:body>", `${sectionMatch[0]}</w:body>`);
-  zip.file("word/document.xml", documentXml);
-  return zip.generateAsync({ type: "nodebuffer" });
-}
-
-export async function renderHtmlToEditableDocxBuffer(html: string): Promise<Buffer> {
-  if (!html.trim()) throw new Error("The HTML design is empty.");
-  if (!/<(?:body|main|article|section|p|h[1-6]|div)\b/i.test(html)) {
-    throw new Error("The HTML design has no editable document content.");
-  }
-
-  const pageSize = pageSizeFromHtml(html);
-  const editableHtml = await inlineComputedStyles(html);
-  const docxBuffer = await htmlToDocx(editableHtml, null, {
-    title: "NexusLM document",
-    creator: "NexusLM",
-    description: "Editable document exported from a NexusLM HTML design.",
-    pageSize: {
-      width: Math.round(pageSize.widthInches * 1440),
-      height: Math.round(pageSize.heightInches * 1440),
-    },
-    margins: {
-      ...pageMarginsFromHtml(html),
-      header: 0,
-      footer: 0,
-      gutter: 0,
-    },
-    table: { row: { cantSplit: true } },
-  });
-  return repairDocxPackage(docxBuffer);
 }
