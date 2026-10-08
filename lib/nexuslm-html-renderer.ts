@@ -1,5 +1,6 @@
 import chromium from "@sparticuz/chromium";
 import { chromium as playwrightChromium, type Page } from "playwright-core";
+import JSZip from "jszip";
 import htmlToDocx, { type HtmlToDocxOptions } from "html-to-docx";
 
 const CSS_PX_PER_INCH = 96;
@@ -306,6 +307,23 @@ async function inlineComputedStyles(html: string): Promise<string> {
   }
 }
 
+async function repairDocxPackage(buffer: Buffer): Promise<Buffer> {
+  const zip = await JSZip.loadAsync(buffer);
+  const documentFile = zip.file("word/document.xml");
+  if (!documentFile) throw new Error("The DOCX converter did not produce a document part.");
+
+  let documentXml = await documentFile.async("string");
+  const sectionMatch = documentXml.match(/<w:sectPr\b[\s\S]*?<\/w:sectPr>/);
+  if (!sectionMatch) throw new Error("The DOCX converter did not produce page settings.");
+
+  documentXml = documentXml
+    .replace(sectionMatch[0], "")
+    .replace(/\s+\w+:\w+="undefined"/g, "")
+    .replace("</w:body>", `${sectionMatch[0]}</w:body>`);
+  zip.file("word/document.xml", documentXml);
+  return zip.generateAsync({ type: "nodebuffer" });
+}
+
 export async function renderHtmlToEditableDocxBuffer(html: string): Promise<Buffer> {
   if (!html.trim()) throw new Error("The HTML design is empty.");
   if (!/<(?:body|main|article|section|p|h[1-6]|div)\b/i.test(html)) {
@@ -314,7 +332,7 @@ export async function renderHtmlToEditableDocxBuffer(html: string): Promise<Buff
 
   const pageSize = pageSizeFromHtml(html);
   const editableHtml = await inlineComputedStyles(html);
-  return htmlToDocx(editableHtml, null, {
+  const docxBuffer = await htmlToDocx(editableHtml, null, {
     title: "NexusLM document",
     creator: "NexusLM",
     description: "Editable document exported from a NexusLM HTML design.",
@@ -322,7 +340,13 @@ export async function renderHtmlToEditableDocxBuffer(html: string): Promise<Buff
       width: Math.round(pageSize.widthInches * 1440),
       height: Math.round(pageSize.heightInches * 1440),
     },
-    margins: pageMarginsFromHtml(html),
+    margins: {
+      ...pageMarginsFromHtml(html),
+      header: 0,
+      footer: 0,
+      gutter: 0,
+    },
     table: { row: { cantSplit: true } },
   });
+  return repairDocxPackage(docxBuffer);
 }
