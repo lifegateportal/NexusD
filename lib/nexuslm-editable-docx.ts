@@ -505,7 +505,7 @@ function boxedParagraphFor(model: ParagraphModel): Table {
     rows: [new TableRow({
       children: [new TableCell({
         children: [inner],
-        width: model.widthTwips ? { size: model.widthTwips, type: WidthType.DXA } : undefined,
+        width: { size: 100, type: WidthType.PERCENTAGE },
         margins: {
           top: model.paddingTopTwips,
           right: model.paddingRightTwips,
@@ -524,8 +524,8 @@ function boxedParagraphFor(model: ParagraphModel): Table {
         verticalAlign: VerticalAlign.CENTER,
       })],
     })],
-    width: model.widthTwips ? { size: model.widthTwips, type: WidthType.DXA } : { size: 100, type: WidthType.PERCENTAGE },
-    layout: TableLayoutType.FIXED,
+    width: { size: 100, type: WidthType.PERCENTAGE },
+    layout: TableLayoutType.AUTOFIT,
     borders: {
       top: { style: BorderStyle.NIL, size: 0, color: "FFFFFF" },
       bottom: { style: BorderStyle.NIL, size: 0, color: "FFFFFF" },
