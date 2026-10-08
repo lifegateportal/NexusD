@@ -19,7 +19,7 @@ import {
 } from "@/lib/nexuslm-chat-store";
 import { NEXUSLM_WRITING_STYLES, type NexusLMWritingStyle } from "@/lib/nexuslm-writing-styles";
 import { NEXUSLM_AGENTS, type NexusLMAgent } from "@/lib/nexuslm-agents";
-import { NEXUSLM_RESPONSE_LENGTHS, sanitizeNexusLMText, type NexusLMResponseLength } from "@/lib/nexuslm-response";
+import { isNexusLMLongFormRequest, NEXUSLM_RESPONSE_LENGTHS, sanitizeNexusLMText, type NexusLMResponseLength } from "@/lib/nexuslm-response";
 import { safeNexusLMFilename, type NexusLMArtifactFormat } from "@/lib/nexuslm-artifacts";
 import {
   buildManifestChangeEntries,
@@ -255,10 +255,6 @@ function extractChapterTitle(content: string, chapterNumber: number): string {
   const labeled = content.match(/^\s*chapter\s+\d+\s*[:.-]\s*(.+?)\s*$/im);
   if (labeled?.[1]?.trim()) return labeled[1].trim().slice(0, 300);
   return `Chapter ${chapterNumber}`;
-}
-
-function isLongFormRequest(instruction: string): boolean {
-  return /\b(?:write|draft|compose|create|generate|produce|develop|complete)\b[\s\S]{0,100}\b(?:chapter|manuscript|book|essay|report|long[\s-]?form)\b|\b(?:chapter|manuscript|book|essay|report|long[\s-]?form)\b[\s\S]{0,100}\b(?:write|draft|compose|create|generate|produce|develop|complete)\b/i.test(instruction);
 }
 
 function isPdfRequest(instruction: string): boolean {
@@ -1190,7 +1186,7 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
     const instruction = (requestText ?? input).trim();
     if (!instruction || loading) return;
     const requestResponseLength = options?.responseLength
-      ?? (responseLength === "default" && isLongFormRequest(instruction) ? "long-form" : responseLength);
+      ?? (responseLength === "default" && isNexusLMLongFormRequest(instruction) ? "long-form" : responseLength);
     const activeMode = requestMode ?? inferMode(instruction, mode);
     const requestUsesBook = options?.forceGeneral ? false : useBookContext && hasBookContext;
     if (requestUsesBook && activeMode === "edit" && !manifest) {

@@ -4,7 +4,7 @@ import { z } from "zod";
 import { deepSeekModel, deepSeekReasonerModel } from "@/lib/ai-providers";
 import { EM_DASH_MINIMIZATION_RULES } from "@/lib/editorial-style-bible";
 import { NexusLMAgentSchema } from "@/lib/nexuslm-agents";
-import { NexusLMResponseLengthSchema, NEXUSLM_RESPONSE_LENGTHS } from "@/lib/nexuslm-response";
+import { isNexusLMLongFormRequest, NexusLMResponseLengthSchema, NEXUSLM_RESPONSE_LENGTHS } from "@/lib/nexuslm-response";
 import { NexusLMWritingStyleSchema, NEXUSLM_WRITING_STYLES } from "@/lib/nexuslm-writing-styles";
 
 export const runtime = "nodejs";
@@ -117,13 +117,7 @@ function scoreChunk(chunk: DocumentChunk, terms: string[]): number {
 
 function requestsFullDocumentCoverage(query: string): boolean {
   return /\b(entire|whole|all|every|complete|full|summari[sz]e|analy[sz]e|review|themes?|key points?|takeaways?|minutes?|outline|extract|process)\b/i.test(query)
-    || requestsLongFormDraft(query);
-}
-
-function requestsLongFormDraft(query: string): boolean {
-  const writingVerb = /\b(write|draft|compose|create|produce|develop|rewrite|turn|transform)\b/i.test(query);
-  const longFormNoun = /\b(chapter|essay|report|article|manuscript|book|section|sermon|story|paper)\b/i.test(query);
-  return writingVerb && longFormNoun;
+    || isNexusLMLongFormRequest(query);
 }
 
 async function mapWithConcurrency<T, R>(
@@ -290,7 +284,7 @@ ${attachmentContext.context}
 
 USER REQUEST:
 ${input.query}`;
-    const shouldContinueLongForm = input.responseLength === "long-form" || requestsLongFormDraft(input.query);
+    const shouldContinueLongForm = input.responseLength === "long-form" || isNexusLMLongFormRequest(input.query);
     const encoder = new TextEncoder();
     const stream = new ReadableStream<Uint8Array>({
       async start(controller) {

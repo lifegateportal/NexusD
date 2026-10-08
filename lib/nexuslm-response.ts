@@ -4,6 +4,13 @@ export const NexusLMResponseLengthSchema = z.enum(["shorter", "default", "longer
 
 export type NexusLMResponseLength = z.infer<typeof NexusLMResponseLengthSchema>;
 
+const LONG_FORM_WRITING_VERBS = /\b(?:write|draft|compose|create|produce|develop|rewrite|turn|transform|build|design|implement|code|program)\b/i;
+const LONG_FORM_OUTPUT_TYPES = /\b(?:chapter|essay|report|article|manuscript|book|section|sermon|story|paper|website|web[\s-]?page|web[\s-]?app(?:lication)?|site|landing\s+page|front[\s-]?end|user\s+interface|ui|html|css|javascript|typescript|react|next\.js|codebase|component|dashboard)\b/i;
+
+export function isNexusLMLongFormRequest(query: string): boolean {
+  return LONG_FORM_WRITING_VERBS.test(query) && LONG_FORM_OUTPUT_TYPES.test(query);
+}
+
 export const NEXUSLM_RESPONSE_LENGTHS: Record<NexusLMResponseLength, {
   label: string;
   description: string;
@@ -41,13 +48,13 @@ export const NEXUSLM_RESPONSE_LENGTHS: Record<NexusLMResponseLength, {
     instruction: "Develop the supported material fully. Do not omit relevant manuscript or transcript content merely to be brief.",
   },
   "long-form": {
-    label: "Long-form chapter",
-    description: "A complete chapter-sized response for manuscripts, essays, reports, and other substantial work",
+    label: "Long-form deliverable",
+    description: "A complete response for manuscripts, essays, reports, websites, code, and other substantial work",
     chatAskTokens: 24000,
     chatSocraticTokens: 16000,
     draftTokens: 32000,
     editTokens: 28000,
-    instruction: "Write a complete, sustained long-form response when the user requests a chapter, manuscript, essay, report, or other substantial work. Develop the structure, transitions, examples, and conclusion fully. Do not substitute an outline, writing advice, refusal, or redirect for the requested draft. Use the available budget to finish the requested work rather than announcing parts or stopping at an outline; if the generation limit interrupts the draft, continue directly without repeating completed material.",
+    instruction: "Write a complete, sustained long-form response when the user requests a chapter, manuscript, essay, report, website, codebase, or other substantial work. Develop the structure, transitions, examples, implementation, and conclusion fully. Do not substitute an outline, writing advice, refusal, or redirect for the requested deliverable. Use the available budget to finish the requested work rather than announcing parts or stopping at an outline; if the generation limit interrupts the draft, continue directly without repeating completed material.",
   },
 };
 
