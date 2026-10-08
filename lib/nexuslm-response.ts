@@ -47,7 +47,7 @@ export const NEXUSLM_RESPONSE_LENGTHS: Record<NexusLMResponseLength, {
     chatSocraticTokens: 16000,
     draftTokens: 32000,
     editTokens: 28000,
-    instruction: "Write a complete, sustained long-form response when the user requests a chapter, manuscript, essay, report, or other substantial work. Develop the structure, transitions, examples, and conclusion fully. Do not substitute an outline, writing advice, refusal, or redirect for the requested draft. If the request is larger than one response, clearly label the part and continue the work in an orderly chapter-by-chapter sequence.",
+    instruction: "Write a complete, sustained long-form response when the user requests a chapter, manuscript, essay, report, or other substantial work. Develop the structure, transitions, examples, and conclusion fully. Do not substitute an outline, writing advice, refusal, or redirect for the requested draft. Use the available budget to finish the requested work rather than announcing parts or stopping at an outline; if the generation limit interrupts the draft, continue directly without repeating completed material.",
   },
 };
 

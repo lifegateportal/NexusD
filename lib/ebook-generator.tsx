@@ -732,11 +732,12 @@ function writeDropCapParagraph(
   const capFontSize = capH * 0.88; // scale to fill drop height (0.88 accounts for descenders)
 
   const clean = stripMarkdownForPdf(applySmartTypography(paragraph));
-  if (!clean || clean.length < 2) {
+  if (!clean) return;
+  if (clean.length < 2) {
     // Fallback: render as normal paragraph
     const contentW = doc.page.width - doc.page.margins.left - doc.page.margins.right;
     doc.fontSize(bodyFontSize).font(fonts.serif).fillColor("#1a1a1a")
-      .text(clean || paragraph, doc.page.margins.left, undefined, {
+      .text(clean, doc.page.margins.left, undefined, {
         width: contentW,
         lineGap: tpl.bodyLineGap,
         align: tpl.bodyAlign,
@@ -1009,18 +1010,26 @@ function normalizeParagraphBreaks(text: string): string {
 /**
  * Strip markdown syntax so PDFKit renders plain text instead of raw markers.
  *
- * - Heading lines (## / ###) are dropped entirely — the heading was already
- *   rendered above the body by writeChapter / writeFrontMatter.
+ * - Heading lines (## / ###) are dropped while preserving any body text that
+ *   follows on the same paragraph block.
  * - Horizontal rule lines are dropped.
  * - Blockquote markers (> or > >) are stripped from line starts.
  * - Bold (** / __) and italic (* / _) markers are removed, preserving the
  *   inner text so emphasis words still appear — just not surrounded by *.
  */
+function removeMarkdownStructuralLines(text: string): string {
+  return text
+    .split("\n")
+    .filter((line) => {
+      const trimmed = line.trim();
+      return !/^#{1,6}\s+/.test(trimmed) && !/^[-*_]{3,}\s*$/.test(trimmed);
+    })
+    .join("\n")
+    .trim();
+}
+
 function stripMarkdownForPdf(paragraph: string): string {
-  const trimmed = paragraph.trim();
-  if (/^#{1,6}\s+/.test(trimmed)) return ""; // heading line — drop
-  if (/^[-*_]{3,}\s*$/.test(trimmed)) return ""; // horizontal rule — drop
-  return paragraph
+  return removeMarkdownStructuralLines(paragraph)
     // Strip blockquote markers (> or > >) at the start of lines
     .split("\n")
     .map((line) => line.replace(/^(>\s*)+/, ""))
@@ -1097,18 +1106,17 @@ function markInlineScriptureRefs(text: string): string {
 
 /**
  * Split a paragraph into styled runs for mixed-font PDFKit rendering.
- * Returns an empty array when the paragraph is a heading or horizontal rule.
+ * Returns an empty array when the block contains only structural lines.
  */
 function parseRunsForPdf(text: string): Array<{ text: string; italic?: boolean; bold?: boolean }> {
-  const trimmed = text.trim();
-  if (/^#{1,6}\s+/.test(trimmed)) return [];      // heading line — drop
-  if (/^[-*_]{3,}\s*$/.test(trimmed)) return [];  // horizontal rule — drop
+  const cleanedText = removeMarkdownStructuralLines(text);
+  if (!cleanedText) return [];
   const runs: Array<{ text: string; italic?: boolean; bold?: boolean }> = [];
   const pattern = /(\*\*\*(.+?)\*\*\*|\*\*(.+?)\*\*|(?<!\*)\*([^*\n]+?)\*(?!\*)|__(.+?)__|(?<!_)_([^_\n]+?)_(?!_))/gs;
   let lastIndex = 0;
   let match: RegExpExecArray | null;
-  while ((match = pattern.exec(text)) !== null) {
-    if (match.index > lastIndex) runs.push({ text: text.slice(lastIndex, match.index) });
+  while ((match = pattern.exec(cleanedText)) !== null) {
+    if (match.index > lastIndex) runs.push({ text: cleanedText.slice(lastIndex, match.index) });
     if (match[2])      runs.push({ text: match[2], bold: true, italic: true });
     else if (match[3]) runs.push({ text: match[3], bold: true });
     else if (match[4]) runs.push({ text: match[4], italic: true });
@@ -1116,8 +1124,8 @@ function parseRunsForPdf(text: string): Array<{ text: string; italic?: boolean; 
     else if (match[6]) runs.push({ text: match[6], italic: true });
     lastIndex = match.index + match[0].length;
   }
-  if (lastIndex < text.length) runs.push({ text: text.slice(lastIndex) });
-  return runs.length > 0 ? runs : [{ text }];
+  if (lastIndex < cleanedText.length) runs.push({ text: cleanedText.slice(lastIndex) });
+  return runs.length > 0 ? runs : [{ text: cleanedText }];
 }
 
 /**
