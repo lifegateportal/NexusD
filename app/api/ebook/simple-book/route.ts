@@ -435,7 +435,7 @@ export async function POST(req: NextRequest) {
 
   const usingSlots = input.oneChapterPerSlot && slotBlocks.length > 0;
   const transcriptForPrompt = usingSlots ? "" : input.rawTranscript;
-  const responseLength = NEXUSLM_RESPONSE_LENGTHS["long-form"];
+  const responseLength = NEXUSLM_RESPONSE_LENGTHS["default"];
   const maxTokens = responseLength.draftTokens;
   const voiceProfile = voiceDnaBlock(input.voiceDNA, input.voiceTone);
 
@@ -493,11 +493,10 @@ ${chapterRoutingBlock}
 SOURCE MATERIAL:
 ${sourceBlock}`;
 
-  const storyIntegrationBlock = `LIVE EXAMPLES AND STORIES (NON-NEGOTIABLE):
-- Keep the speaker's live examples, testimonies, and personal stories in the chapter.
-- Integrate each story into the argument, not as a detached anecdote.
-- Draw the teaching implication at the story's turning point or landing, then move forward. Do not restate the same implication repeatedly after each story beat.
-- Do not flatten vivid details that carry emotional force unless they are repetitive noise.`;
+  const storyIntegrationBlock = `LIVE EXAMPLES AND STORIES:
+- Use examples, testimonies, and personal stories selectively when they clarify the chapter's strongest movement.
+- Integrate only the examples that earn their place in the argument; omit repetitive, tangential, or weak material.
+- Preserve vivid detail when it carries meaning, but do not extend the chapter just to include every story from the transcript.`;
 
   try {
     if (usingSlots && slotBlocks.length > 0) {
