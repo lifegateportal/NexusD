@@ -2,8 +2,14 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { EbookManifestSchema, BookTemplateEnum, PrintSpecSchema } from "@/lib/schemas/ebook";
 import { generateDocxBuffer, generatePdfBuffer } from "@/lib/ebook-generator";
-import { htmlToNexusLMDocumentText, safeNexusLMFilename, type NexusLMArtifactFormat } from "@/lib/nexuslm-artifacts";
+import {
+  htmlToNexusLMDocumentText,
+  nexusLMContentToHtml,
+  safeNexusLMFilename,
+  type NexusLMArtifactFormat,
+} from "@/lib/nexuslm-artifacts";
 import { renderHtmlToEditableDocxBuffer, renderHtmlToPdfBuffer } from "@/lib/nexuslm-html-renderer";
+import { renderNexusLMXlsxBuffer } from "@/lib/nexuslm-spreadsheet";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
@@ -15,16 +21,17 @@ const ManuscriptChapterSchema = z.object({
 }).strict();
 
 const ExportRequestSchema = z.object({
-  format: z.enum(["pdf", "docx", "html"]).default("pdf"),
+  format: z.enum(["pdf", "docx", "html", "txt", "md", "json", "csv", "xlsx"]).default("pdf"),
   title: z.string().trim().min(1).max(300),
   subtitle: z.string().max(500).default(""),
   authorName: z.string().trim().min(1).max(200).default("NexusLM"),
   template: BookTemplateEnum.default("popular-nonfiction"),
   printSpec: PrintSpecSchema.partial().optional(),
   html: z.string().trim().min(1).max(2_000_000).optional(),
+  content: z.string().min(1).max(2_000_000).optional(),
   chapters: z.array(ManuscriptChapterSchema).min(1).max(200).optional(),
 }).strict().superRefine((value, context) => {
-  if (!value.html && !value.chapters) {
+  if (!value.html && !value.content && !value.chapters) {
     context.addIssue({
       code: z.ZodIssueCode.custom,
       path: ["chapters"],
@@ -67,26 +74,51 @@ export async function POST(request: NextRequest) {
     const format = input.format as NexusLMArtifactFormat;
     const filename = safeNexusLMFilename(input.title);
     if (format === "html") {
-      if (!input.html) throw new Error("An HTML artifact is required for HTML export.");
-      return new NextResponse(input.html, {
+      const html = input.html ?? nexusLMContentToHtml(input.content ?? "", input.title, "html");
+      return new NextResponse(html, {
         status: 200,
         headers: {
           "Content-Type": "text/html; charset=utf-8",
           "Content-Disposition": `attachment; filename="${filename}.html"`,
-          "Content-Length": String(Buffer.byteLength(input.html, "utf8")),
+          "Content-Length": String(Buffer.byteLength(html, "utf8")),
           "Cache-Control": "no-store",
         },
       });
     }
 
-    if (input.html) {
+    if (input.html || input.content) {
+      if (["txt", "md", "json", "csv"].includes(format)) {
+        const content = input.content ?? htmlToNexusLMDocumentText(input.html ?? "");
+        const extension = format;
+        const contentType = format === "json"
+          ? "application/json;charset=utf-8"
+          : format === "csv"
+            ? "text/csv;charset=utf-8"
+            : format === "md"
+              ? "text/markdown;charset=utf-8"
+              : "text/plain;charset=utf-8";
+        return new NextResponse(content, {
+          status: 200,
+          headers: {
+            "Content-Type": contentType,
+            "Content-Disposition": `attachment; filename="${filename}.${extension}"`,
+            "Content-Length": String(Buffer.byteLength(content, "utf8")),
+            "Cache-Control": "no-store",
+          },
+        });
+      }
+      const sourceHtml = input.html ?? nexusLMContentToHtml(input.content ?? "", input.title, format);
       const artifact = format === "docx"
-        ? await renderHtmlToEditableDocxBuffer(input.html)
-        : await renderHtmlToPdfBuffer(input.html);
-      const extension = format === "docx" ? "docx" : "pdf";
+        ? await renderHtmlToEditableDocxBuffer(sourceHtml)
+        : format === "xlsx"
+          ? await renderNexusLMXlsxBuffer(input.content ?? htmlToNexusLMDocumentText(input.html ?? ""))
+          : await renderHtmlToPdfBuffer(sourceHtml);
+      const extension = format === "docx" ? "docx" : format === "xlsx" ? "xlsx" : "pdf";
       const contentType = format === "docx"
         ? "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-        : "application/pdf";
+        : format === "xlsx"
+          ? "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+          : "application/pdf";
       return new NextResponse(new Uint8Array(artifact), {
         status: 200,
         headers: {

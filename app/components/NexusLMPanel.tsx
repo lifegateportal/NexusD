@@ -50,7 +50,7 @@ type Message = {
 type Source = { id: string; label: string; excerpt: string };
 type ChatAttachment = NexusLMChatAttachment;
 type PreviewDocument = Pick<ChatAttachment, "name" | "content" | "kind" | "previewDataUrl">;
-type ArtifactDownloadFormat = Exclude<NexusLMArtifactFormat, "html"> | "html";
+type ArtifactDownloadFormat = NexusLMArtifactFormat;
 type GeneralRequest = {
   instruction: string;
   mode: "ask" | "socratic" | "plan";
@@ -418,6 +418,30 @@ function extractGeneratedHtml(content: string): string | null {
     if (looksLikeHtmlDocument(candidate)) return candidate;
   }
   return looksLikeHtmlDocument(content) ? content.trim() : null;
+}
+
+function extractFencedContent(content: string, languages: string[]): string | null {
+  const pattern = new RegExp("```(?:" + languages.join("|") + ")\\s*\\n([\\s\\S]*?)```", "i");
+  return content.match(pattern)?.[1]?.trim() ?? null;
+}
+
+function responseDownloadFormats(content: string): Array<"docx" | "pdf" | "md" | "txt" | "html" | "csv" | "xlsx" | "json"> {
+  const formats: Array<"docx" | "pdf" | "md" | "txt" | "html" | "csv" | "xlsx" | "json"> = ["docx", "pdf", "md", "txt"];
+  if (extractGeneratedHtml(content)) formats.push("html");
+  const hasTable = Boolean(
+    extractFencedContent(content, ["csv", "tsv", "xlsx", "excel"])
+      || /(?:^|\n)\s*\|.+\|\s*\n\s*\|?\s*:?-{3,}/.test(content),
+  );
+  if (hasTable) formats.push("csv", "xlsx");
+  if (extractFencedContent(content, ["json"]) || /^\s*[[{]/.test(content)) formats.push("json");
+  return formats;
+}
+
+function artifactButtonLabel(format: ArtifactDownloadFormat): string {
+  return format === "docx" ? "Word"
+    : format === "xlsx" ? "Excel"
+      : format === "html" ? "HTML"
+        : format.toUpperCase();
 }
 
 function attachmentKind(attachment: Pick<ChatAttachment, "kind" | "content">): ChatAttachment["kind"] {
@@ -959,6 +983,47 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
       downloadBlob(await response.blob(), `${safeNexusLMFilename(title)}.${format}`);
     } catch (error) {
       setAttachmentError(`${format.toUpperCase()} export failed: ${readableError(error)}`);
+    } finally {
+      setExportingArtifact(null);
+    }
+  }
+
+  async function downloadChatArtifact(content: string, format: ArtifactDownloadFormat): Promise<void> {
+    if (!content.trim()) {
+      setAttachmentError("There is no response content to download.");
+      return;
+    }
+    const html = extractGeneratedHtml(content);
+    const structuredContent = format === "xlsx" || format === "csv"
+      ? extractFencedContent(content, ["csv", "tsv", "xlsx", "excel"]) ?? content
+      : format === "json"
+        ? extractFencedContent(content, ["json"]) ?? content
+        : content;
+    const title = manuscript.title || "nexuslm-response";
+    setExportingArtifact(format);
+    setAttachmentError(null);
+    try {
+      const response = await fetch("/api/nexuslm/export", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          format,
+          title,
+          subtitle: manuscript.subtitle,
+          authorName: manuscript.authorName,
+          template: manuscript.template,
+          ...(html && (format === "docx" || format === "pdf" || format === "html")
+            ? { html }
+            : { content: structuredContent }),
+        }),
+      });
+      if (!response.ok) {
+        const payload = await response.json().catch(() => null) as { error?: string } | null;
+        throw new Error(payload?.error ?? `${artifactButtonLabel(format)} export failed (${response.status}).`);
+      }
+      downloadBlob(await response.blob(), `${safeNexusLMFilename(title)}.${format}`);
+    } catch (error) {
+      setAttachmentError(`${artifactButtonLabel(format)} export failed: ${readableError(error)}`);
     } finally {
       setExportingArtifact(null);
     }
@@ -1585,6 +1650,17 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
                         >
                           Add as chapter to Ebook Studio
                         </button>
+                        {responseDownloadFormats(message.content).map((format) => (
+                          <button
+                            key={format}
+                            type="button"
+                            onClick={() => void downloadChatArtifact(message.content, format)}
+                            disabled={exportingArtifact !== null}
+                            className="min-h-12 rounded-lg border border-emerald-400/40 px-3 text-[11px] font-semibold text-emerald-200 disabled:opacity-40"
+                          >
+                            {exportingArtifact === format ? "Preparing..." : `Download ${artifactButtonLabel(format)}`}
+                          </button>
+                        ))}
                         {extractGeneratedHtml(message.content) && (
                           <button
                             type="button"
