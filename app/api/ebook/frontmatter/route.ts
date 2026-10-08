@@ -3,14 +3,7 @@ import { generateObject } from "ai";
 import { z } from "zod";
 import { deepSeekReasonerModel, deepSeekModel } from "@/lib/ai-providers";
 import { FrontMatterRequestSchema, FrontBackMatterSchema } from "@/lib/schemas/ebook";
-import {
-  cleanTranscriptForBook,
-  PREMIUM_BOOK_STYLE_RULES,
-  PROSE_MASTERY_RULES,
-  READER_NORMALIZATION_RULES,
-  SOURCE_LOCK_RULES,
-  stripAudienceLanguage,
-} from "@/lib/editorial-style-bible";
+import { PREMIUM_BOOK_STYLE_RULES, PROSE_MASTERY_RULES, READER_NORMALIZATION_RULES, SOURCE_LOCK_RULES } from "@/lib/editorial-style-bible";
 import { SCRIPTURE_FORMATTING_RULES } from "@/lib/scripture-formatter";
 import { getEbookModel, getEbookTemperature } from "@/lib/ebook-model-selector";
 
@@ -47,7 +40,7 @@ const FrontMatterExtendedRequestSchema = FrontMatterRequestSchema.extend({
 
 export async function POST(req: NextRequest) {
   const body = await req.json() as unknown;
-  let input: z.infer<typeof FrontMatterExtendedRequestSchema>;
+  let input;
   try {
     input = FrontMatterExtendedRequestSchema.parse(body);
   } catch (err) {
@@ -56,12 +49,9 @@ export async function POST(req: NextRequest) {
 
   const { eBookModel } = input;
   const reasoningTemperature = input.llmTemperature ?? getEbookTemperature(eBookModel, "reasoning");
-  const simpleDirectMode = Boolean(input.simpleDirect);
-  const rawTranscript = typeof input.masterTranscript === "string" ? input.masterTranscript : "";
-  const transcript = simpleDirectMode
-    ? rawTranscript.trim()
-    : cleanTranscriptForBook(rawTranscript).trim() || rawTranscript.trim();
+  const transcript = typeof input.masterTranscript === "string" ? input.masterTranscript : "";
   const authorConfig = input.authorConfig;
+  const simpleDirectMode = Boolean(input.simpleDirect);
   const authorConfigBlock = (authorConfig?.instructions || authorConfig?.targetAudience)
     ? `\n\n════════════════════════════════════════════\nAUTHOR BOOK CONFIGURATION (presentation directives)\n════════════════════════════════════════════${authorConfig.targetAudience ? `\nTARGET AUDIENCE: ${authorConfig.targetAudience}` : ""}${authorConfig.instructions ? `\nBOOK INSTRUCTIONS: ${authorConfig.instructions}` : ""}
 
@@ -94,9 +84,7 @@ ${input.simpleDirect!.chapters.map((chapter) => `CHAPTER ${chapter.number}: "${c
 ${chapter.sections.map((section) => `SECTION: ${section.heading}\n${section.body}`).join("\n\n")}`).join("\n\n════════════════════════════════════════════\n\n")}`
     : "";
 
-  const frontmatterSystem = `${simpleDirectMode
-    ? "You are NexusLM, a professional book ghostwriter writing the introduction and conclusion of a published teaching book."
-    : "You are an editorial assistant writing the introduction and conclusion of a published teaching book."}
+  const frontmatterSystem = `You are an editorial assistant writing the introduction and conclusion of a published teaching book.
 
 ${contentAuthorityBlock}
 
@@ -198,7 +186,7 @@ ARCHITECTURE CONTEXT:
 VOICE DNA:
 ${JSON.stringify(input.voiceDNA, null, 2)}
 
-${simpleDirectMode ? "RAW SOURCE CONTEXT (voice and meaning calibration):" : "TRANSCRIPT OPENING (voice calibration — first-person voice anchoring only):"}
+TRANSCRIPT OPENING (voice calibration — first-person voice anchoring only):
 ${transcript.slice(0, 4000)}
 
 [… sermon middle omitted — use chapter themes below for content coverage across the full book …]
@@ -220,23 +208,13 @@ ${input.architecture.chapters.map((c, i) => `Chapter ${i + 1}: "${c.title}"\n  C
     }
 
     const { chapterInsights, ...frontMatterObject } = object;
-    const cleanedChapterInsights = chapterInsights.map((insight) => ({
-      ...insight,
-      keyTakeaways: insight.keyTakeaways
-        .map((value) => simpleDirectMode ? value.trim() : stripAudienceLanguage(value))
-        .filter(Boolean),
-      reflectionQuestions: insight.reflectionQuestions
-        .map((value) => simpleDirectMode ? value.trim() : stripAudienceLanguage(value))
-        .filter(Boolean),
-    }));
-    const formatFrontMatterText = (value: string) => simpleDirectMode ? value.trim() : stripAudienceLanguage(value);
     return NextResponse.json({
       ...frontMatterObject,
-      ...(simpleDirectMode ? { chapterInsights: cleanedChapterInsights } : {}),
+      ...(simpleDirectMode ? { chapterInsights } : {}),
       preface: "",
-      introduction: formatFrontMatterText(object.introduction ?? ""),
-      conclusion: formatFrontMatterText(object.conclusion ?? ""),
-      aboutAuthor: object.aboutAuthor ? stripAudienceLanguage(object.aboutAuthor) : null,
+      introduction: object.introduction ?? "",
+      conclusion: object.conclusion ?? "",
+      aboutAuthor: object.aboutAuthor ?? null,
       resourcesList: object.resourcesList ?? [],
       scriptureIndex: (() => {
         const seenRefs = new Set<string>();

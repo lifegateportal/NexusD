@@ -3,7 +3,6 @@ import { generateObject, generateText } from "ai";
 import { deepSeekModel } from "@/lib/ai-providers";
 import { VoiceDNASchema, VoiceDNARequestSchema } from "@/lib/schemas/ebook";
 import { getEbookModel, getEbookTemperature } from "@/lib/ebook-model-selector";
-import { cleanTranscriptForBook } from "@/lib/editorial-style-bible";
 import { z } from "zod";
 
 export const runtime = "nodejs";
@@ -122,9 +121,8 @@ export async function POST(req: NextRequest) {
       { status: 422 }
     );
   }
-  const transcriptForAnalysis = cleanTranscriptForBook(input.masterTranscript).trim() || input.masterTranscript.trim();
   // Lighter distributed sample to keep route reliably under gateway time limits.
-  const words = transcriptForAnalysis.split(/\s+/);
+  const words = input.masterTranscript.split(/\s+/);
   const total = words.length;
   const startSample = words.slice(0, 300).join(" ");
   const midStart = Math.max(300, Math.floor(total / 2) - 150);

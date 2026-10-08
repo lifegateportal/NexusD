@@ -1,9 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { generateObject, generateText } from "ai";
 import { z } from "zod";
-import {
-  EM_DASH_MINIMIZATION_RULES,
-} from "@/lib/editorial-style-bible";
+import { EM_DASH_MINIMIZATION_RULES } from "@/lib/editorial-style-bible";
 import { NEXUSLM_SCRIPTURE_FORMATTING_RULES } from "@/lib/scripture-formatter";
 import { getEbookModel, getEbookTemperature } from "@/lib/ebook-model-selector";
 import { finalizeNexusLMScripture } from "@/lib/scripture-verse";
@@ -129,10 +127,6 @@ function nonEmptySubtitle(targetAudience: string, coreThesis: string): string {
 function countWords(text: string): number {
   const tokens = text.trim().match(/\S+/g);
   return tokens ? tokens.length : 0;
-}
-
-function normalizeGeneratedPlainText(value: string): string {
-  return sanitizeNexusLMText(value.trim());
 }
 
 type TeachingBlock = {
@@ -261,14 +255,8 @@ function looksLikeUnprocessedTranscript(
 
   const copiedSections = sections.filter((section) => sectionVerbatimScore(section.body || "", sourceNormalized) >= 0.6).length;
   const copiedRatio = copiedSections / sections.length;
-  const highestCopiedScore = Math.max(
-    ...sections.map((section) => sectionVerbatimScore(section.body || "", sourceNormalized)),
-    0,
-  );
 
-  return highestCopiedScore >= 0.9
-    || (copiedSections > 0 && copiedRatio >= 0.5)
-    || (copiedSections >= 2 && copiedRatio >= 0.34);
+  return copiedSections >= 2 && copiedRatio >= 0.5;
 }
 
 function buildSlotSourceSegments(slotText: string, sourceAudio: `audio-${number}`, maxSegments = 80): SimpleSourceSegment[] {
@@ -352,28 +340,27 @@ function mapChapterSectionsToSourceLinks(
 function normalizeSlotChapter(object: z.infer<typeof SlotChapterSchema>, chapterNumber: number): z.infer<typeof ChapterSchema> {
   return {
     number: chapterNumber,
-    title: normalizeGeneratedPlainText(object.title || `Chapter ${chapterNumber}`),
-    intro: "",
-    epigraph: normalizeGeneratedPlainText(object.epigraph || ""),
+    title: (object.title || `Chapter ${chapterNumber}`).trim(),
+    intro: object.intro || "",
+    epigraph: object.epigraph || "",
     sections: (object.sections ?? [])
       .filter((section) => (section.body || "").trim().length > 0)
       .map((section, sectionIndex) => ({
         ...section,
         sectionNumber: sectionIndex + 1,
-        heading: normalizeGeneratedPlainText(section.heading || `Section ${sectionIndex + 1}`),
-        body: normalizeGeneratedPlainText(section.body || ""),
-        keyClaims: section.keyClaims.map(normalizeGeneratedPlainText).filter(Boolean),
+        heading: (section.heading || `Section ${sectionIndex + 1}`).trim(),
+        body: section.body || "",
       })),
-    forwardQuestion: normalizeGeneratedPlainText(object.forwardQuestion || ""),
-    keyTakeaways: (object.keyTakeaways ?? []).map(normalizeGeneratedPlainText).filter(Boolean),
-    reflectionQuestions: (object.reflectionQuestions ?? []).map(normalizeGeneratedPlainText).filter(Boolean),
+    forwardQuestion: object.forwardQuestion || "",
+    keyTakeaways: object.keyTakeaways ?? [],
+    reflectionQuestions: object.reflectionQuestions ?? [],
   };
 }
 
 type GeneratedChapter = z.infer<typeof SlotChapterSchema> | z.infer<typeof ChapterSchema>;
 
 async function normalizeGeneratedText(value: string, instruction: string): Promise<string> {
-  return finalizeNexusLMScripture(normalizeGeneratedPlainText(value), instruction);
+  return finalizeNexusLMScripture(sanitizeNexusLMText(value.trim()), instruction);
 }
 
 async function normalizeGeneratedChapter(
@@ -384,20 +371,20 @@ async function normalizeGeneratedChapter(
   const sections = await Promise.all((object.sections ?? []).map(async (section, sectionIndex) => ({
     ...section,
     sectionNumber: section.sectionNumber || sectionIndex + 1,
-    heading: normalizeGeneratedPlainText(section.heading) || `Section ${sectionIndex + 1}`,
+    heading: sanitizeNexusLMText(section.heading.trim()) || `Section ${sectionIndex + 1}`,
     body: await normalizeGeneratedText(section.body, instruction),
-    keyClaims: section.keyClaims.map(normalizeGeneratedPlainText).filter(Boolean),
+    keyClaims: section.keyClaims.map((claim) => sanitizeNexusLMText(claim)).filter(Boolean),
   })));
 
   return {
     number: chapterNumber,
-    title: normalizeGeneratedPlainText(object.title) || `Chapter ${chapterNumber}`,
-    intro: "",
+    title: sanitizeNexusLMText(object.title.trim()) || `Chapter ${chapterNumber}`,
+    intro: await normalizeGeneratedText(object.intro ?? "", instruction),
     epigraph: await normalizeGeneratedText(object.epigraph ?? "", instruction),
     sections: sections.filter((section) => section.body.trim().length > 0),
     forwardQuestion: await normalizeGeneratedText(object.forwardQuestion ?? "", instruction),
-    keyTakeaways: (await Promise.all((object.keyTakeaways ?? []).map((value) => normalizeGeneratedText(String(value), instruction)))).filter(Boolean),
-    reflectionQuestions: (await Promise.all((object.reflectionQuestions ?? []).map((value) => normalizeGeneratedText(String(value), instruction)))).filter(Boolean),
+    keyTakeaways: await Promise.all((object.keyTakeaways ?? []).map((value) => normalizeGeneratedText(String(value), instruction))),
+    reflectionQuestions: await Promise.all((object.reflectionQuestions ?? []).map((value) => normalizeGeneratedText(String(value), instruction))),
   };
 }
 
@@ -408,10 +395,10 @@ async function normalizeSimpleBook(object: z.infer<typeof SimpleBookSchema>, inp
 
   return {
     ...object,
-    bookTitle: normalizeGeneratedPlainText(object.bookTitle) || "Untitled",
-    subtitle: normalizeGeneratedPlainText(object.subtitle) || nonEmptySubtitle(input.targetAudience, input.coreThesis),
-    authorName: normalizeGeneratedPlainText(object.authorName) || "the Author",
-    strategy: normalizeGeneratedPlainText(object.strategy) || "single-pass-sermon-style",
+    bookTitle: sanitizeNexusLMText(object.bookTitle.trim()) || "Untitled",
+    subtitle: sanitizeNexusLMText(object.subtitle.trim()) || nonEmptySubtitle(input.targetAudience, input.coreThesis),
+    authorName: sanitizeNexusLMText(object.authorName.trim()) || "the Author",
+    strategy: sanitizeNexusLMText(object.strategy.trim()) || "single-pass-sermon-style",
     chapters,
   };
 }
@@ -448,17 +435,6 @@ export async function POST(req: NextRequest) {
 
   const usingSlots = input.oneChapterPerSlot && slotBlocks.length > 0;
   const transcriptForPrompt = usingSlots ? "" : input.rawTranscript;
-  const unusableSource = usingSlots
-    ? slotBlocks.find((slot) => slot.text.trim().length === 0)
-    : transcriptForPrompt.length === 0
-      ? { label: "transcript" }
-      : undefined;
-  if (unusableSource) {
-    return NextResponse.json(
-      { error: `No transcript content was provided for ${unusableSource.label}.` },
-      { status: 422 },
-    );
-  }
   const responseLength = NEXUSLM_RESPONSE_LENGTHS["long-form"];
   const maxTokens = responseLength.draftTokens;
   const voiceProfile = voiceDnaBlock(input.voiceDNA, input.voiceTone);
@@ -472,7 +448,6 @@ Write polished reader-facing book prose and remove live-audience language. Trust
 The JSON wrapper is transport only. Inside each chapter field, prioritize the same finished, immersive, reader-facing quality as a strong NexusLM chapter draft. Develop the material with specific transitions, varied rhythm, concrete supported detail, meaningful emphasis, and a satisfying ending. Do not compress chapters into notes, generic advice, transcript commentary, or a thin summary merely because the response must be valid JSON.
 CHAPTER OPENING PLACEMENT: Do not write a separate premise, overview, thesis summary, or chapter-preview block before the body. The actual chapter introduction belongs in the opening paragraphs of Section 1, written as finished reader-facing prose that enters the chapter's material directly. Section 1 must begin with the chapter body, not planning language or a summary of what the chapter will discuss.
 SERIES-SERMON TO BOOK TRANSFORMATION: Sermon transcripts may recap earlier messages. Treat that recap as source context, not as mandatory chapter-opening material. Do not open with "last week," "as we saw," "continuing this series," or a replay of an earlier chapter. If the recap helps orient the reader, compress it into the shortest useful bridge and pivot quickly to this chapter's new movement. Write for a reader who may not have attended the sermon, and do not make the book repeat live-series catch-up.
-Treat the supplied transcript as raw source material. Use your own judgment to transform spoken material into finished reader-facing prose. Do not reproduce timestamps, speaker labels, ASR artifacts, stage directions, audience cues, prayers, altar calls, editorial notes, or spoken filler unless they are genuinely necessary to the meaning. Never copy a long transcript passage verbatim unless it is an intentional source quotation or Scripture passage required by the author's instructions.
 
 NON-NEGOTIABLE BOOK RULE:
 4) Subtitle must be useful and reader-facing, never empty.
@@ -535,7 +510,7 @@ ${sourceBlock}`;
       for (let i = 0; i < slotBlocks.length; i++) {
         const slot = slotBlocks[i];
         const chapterNumber = i + 1;
-        const teachingBlocks = buildTeachingBlocks(slot.text);
+          const teachingBlocks = buildTeachingBlocks(slot.fullText);
         const teachingBlockManifest = teachingBlocks.length > 0
           ? teachingBlocks.map((b) => `- ${b.id} (${b.wordCount} words): ${b.excerpt}`).join("\n")
           : "- B1: (no extracted block; use full transcript coverage)";
@@ -551,7 +526,6 @@ HARD ASSIGNMENT:
 - Output ONLY a chapter object (not a full book object).
 - These source and output boundaries are the only hard constraints. Within them, choose the strongest title, section architecture, body prose, transitions, emphasis, pacing, and ending freely.
 - Populate intro, epigraph, forwardQuestion, keyTakeaways, and reflectionQuestions when supported. These fields must be finished reader-facing material, never planning notes.
-- Leave intro empty. Put the actual chapter opening in the first paragraphs of Section 1 so the manuscript does not repeat a generated premise before the body.
 
 CHAPTER CONTEXT:
 CHAPTER NUMBER: ${chapterNumber}
@@ -612,7 +586,7 @@ ${slot.text}${priorClaimsBlock}`;
             if (normalizedCandidate.sections.length === 0) {
               continue;
             }
-            if (looksLikeUnprocessedTranscript(normalizedCandidate, slot.text)) {
+            if (looksLikeUnprocessedTranscript(normalizedCandidate, slot.fullText)) {
               continue;
             }
             chapterObject = object;
@@ -638,7 +612,7 @@ ${slot.text}${priorClaimsBlock}`;
               const parsed = SlotChapterSchema.safeParse(JSON.parse(json));
               if (parsed.success) {
                 const normalizedCandidate = normalizeSlotChapter(parsed.data, chapterNumber);
-                if (normalizedCandidate.sections.length > 0 && !looksLikeUnprocessedTranscript(normalizedCandidate, slot.text)) {
+                if (normalizedCandidate.sections.length > 0 && !looksLikeUnprocessedTranscript(normalizedCandidate, slot.fullText)) {
                   chapterObject = parsed.data;
                 }
               }
@@ -658,19 +632,20 @@ ${slot.text}${priorClaimsBlock}`;
           );
         }
 
-        let normalizedChapter = await normalizeGeneratedChapter(chapterObject, chapterNumber, input.authorInstructions);
+        const normalizedChapter = await normalizeGeneratedChapter(chapterObject, chapterNumber, input.authorInstructions);
         if (normalizedChapter.sections.length === 0) {
           return NextResponse.json(
             { error: `Simple book generation failed: slot ${chapterNumber} produced no section content` },
             { status: 502 }
           );
         }
-        if (looksLikeUnprocessedTranscript(normalizedChapter, slot.text)) {
+        if (looksLikeUnprocessedTranscript(normalizedChapter, slot.fullText)) {
           return NextResponse.json(
             { error: `Simple book generation failed: slot ${chapterNumber} returned unprocessed transcript-like output` },
             { status: 502 }
           );
         }
+
         const uncoveredBlocks = missingTeachingBlocks(normalizedChapter, teachingBlocks);
         if (uncoveredBlocks.length > 0) {
           const missing = new Set(uncoveredBlocks);
@@ -730,10 +705,7 @@ ${slot.text}${priorClaimsBlock}`;
           abortSignal: AbortSignal.timeout(generationTimeoutMs),
         });
         const normalized = await normalizeSimpleBook(object, input);
-        const hasTranscriptLikeChapter = normalized.chapters.some((chapter) =>
-          looksLikeUnprocessedTranscript(chapter, transcriptForPrompt)
-        );
-        if (normalized.chapters.length > 0 && !hasTranscriptLikeChapter) {
+        if (normalized.chapters.length > 0) {
           return NextResponse.json(normalized);
         }
       } catch (err) {

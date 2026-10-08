@@ -52,7 +52,7 @@ General conversation accepts the user's instruction directly without requiring a
 
 Book-mode Scripture is user-directed rather than locked to one sermon template. Ask for every passage in standalone blockquotes when that is the desired presentation; ask for inline citations, lists, devotional prose, or another form when that better fits the chapter. Scripture wording remains source-grounded, and unavailable-provider notices are never presented as Bible text.
 
-Simple Direct Book Mode uses the same NexusLM finished-prose standard: full Voice DNA is applied to each slot, source boundaries remain enforced, long-form chapter budgets are available, and supported chapter elements such as epigraphs, takeaways, reflection questions, and forward questions are preserved into the manuscript. Raw slots are passed directly to the single structured NexusLM-style writer, which decides how to transform spoken material into reader-facing prose. The introduction and conclusion receive the same model-directed creative license, using the raw source context and completed chapters rather than a deterministic editorial rewrite. Transport-only output sanitation, source mapping, Scripture finalization, and transcript-copy validation protect the manuscript structure without adding a separate editorial rewrite pass.
+Simple Direct Book Mode uses the same NexusLM finished-prose standard: full Voice DNA is applied to each slot, source boundaries remain enforced, long-form chapter budgets are available, and supported chapter elements such as epigraphs, takeaways, reflection questions, and forward questions are preserved into the manuscript.
 
 ### Long-form and format-preserving workflow
 
