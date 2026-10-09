@@ -249,12 +249,127 @@ function createEmptyManifest(conversationKey: string, pipelineSnapshot: EbookPip
   };
 }
 
+type ImportedHeading = {
+  kind: "chapter" | "section";
+  title: string;
+};
+
+function cleanImportedHeading(value: string): string {
+  return value
+    .replace(/^#{1,3}\s*/, "")
+    .replace(/^\*\*(.+)\*\*$/, "$1")
+    .replace(/^__(.+)__$/, "$1")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function importedHeadingFromLine(line: string, lineIndex: number): ImportedHeading | null {
+  const trimmed = line.trim();
+  if (!trimmed || /^```/.test(trimmed) || /^[-*_]{3,}$/.test(trimmed)) return null;
+
+  const markdownHeading = trimmed.match(/^(#{1,3})\s+(.+)$/);
+  const isStandaloneBold = /^\*\*.+\*\*$/.test(trimmed) || /^__.+__$/.test(trimmed);
+  const isExplicitPlainHeading = /^(?:chapter|section|part)\b/i.test(trimmed);
+  if (!markdownHeading && !isStandaloneBold && !isExplicitPlainHeading) {
+    return null;
+  }
+
+  const candidate = cleanImportedHeading(markdownHeading?.[2] ?? trimmed);
+  if (!candidate) return null;
+
+  const chapterLabel = candidate.match(/^chapter\s+(?:\d+|[ivxlcdm]+|[a-z]+)(?:\s*[:.-]\s*|\s+)(.+)$/i);
+  if (chapterLabel?.[1]?.trim()) {
+    return { kind: "chapter", title: chapterLabel[1].trim().slice(0, 300) };
+  }
+  if (/^chapter\s+(?:\d+|[ivxlcdm]+|[a-z]+)$/i.test(candidate)) {
+    return { kind: "chapter", title: candidate.slice(0, 300) };
+  }
+
+  const sectionLabel = candidate.match(/^(?:section|part)\s+(?:\d+|[ivxlcdm]+|[a-z]+)(?:\s*[:.-]\s*|\s+)(.+)$/i);
+  if (sectionLabel?.[1]?.trim()) {
+    return { kind: "section", title: sectionLabel[1].trim().slice(0, 300) };
+  }
+  if (/^(?:section|part)\s+(?:\d+|[ivxlcdm]+|[a-z]+)$/i.test(candidate)) {
+    return { kind: "section", title: candidate.slice(0, 300) };
+  }
+
+  if (markdownHeading?.[1] === "#" || lineIndex === 0) {
+    return { kind: "chapter", title: candidate.slice(0, 300) };
+  }
+  if (markdownHeading || isStandaloneBold) {
+    if (/[.!?]$/.test(candidate) && !/^(?:section|part)\b/i.test(candidate)) return null;
+    return { kind: "section", title: candidate.slice(0, 300) };
+  }
+  return null;
+}
+
 function extractChapterTitle(content: string, chapterNumber: number): string {
-  const heading = content.match(/^\s*#{1,3}\s*(?:chapter\s+\d+\s*[:.-]?\s*)?(.+?)\s*$/im);
-  if (heading?.[1]?.trim()) return heading[1].trim().slice(0, 300);
-  const labeled = content.match(/^\s*chapter\s+\d+\s*[:.-]\s*(.+?)\s*$/im);
-  if (labeled?.[1]?.trim()) return labeled[1].trim().slice(0, 300);
+  const lines = content.split(/\r?\n/);
+  for (const [index, line] of lines.entries()) {
+    const heading = importedHeadingFromLine(line, index);
+    if (heading?.kind === "chapter") return heading.title;
+  }
   return `Chapter ${chapterNumber}`;
+}
+
+function parseResponseSections(content: string, chapterNumber: number): {
+  title: string;
+  sections: Array<{ heading: string; body: string }>;
+} {
+  const lines = content.replace(/\r\n?/g, "\n").split("\n");
+  const sections: Array<{ heading: string; body: string }> = [];
+  let currentHeading = "";
+  let currentLines: string[] = [];
+  let encounteredSectionHeading = false;
+  let inCodeFence = false;
+  let title = extractChapterTitle(content, chapterNumber);
+
+  const flushSection = () => {
+    const body = currentLines.join("\n").replace(/\n{3,}/g, "\n\n").trim();
+    if (body) sections.push({ heading: currentHeading, body });
+    currentLines = [];
+  };
+
+  lines.forEach((line, index) => {
+    const trimmed = line.trim();
+    if (/^```/.test(trimmed)) {
+      inCodeFence = !inCodeFence;
+      currentLines.push(line);
+      return;
+    }
+
+    const heading = inCodeFence ? null : importedHeadingFromLine(line, index);
+    if (heading?.kind === "chapter" && !encounteredSectionHeading && !currentLines.join("\n").trim()) {
+      title = heading.title;
+      return;
+    }
+    if (heading?.kind === "section") {
+      if (encounteredSectionHeading) {
+        flushSection();
+      } else if (currentLines.join("\n").trim()) {
+        sections.push({ heading: "", body: currentLines.join("\n").replace(/\n{3,}/g, "\n\n").trim() });
+        currentLines = [];
+      }
+      currentHeading = heading.title;
+      encounteredSectionHeading = true;
+      return;
+    }
+
+    if (/^[-*_]{3,}$/.test(trimmed) && (encounteredSectionHeading || !currentLines.join("\n").trim())) return;
+    currentLines.push(line);
+  });
+  flushSection();
+
+  const normalizedSections = sections.length > 0
+    ? sections
+    : [{ heading: "", body: content.trim() }];
+  return {
+    title,
+    sections: normalizedSections.map((section, index) => ({
+      heading: section.heading || (normalizedSections.length > 1 ? `Section ${index + 1}` : ""),
+      body: section.body,
+    })),
+  };
 }
 
 function isPdfRequest(instruction: string): boolean {
@@ -263,9 +378,9 @@ function isPdfRequest(instruction: string): boolean {
 
 function formatChapterDraft(chapter: ChapterDraft): string {
   const sections = chapter.sections
-    .map((section) => `${section.heading ? `${sanitizeNexusLMText(section.heading)}\n\n` : ""}${sanitizeNexusLMText(section.body)}`)
+    .map((section) => `${section.heading ? `## ${sanitizeNexusLMText(section.heading)}\n\n` : ""}${sanitizeNexusLMText(section.body)}`)
     .join("\n\n");
-  return sanitizeNexusLMText(`CHAPTER ${chapter.number}: ${sanitizeNexusLMText(chapter.title)}\n\n${chapter.intro ? `${sanitizeNexusLMText(chapter.intro)}\n\n` : ""}${sections}${chapter.forwardQuestion ? `\n\nForward question: ${sanitizeNexusLMText(chapter.forwardQuestion)}` : ""}`);
+  return `# CHAPTER ${chapter.number}: ${sanitizeNexusLMText(chapter.title)}\n\n${chapter.intro ? `${sanitizeNexusLMText(chapter.intro)}\n\n` : ""}${sections}${chapter.forwardQuestion ? `\n\nForward question: ${sanitizeNexusLMText(chapter.forwardQuestion)}` : ""}`.trim();
 }
 
 function CopyMessageButton({ content }: { content: string }) {
@@ -857,20 +972,25 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
     }
     const baseManifest = manifest ?? createEmptyManifest(conversationKey, pipelineSnapshot);
     const number = baseManifest.chapters.reduce((highest, chapter) => Math.max(highest, chapter.number), 0) + 1;
-    const wordCount = trimmed.split(/\s+/).filter(Boolean).length;
+    const parsedResponse = parseResponseSections(trimmed, number);
+    const sections = parsedResponse.sections.map((section, index) => {
+      const wordCount = section.body.split(/\s+/).filter(Boolean).length;
+      return {
+        chapterNumber: number,
+        sectionNumber: index + 1,
+        heading: section.heading,
+        body: section.body,
+        wordCount,
+        status: "complete" as const,
+      };
+    });
+    const wordCount = sections.reduce((total, section) => total + section.wordCount, 0);
     const chapter: ChapterDraft = {
       number,
-      title: extractChapterTitle(trimmed, number),
+      title: parsedResponse.title,
       intro: "",
       epigraph: "",
-      sections: [{
-        chapterNumber: number,
-        sectionNumber: 1,
-        heading: "",
-        body: trimmed,
-        wordCount,
-        status: "complete",
-      }],
+      sections,
       forwardQuestion: "",
       keyTakeaways: [],
       reflectionQuestions: [],
