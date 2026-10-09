@@ -20,11 +20,12 @@ import {
 import { NEXUSLM_WRITING_STYLES, type NexusLMWritingStyle } from "@/lib/nexuslm-writing-styles";
 import { NEXUSLM_AGENTS, type NexusLMAgent } from "@/lib/nexuslm-agents";
 import { isNexusLMLongFormRequest, NEXUSLM_RESPONSE_LENGTHS, sanitizeNexusLMText, type NexusLMResponseLength } from "@/lib/nexuslm-response";
-import { nexusLMBookToHtml, safeNexusLMFilename, type NexusLMArtifactFormat } from "@/lib/nexuslm-artifacts";
+import { nexusLMBookToHtml, safeNexusLMFilename, type NexusLMArtifactFormat, type NexusLMBookHtmlInput } from "@/lib/nexuslm-artifacts";
 import {
   chatMessagesToBookInput,
   ebookStudioManifestToBookInput,
   parseNexusLMCompileInstruction,
+  type NexusLMCompileMode,
   type NexusLMCompileSource,
 } from "@/lib/nexuslm-book-compiler";
 import {
@@ -1269,21 +1270,35 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
       .find((candidate): candidate is string => Boolean(candidate && isReusableHtmlDesign(candidate)));
   }
 
+  function bookInputForCompilation(source: NexusLMCompileSource): NexusLMBookHtmlInput {
+    if (source === "ebook-studio") {
+      if (!manifest) throw new Error("Ebook Studio does not have a loaded manuscript yet.");
+      return ebookStudioManifestToBookInput(manifest);
+    }
+    return chatMessagesToBookInput(messages, {
+      title: manuscript.title,
+      subtitle: manuscript.subtitle,
+      authorName: manuscript.authorName,
+      printSpec: manifest?.printSpec,
+    });
+  }
+
+  function templateForCompilation(useLatestDesign: boolean, requestedDesign?: string): string | undefined {
+    const explicitDesign = requestedDesign && isReusableHtmlDesign(requestedDesign) ? requestedDesign : undefined;
+    const latestDesign = useLatestDesign
+      ? (generatedPreview && attachmentKind(generatedPreview) === "html" && isReusableHtmlDesign(generatedPreview.content)
+        ? generatedPreview.content
+        : latestReusableHtmlDesign())
+      : undefined;
+    return explicitDesign ?? latestDesign ?? manuscript.htmlTemplate;
+  }
+
   function compileBookHtml(
     source: NexusLMCompileSource,
     useLatestDesign = false,
     requestedDesign?: string,
   ): { title: string; chapterCount: number } {
-    const book = source === "ebook-studio"
-      ? (() => {
-          if (!manifest) throw new Error("Ebook Studio does not have a loaded manuscript yet.");
-          return ebookStudioManifestToBookInput(manifest);
-        })()
-      : chatMessagesToBookInput(messages, {
-          title: manuscript.title,
-          subtitle: manuscript.subtitle,
-          authorName: manuscript.authorName,
-        });
+    const book = bookInputForCompilation(source);
     if (book.chapters.length === 0) {
       throw new Error(source === "ebook-studio"
         ? "Ebook Studio has no completed chapters to compile."
@@ -1293,13 +1308,7 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
     const metadata = source === "ebook-studio"
       ? { title: book.title, subtitle: book.subtitle ?? "", authorName: book.authorName ?? "NexusLM" }
       : { title: manuscript.title, subtitle: manuscript.subtitle, authorName: manuscript.authorName };
-    const explicitDesign = requestedDesign && isReusableHtmlDesign(requestedDesign) ? requestedDesign : undefined;
-    const latestDesign = useLatestDesign
-      ? (generatedPreview && attachmentKind(generatedPreview) === "html" && isReusableHtmlDesign(generatedPreview.content)
-        ? generatedPreview.content
-        : latestReusableHtmlDesign())
-      : undefined;
-    const templateHtml = explicitDesign ?? latestDesign ?? manuscript.htmlTemplate;
+    const templateHtml = templateForCompilation(useLatestDesign, requestedDesign);
     const html = nexusLMBookToHtml({
       ...book,
       title: metadata.title.trim() || book.title,
@@ -1319,6 +1328,119 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
     openGeneratedHtmlPreview(html);
     void downloadHtmlArtifact(preview, "html");
     return { title, chapterCount: book.chapters.length };
+  }
+
+  async function aiTypesetBook(
+    source: NexusLMCompileSource,
+    mode: Exclude<NexusLMCompileMode, "local">,
+    useLatestDesign = false,
+    requestedDesign?: string,
+  ): Promise<void> {
+    const book = bookInputForCompilation(source);
+    if (book.chapters.length === 0) {
+      throw new Error(source === "ebook-studio"
+        ? "Ebook Studio has no completed chapters to typeset."
+        : "No generated chapters were found in this chat. Draft or add a chapter response first.");
+    }
+    const templateHtml = templateForCompilation(useLatestDesign, requestedDesign);
+    const printSpec = book.printSpec ?? createEmptyManifest(conversationKey, pipelineSnapshot).printSpec;
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
+    setCanAbort(true);
+    let answer = "";
+    try {
+      const response = await fetch("/api/nexuslm/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        signal: controller.signal,
+        body: JSON.stringify({
+          query: mode === "ai-reprint"
+            ? "Reprint this manuscript as a complete, print-ready HTML book."
+            : "Inspect the supplied design and print specification, then return a corrected reusable HTML typesetting template. Do not reprint the manuscript.",
+          mode: "ask",
+          persona: PERSONAS[persona].label,
+          agent,
+          writingStyle,
+          responseLength: mode === "ai-reprint" ? "long-form" : "longer",
+          llmTemperature: nexusLMTemperature,
+          processEntireDocument: true,
+          typeset: { mode: mode === "ai-reprint" ? "reprint" : "template" },
+          manuscript: {
+            source,
+            title: book.title,
+            subtitle: book.subtitle ?? "",
+            authorName: book.authorName ?? "",
+            printSpec,
+            templateHtml,
+            frontMatter: {
+              preface: book.frontMatter?.preface ?? "",
+              introduction: book.frontMatter?.introduction ?? "",
+              conclusion: book.frontMatter?.conclusion ?? "",
+              aboutAuthor: book.frontMatter?.aboutAuthor ?? null,
+              resourcesList: book.frontMatter?.resourcesList ?? [],
+            },
+            chapters: book.chapters,
+          },
+          history: compactHistory(messages),
+        }),
+      });
+      if (!response.ok) {
+        const payload = await response.json().catch(() => null) as { error?: string } | null;
+        throw new Error(payload?.error ?? `AI typesetting failed (${response.status})`);
+      }
+      if (!response.body) throw new Error("AI typesetting returned no HTML stream.");
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        answer += decoder.decode(value, { stream: true });
+      }
+      answer += decoder.decode();
+      const html = extractGeneratedHtml(answer);
+      if (!html) throw new Error("NexusLM returned no complete HTML document. Try again with the latest design attached.");
+
+      if (mode === "ai-template") {
+        const compiledHtml = nexusLMBookToHtml({
+          ...book,
+          templateHtml: html,
+          printSpec,
+        });
+        setManuscript((current) => ({ ...current, htmlTemplate: html }));
+        openGeneratedHtmlPreview(compiledHtml);
+        await downloadHtmlArtifact({ name: `${book.title || "NexusLM book"}.html`, content: compiledHtml, kind: "html" }, "html");
+        setMessages((current) => [...current, {
+          role: "assistant",
+          content: `NexusLM inspected the manuscript, print specification, fonts, and design, saved a corrected reusable template, and compiled ${book.chapters.length} chapter${book.chapters.length === 1 ? "" : "s"} without reprinting the manuscript.`,
+        }]);
+        return;
+      }
+
+      const title = book.title.trim() || "NexusLM book";
+      openGeneratedHtmlPreview(html);
+      await downloadHtmlArtifact({ name: `${title}.html`, content: html, kind: "html" }, "html");
+      setMessages((current) => [...current, {
+        role: "assistant",
+        content: `NexusLM reprinted ${book.chapters.length} chapter${book.chapters.length === 1 ? "" : "s"} into a complete HTML book using the supplied print specification and design.`,
+      }]);
+    } finally {
+      abortControllerRef.current = null;
+      setCanAbort(false);
+    }
+  }
+
+  async function requestAiTypesetting(mode: Exclude<NexusLMCompileMode, "local">): Promise<void> {
+    if (loading) return;
+    setLoading(true);
+    try {
+      const source: NexusLMCompileSource = manifest?.chapters.length ? "ebook-studio" : "chat";
+      await aiTypesetBook(source, mode, true);
+    } catch (error) {
+      const stopped = error instanceof DOMException && error.name === "AbortError";
+      setAttachmentError(stopped ? "AI typesetting was stopped." : `AI typesetting failed: ${readableError(error)}`);
+    } finally {
+      setLoading(false);
+    }
   }
 
   function compileManuscriptHtml(): void {
@@ -1537,6 +1659,19 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
 
     try {
       if (compileRequest?.source) {
+        if (compileRequest.mode !== "local") {
+          const attachedDesign = requestAttachments
+            .find((attachment) => attachment.kind === "html" && isReusableHtmlDesign(attachment.content))
+            ?.content;
+          const requestedDesign = extractGeneratedHtml(instruction) ?? attachedDesign;
+          await aiTypesetBook(
+            compileRequest.source,
+            compileRequest.mode,
+            compileRequest.useLatestDesign,
+            requestedDesign ?? undefined,
+          );
+          return;
+        }
         const attachedDesign = requestAttachments
           .find((attachment) => attachment.kind === "html" && isReusableHtmlDesign(attachment.content))
           ?.content;
@@ -2444,12 +2579,33 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
             <button
               type="button"
               onClick={compileManuscriptHtml}
-              disabled={loading || (!manifest && manuscript.chapters.length === 0)}
+              disabled={loading || (!manifest?.chapters.length && manuscript.chapters.length === 0 && !messages.some((message) => message.role === "assistant" && message.content.trim().length >= 300))}
               className="min-h-12 rounded-xl border border-cyan-400/40 px-3 text-xs font-bold text-cyan-200 disabled:opacity-40"
             >
               Compile HTML
             </button>
           </div>
+          <div className="mt-2 grid gap-2 lg:grid-cols-2">
+            <button
+              type="button"
+              onClick={() => void requestAiTypesetting("ai-template")}
+              disabled={loading || (!manifest?.chapters.length && manuscript.chapters.length === 0 && !messages.some((message) => message.role === "assistant" && message.content.trim().length >= 300))}
+              className="min-h-12 rounded-xl border border-violet-400/40 px-3 text-xs font-bold text-violet-200 disabled:opacity-40"
+            >
+              AI typeset, then compile
+            </button>
+            <button
+              type="button"
+              onClick={() => void requestAiTypesetting("ai-reprint")}
+              disabled={loading || (!manifest?.chapters.length && manuscript.chapters.length === 0 && !messages.some((message) => message.role === "assistant" && message.content.trim().length >= 300))}
+              className="min-h-12 rounded-xl border border-amber-400/40 px-3 text-xs font-bold text-amber-200 disabled:opacity-40"
+            >
+              AI reprint full HTML
+            </button>
+          </div>
+          <p className="mt-2 text-[11px] leading-5 text-slate-500">
+            Compile HTML reuses your text. AI typeset asks DeepSeek to correct the design and print rules first; AI reprint asks it to place the manuscript directly into the final HTML.
+          </p>
           {manuscript.chapters.length > 0 && (
             <div className="mt-3 space-y-3">
               {manuscript.chapters

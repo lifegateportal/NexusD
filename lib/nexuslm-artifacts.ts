@@ -320,6 +320,7 @@ export type NexusLMBookHtmlInput = {
   subtitle?: string;
   authorName?: string;
   templateHtml?: string;
+  printSpec?: PrintSpec;
   frontMatter?: NexusLMBookFrontMatter;
   chapters: NexusLMBookHtmlChapter[];
 };
@@ -390,12 +391,43 @@ function templatePageDimension(template: string, property: "width" | "height"): 
   return declaration?.[1] ?? null;
 }
 
-function compilationStyles(template: string): string {
-  const width = templatePageDimension(template, "width") ?? "5.5in";
-  const height = templatePageDimension(template, "height") ?? "8.5in";
+function printSpecDimensions(printSpec: PrintSpec | undefined): { width: string; height: string } | null {
+  const dimensions: Record<PrintSpec["trimSize"], { width: string; height: string }> = {
+    "6x9": { width: "6in", height: "9in" },
+    "5.5x8.5": { width: "5.5in", height: "8.5in" },
+    "5x8": { width: "5in", height: "8in" },
+  };
+  return printSpec ? dimensions[printSpec.trimSize] : null;
+}
+
+function printSpecFont(printSpec: PrintSpec | undefined): string | null {
+  if (!printSpec || printSpec.bodyFontFamily === "template") return null;
+  const fonts: Record<Exclude<PrintSpec["bodyFontFamily"], "template">, string> = {
+    georgia: "Georgia, serif",
+    times: "\"Times New Roman\", Times, serif",
+    garamond: "Garamond, \"EB Garamond\", Georgia, serif",
+    palatino: "\"Palatino Linotype\", Palatino, Georgia, serif",
+    helvetica: "Helvetica, Arial, sans-serif",
+  };
+  return fonts[printSpec.bodyFontFamily];
+}
+
+function compilationStyles(template: string, printSpec?: PrintSpec): string {
+  const dimensions = printSpecDimensions(printSpec);
+  const width = dimensions?.width ?? templatePageDimension(template, "width") ?? "5.5in";
+  const height = dimensions?.height ?? templatePageDimension(template, "height") ?? "8.5in";
+  const fontFamily = printSpecFont(printSpec);
+  const fontSize = printSpec?.fontSizeScale && printSpec.fontSizeScale !== 1
+    ? `font-size: ${printSpec.fontSizeScale}em !important;`
+    : "";
+  const textAlign = printSpec?.bodyTextAlign && printSpec.bodyTextAlign !== "template"
+    ? `text-align: ${printSpec.bodyTextAlign};`
+    : "";
   return `<style id="nexuslm-compiler-flow">
+    @page { size: ${width} ${height}; }
     html, body { overflow: visible !important; }
-    .nexuslm-compiled-page { display: block !important; width: 100% !important; max-width: ${width}; min-height: ${height}; height: auto !important; max-height: none !important; margin-left: auto !important; margin-right: auto !important; box-sizing: border-box !important; overflow: visible !important; break-before: page; page-break-before: always; }
+    .nexuslm-compiled-page { display: block !important; width: 100% !important; max-width: ${width}; min-height: ${height}; height: auto !important; max-height: none !important; margin-left: auto !important; margin-right: auto !important; box-sizing: border-box !important; overflow: visible !important; break-before: page; page-break-before: always; ${fontFamily ? `font-family: ${fontFamily} !important;` : ""} ${fontSize} }
+    .nexuslm-compiled-page p, .nexuslm-compiled-page li, .nexuslm-compiled-page blockquote { ${fontFamily ? `font-family: ${fontFamily} !important;` : ""} ${textAlign} }
     .nexuslm-compiled-page:first-child { break-before: auto; page-break-before: auto; }
   </style>`;
 }
@@ -460,7 +492,7 @@ export function nexusLMBookToHtml(input: NexusLMBookHtmlInput): string {
         ? frontMatterSection("Resources", frontMatter.resourcesList.map((item) => `- ${item}`).join("\n"))
         : "")
       .replace(chapterMarker, chaptersWithFallbackMatter);
-    const styles = compilationStyles(template);
+    const styles = compilationStyles(template, input.printSpec);
     return /<\/head\s*>/i.test(compiledTemplate)
       ? compiledTemplate.replace(/<\/head\s*>/i, `${styles}</head>`)
       : /<body\b/i.test(compiledTemplate)
@@ -469,8 +501,13 @@ export function nexusLMBookToHtml(input: NexusLMBookHtmlInput): string {
   }
 
   const defaultChapterMarkup = chapterMarkup();
-  return nexusLMDocumentShell(
+  const defaultDocument = nexusLMDocumentShell(
     input.title.trim() || "Untitled book",
     `<header class="book-cover"><h1>${title}</h1>${subtitle}${author}</header><nav class="book-contents" aria-label="Table of contents"><h2>Contents</h2><ol>${contents}</ol></nav>${frontMatterMarkup}${defaultChapterMarkup}${backMatterMarkup}`,
   );
+  const styles = compilationStyles("", input.printSpec);
+  return /<\/head\s*>/i.test(defaultDocument)
+    ? defaultDocument.replace(/<\/head\s*>/i, `${styles}</head>`)
+    : `${styles}${defaultDocument}`;
 }
+import type { PrintSpec } from "@/lib/schemas/ebook";

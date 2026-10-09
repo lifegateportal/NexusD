@@ -6,10 +6,12 @@ import type {
 } from "@/lib/nexuslm-artifacts";
 
 export type NexusLMCompileSource = "ebook-studio" | "chat";
+export type NexusLMCompileMode = "local" | "ai-template" | "ai-reprint";
 
 export type NexusLMCompileRequest = {
   source: NexusLMCompileSource | null;
   useLatestDesign: boolean;
+  mode: NexusLMCompileMode;
 };
 
 export type NexusLMCompileMessage = {
@@ -89,28 +91,33 @@ function isGeneratedChapter(message: NexusLMCompileMessage, previousUserMessage:
 export function parseNexusLMCompileInstruction(instruction: string): NexusLMCompileRequest | null {
   const text = instruction.trim();
   if (!text) return null;
-  const compileVerb = /\b(?:compile|assemble|reassemble|build|put\s+together)\b/i;
-  const isNegated = /\b(?:don't|do\s+not|never|without|avoid|before|until)\b[\s\S]{0,50}\b(?:compile|assemble|reassemble|build)\b/i.test(text)
-    || /\b(?:compile|assemble|reassemble|build)\b[\s\S]{0,24}\b(?:yet|now|for\s+now)\b/i.test(text);
-  const isExplanatoryRequest = /\b(?:explain|describe|what\s+(?:is|does)|how\s+(?:does|do\s+i|can\s+i)|why\s+(?:does|should)|when\s+should)\b[\s\S]{0,80}\b(?:compile|assemble|reassemble|build)\b/i.test(text);
-  const isExplicitCommand = /^(?:please\s+)?(?:use|compile|assemble|reassemble|build|put\s+together)\b/i.test(text)
-    || /\b(?:please|can\s+you|could\s+you|would\s+you|i\s+(?:want|need)\s+you\s+to|help\s+me)\b[\s\S]{0,50}\b(?:compile|assemble|reassemble|build)\b/i.test(text)
-    || /\b(?:use|from|using)\b[\s\S]{0,80}\b(?:compile|assemble|reassemble|build)\b/i.test(text);
+  const compileVerb = /\b(?:compile|assemble|reassemble|build|put\s+together|typeset|render|reprint)\b/i;
+  const isNegated = /\b(?:don't|do\s+not|never|without|avoid|before|until)\b[\s\S]{0,50}\b(?:compile|assemble|reassemble|build|typeset|render|reprint)\b/i.test(text)
+    || /\b(?:compile|assemble|reassemble|build|typeset|render|reprint)\b[\s\S]{0,24}\b(?:yet|now|for\s+now)\b/i.test(text);
+  const isExplanatoryRequest = /\b(?:explain|describe|what\s+(?:is|does)|how\s+(?:does|do\s+i|can\s+i)|why\s+(?:does|should)|when\s+should)\b[\s\S]{0,80}\b(?:compile|assemble|reassemble|build|typeset|render|reprint)\b/i.test(text);
+  const isExplicitCommand = /^(?:please\s+)?(?:use|compile|assemble|reassemble|build|put\s+together|typeset|render|reprint)\b/i.test(text)
+    || /\b(?:please|can\s+you|could\s+you|would\s+you|have\s+NexusLM|i\s+(?:want|need)\s+you\s+to|help\s+me)\b[\s\S]{0,50}\b(?:compile|assemble|reassemble|build|typeset|render|reprint)\b/i.test(text)
+    || /\b(?:ai|agent|nexuslm|deepseek)\b[\s\S]{0,30}\b(?:compile|typeset|render|reprint)\b/i.test(text)
+    || /\b(?:use|from|using)\b[\s\S]{0,80}\b(?:compile|assemble|reassemble|build|typeset|render|reprint)\b/i.test(text);
   const isCompileRequest = !isNegated
     && !isExplanatoryRequest
     && isExplicitCommand
     && compileVerb.test(text)
-    && (/\b(?:book|manuscript|chapters?|html|ebook|template|design|layout)\b/i.test(text)
+    && (/\b(?:book|manuscript|chapters?|html|ebook|template|design|layout|font|typograph|print\s+spec)\b/i.test(text)
       || /<!doctype\s+html|<html\b/i.test(text));
   if (!isCompileRequest) return null;
 
   const fromChat = /\b(?:generated\s+chapters?|chapters?)\b[\s\S]{0,80}\b(?:chat|chatbox|conversation)\b|\b(?:chat|chatbox|conversation)\b[\s\S]{0,80}\b(?:generated\s+chapters?|chapters?)\b|\bfrom\s+(?:this|the)\s+(?:chat|chatbox|conversation)\b/i.test(text);
   const fromEbookStudio = /\bebook\s*studio\b|\bebook\s+manuscript\b|\b(?:saved|complete|full)\s+manuscript\b|\bmanuscript\s+(?:workspace|chapters?)\b|\b(?:compile|assemble|build)\s+(?:my\s+)?(?:full\s+)?book\b/i.test(text);
   const source = fromChat ? "chat" : fromEbookStudio ? "ebook-studio" : null;
+  const requestsAi = /\b(?:ai|agent|nexuslm|deepseek|intelligent|smart|typeset|typograph|proof|reprint|regenerate|rewrite)\b/i.test(text)
+    && !/\b(?:without|don't|do\s+not|never)\b[\s\S]{0,40}\b(?:ai|agent|typeset|reprint|rewrite|regenerate)\b/i.test(text);
+  const requestsReprint = /\b(?:reprint|rewrite|regenerate|recreate|reproduce|full\s+html|complete\s+html)\b/i.test(text);
 
   return {
     source,
     useLatestDesign: /\b(?:generated|latest|current|new|this|custom|saved)\b[\s\S]{0,50}\b(?:design|layout|template|style|html)\b|\b(?:redesign|layout|template|style)\b|\btemplate\s+i\s+(?:generated|created|pasted)\b/i.test(text),
+    mode: requestsAi ? (requestsReprint ? "ai-reprint" : "ai-template") : "local",
   };
 }
 
@@ -154,6 +161,7 @@ export function ebookStudioManifestToBookInput(manifest: EbookManifest): NexusLM
     title: manifest.bookTitle,
     subtitle: manifest.subtitle,
     authorName: manifest.authorName,
+    printSpec: manifest.printSpec,
     frontMatter,
     chapters,
   };
@@ -161,7 +169,7 @@ export function ebookStudioManifestToBookInput(manifest: EbookManifest): NexusLM
 
 export function chatMessagesToBookInput(
   messages: NexusLMCompileMessage[],
-  metadata: Pick<NexusLMBookHtmlInput, "title" | "subtitle" | "authorName">,
+  metadata: Pick<NexusLMBookHtmlInput, "title" | "subtitle" | "authorName" | "printSpec">,
 ): NexusLMBookHtmlInput {
   const chapters: Array<NexusLMBookHtmlChapter & { order: number; explicitNumber: boolean }> = [];
   const frontMatter: NexusLMBookFrontMatter = {};
