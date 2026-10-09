@@ -215,7 +215,7 @@ async function extractDocumentModel(html: string): Promise<DocumentModel> {
     await waitForAssets(page);
     const model = await page.evaluate(function () {
       const blockTags = new Set(["P", "H1", "H2", "H3", "H4", "H5", "H6", "BLOCKQUOTE", "PRE", "LI"]);
-      const containerTags = new Set(["DIV", "SECTION", "ARTICLE", "HEADER", "FOOTER", "MAIN", "ASIDE"]);
+      const containerTags = new Set(["DIV", "SECTION", "ARTICLE", "HEADER", "FOOTER", "MAIN", "ASIDE", "NAV"]);
       function toHex(value: string): string | null {
         if (!value || value === "transparent" || /^rgba\([^)]*,\s*0\)$/i.test(value)) return null;
         const channels = value.match(/\d+(?:\.\d+)?/g);
@@ -544,22 +544,45 @@ function boxedParagraphFor(model: ParagraphModel): Table {
   });
 }
 
-function tableFor(model: TableModel): Table {
+function tableFor(model: TableModel, maxWidthTwips: number): Table {
+  const tableWidthTwips = Math.max(
+    1,
+    Math.min(model.widthTwips ?? maxWidthTwips, maxWidthTwips),
+  );
+  const columnCount = Math.max(...model.rows.map((row) => row.length), 0);
+  const measuredWidths = Array.from({ length: columnCount }, (_, columnIndex) => {
+    const widths = model.rows
+      .map((row) => row[columnIndex]?.widthTwips)
+      .filter((width): width is number => width !== null && width > 0);
+    return widths.length > 0 ? Math.max(...widths) : 0;
+  });
+  const measuredTotal = measuredWidths.reduce((total, width) => total + width, 0);
+  const sourceWidths = measuredTotal > 0
+    ? measuredWidths
+    : measuredWidths.map(() => 1);
+  const columnWidths = sourceWidths.map((width) => Math.max(
+    100,
+    Math.round((width / (measuredTotal > 0 ? measuredTotal : columnCount)) * tableWidthTwips),
+  ));
+  if (columnWidths.length > 0) {
+    columnWidths[columnWidths.length - 1] += tableWidthTwips - columnWidths.reduce((total, width) => total + width, 0);
+  }
   const rows = model.rows.map((row) => new TableRow({
-    children: row.map((cell) => new TableCell({
+    children: row.map((cell, columnIndex) => new TableCell({
       children: [new Paragraph({
         children: cell.runs.length > 0 ? cell.runs.map(runFor) : [new TextRun({ text: "" })],
         spacing: { after: 0 },
       })],
       verticalAlign: VerticalAlign.CENTER,
-      width: cell.widthTwips ? { size: cell.widthTwips, type: WidthType.DXA } : undefined,
+      width: { size: columnWidths[columnIndex] ?? tableWidthTwips, type: WidthType.DXA },
       shading: cell.backgroundColor ? { type: ShadingType.SOLID, fill: cell.backgroundColor } : undefined,
     })),
   }));
   return new Table({
     rows,
-    width: model.widthTwips ? { size: model.widthTwips, type: WidthType.DXA } : { size: 100, type: WidthType.PERCENTAGE },
-    layout: TableLayoutType.AUTOFIT,
+    columnWidths,
+    width: { size: tableWidthTwips, type: WidthType.DXA },
+    layout: TableLayoutType.FIXED,
     borders: {
       top: { style: BorderStyle.SINGLE, size: 4, color: "B7C3D0" },
       bottom: { style: BorderStyle.SINGLE, size: 4, color: "B7C3D0" },
@@ -579,13 +602,17 @@ export async function renderHtmlToEditableDocxBuffer(html: string): Promise<Buff
   const model = await extractDocumentModel(html);
   if (model.blocks.length === 0) throw new Error("The HTML design has no editable document content.");
   const children: Array<Paragraph | Table> = [];
+  const contentWidthTwips = Math.max(
+    1,
+    Math.round(model.pageSize.widthInches * 1440) - model.margins.left - model.margins.right,
+  );
   let previousPageIndex = 0;
   for (const block of model.blocks) {
     if (block.pageIndex > previousPageIndex) {
       children.push(new Paragraph({ pageBreakBefore: true }));
     }
     children.push(block.kind === "table"
-      ? tableFor(block)
+      ? tableFor(block, contentWidthTwips)
       : isBoxedParagraph(block) ? boxedParagraphFor(block) : paragraphFor(block));
     previousPageIndex = Math.max(previousPageIndex, block.pageIndex);
   }
