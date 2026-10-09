@@ -22,6 +22,12 @@ import { NEXUSLM_AGENTS, type NexusLMAgent } from "@/lib/nexuslm-agents";
 import { isNexusLMLongFormRequest, NEXUSLM_RESPONSE_LENGTHS, sanitizeNexusLMText, type NexusLMResponseLength } from "@/lib/nexuslm-response";
 import { nexusLMBookToHtml, safeNexusLMFilename, type NexusLMArtifactFormat } from "@/lib/nexuslm-artifacts";
 import {
+  chatMessagesToBookInput,
+  ebookStudioManifestToBookInput,
+  parseNexusLMCompileInstruction,
+  type NexusLMCompileSource,
+} from "@/lib/nexuslm-book-compiler";
+import {
   buildManifestChangeEntries,
   clearEbookUndoSnapshot,
   loadEbookUndoSnapshot,
@@ -1245,26 +1251,59 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
     }
   }
 
-  function compileManuscriptHtml(): void {
-    if (manuscript.chapters.length === 0) {
-      setAttachmentError("Add at least one saved chapter before compiling the book HTML.");
-      return;
+  function latestReusableHtmlDesign(): string | undefined {
+    return messages
+      .slice()
+      .reverse()
+      .map((message) => message.role === "assistant" ? extractGeneratedHtml(message.content) : null)
+      .find((candidate): candidate is string => Boolean(candidate && /\{\{\s*CHAPTERS\s*\}\}|<!--\s*NEXUSLM:CHAPTERS\s*-->/i.test(candidate)));
+  }
+
+  function compileBookHtml(source: NexusLMCompileSource, useLatestDesign = false): { title: string; chapterCount: number } {
+    const metadata = {
+      title: manuscript.title,
+      subtitle: manuscript.subtitle,
+      authorName: manuscript.authorName,
+    };
+    const book = source === "ebook-studio"
+      ? (() => {
+          if (!manifest) throw new Error("Ebook Studio does not have a loaded manuscript yet.");
+          return ebookStudioManifestToBookInput(manifest);
+        })()
+      : chatMessagesToBookInput(messages, metadata);
+    if (book.chapters.length === 0) {
+      throw new Error(source === "ebook-studio"
+        ? "Ebook Studio has no completed chapters to compile."
+        : "No generated chapters were found in this chat. Draft or add a chapter response first.");
     }
+
+    const latestDesign = useLatestDesign ? latestReusableHtmlDesign() : undefined;
+    const templateHtml = latestDesign ?? manuscript.htmlTemplate;
+    const html = nexusLMBookToHtml({
+      ...book,
+      title: metadata.title.trim() || book.title,
+      subtitle: metadata.subtitle || book.subtitle,
+      authorName: metadata.authorName || book.authorName,
+      templateHtml,
+    });
+    if (latestDesign && latestDesign !== manuscript.htmlTemplate) {
+      setManuscript((current) => ({ ...current, htmlTemplate: latestDesign }));
+    }
+    const title = metadata.title.trim() || book.title || "NexusLM book";
+    const preview: PreviewDocument = {
+      name: `${title}.html`,
+      content: html,
+      kind: "html",
+    };
+    openGeneratedHtmlPreview(html);
+    void downloadHtmlArtifact(preview, "html");
+    return { title, chapterCount: book.chapters.length };
+  }
+
+  function compileManuscriptHtml(): void {
     try {
-      const html = nexusLMBookToHtml({
-        title: manuscript.title,
-        subtitle: manuscript.subtitle,
-        authorName: manuscript.authorName,
-        templateHtml: manuscript.htmlTemplate,
-        chapters: manuscript.chapters,
-      });
-      const preview: PreviewDocument = {
-        name: `${manuscript.title || "NexusLM book"}.html`,
-        content: html,
-        kind: "html",
-      };
-      openGeneratedHtmlPreview(html);
-      void downloadHtmlArtifact(preview, "html");
+      const source: NexusLMCompileSource = manifest?.chapters.length ? "ebook-studio" : "chat";
+      compileBookHtml(source);
     } catch (error) {
       setAttachmentError(`Book HTML could not be compiled: ${readableError(error)}`);
     }
@@ -1432,15 +1471,24 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
     const requestResponseLength = options?.responseLength
       ?? (responseLength === "default" && isNexusLMLongFormRequest(instruction) ? "long-form" : responseLength);
     const activeMode = requestMode ?? inferMode(instruction, mode);
+    const compileRequest = parseNexusLMCompileInstruction(instruction);
     const requestUsesBook = options?.forceGeneral ? false : useBookContext && hasBookContext;
-    if (requestUsesBook && activeMode === "edit" && !manifest) {
+    if (compileRequest?.source === null) {
+      setMessages((current) => [...current,
+        { role: "user", content: instruction },
+        { role: "assistant", content: "Which source should I compile: Ebook Studio manuscript or the generated chapters in this chat?" },
+      ]);
+      setInput("");
+      return;
+    }
+    if (!compileRequest && requestUsesBook && activeMode === "edit" && !manifest) {
       setMessages((current) => [...current,
         { role: "user", content: instruction },
         { role: "assistant", content: "Load or finish a manuscript before requesting an edit." },
       ]);
       return;
     }
-    if (requestUsesBook && attachments.length > 0 && !options?.forceGeneral) {
+    if (!compileRequest && requestUsesBook && attachments.length > 0 && !options?.forceGeneral) {
       setMessages((current) => [...current,
         { role: "user", content: instruction },
         { role: "assistant", content: "These attached documents are ready for general chat. Switch Context to General to process them, or remove the attachments to continue with the book." },
@@ -1467,6 +1515,17 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
     setLoading(true);
 
     try {
+      if (compileRequest?.source) {
+        const result = compileBookHtml(compileRequest.source, compileRequest.useLatestDesign);
+        const sourceLabel = compileRequest.source === "ebook-studio"
+          ? "the Ebook Studio manuscript"
+          : "the generated chapters in this chat";
+        setMessages((current) => [...current, {
+          role: "assistant",
+          content: `Compiled ${result.chapterCount} chapter${result.chapterCount === 1 ? "" : "s"} from ${sourceLabel} into “${result.title}”. The HTML preview is open and a copy was downloaded without regenerating the manuscript.`,
+        }]);
+        return;
+      }
       if (requestUsesBook && manifest && isAuditIntent(instruction)) {
         const res = await fetch("/api/ebook/audit", {
           method: "POST",
@@ -2266,7 +2325,7 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
             </span>
           </summary>
           <div className="pb-1">
-            <p className="mt-2 text-xs leading-5 text-slate-500">Compile the saved chapters locally into one styled HTML book. This does not ask NexusLM to rewrite or reprint the chapters.</p>
+            <p className="mt-2 text-xs leading-5 text-slate-500">Compile Ebook Studio or generated chat chapters locally into one styled HTML book. This never asks NexusLM to rewrite or reprint the chapters.</p>
           <div className="mt-3 space-y-2">
             <input
               value={manuscript.title}
@@ -2307,7 +2366,7 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
             </summary>
             <div className="space-y-2 border-t border-slate-800 p-3">
               <p className="text-[11px] leading-5 text-slate-500">
-                Paste a complete HTML design from General mode. Add <code className="text-cyan-200">{"{{CHAPTERS}}"}</code> where saved chapters belong. Optional tokens: <code className="text-cyan-200">{"{{BOOK_TITLE}}"}</code>, <code className="text-cyan-200">{"{{BOOK_SUBTITLE}}"}</code>, <code className="text-cyan-200">{"{{AUTHOR_NAME}}"}</code>, and <code className="text-cyan-200">{"{{TOC}}"}</code>.
+                Paste a reusable HTML design from General mode. Keep <code className="text-cyan-200">{"{{CHAPTERS}}"}</code> where chapters belong. Optional tokens: <code className="text-cyan-200">{"{{BOOK_TITLE}}"}</code>, <code className="text-cyan-200">{"{{BOOK_SUBTITLE}}"}</code>, <code className="text-cyan-200">{"{{AUTHOR_NAME}}"}</code>, <code className="text-cyan-200">{"{{TOC}}"}</code>, <code className="text-cyan-200">{"{{FRONT_MATTER}}"}</code>, and <code className="text-cyan-200">{"{{BACK_MATTER}}"}</code>.
               </p>
               {generatedPreview && attachmentKind(generatedPreview) === "html" && (
                 <button
@@ -2360,7 +2419,7 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
             <button
               type="button"
               onClick={compileManuscriptHtml}
-              disabled={loading || manuscript.chapters.length === 0}
+              disabled={loading || (!manifest && manuscript.chapters.length === 0)}
               className="min-h-12 rounded-xl border border-cyan-400/40 px-3 text-xs font-bold text-cyan-200 disabled:opacity-40"
             >
               Compile HTML

@@ -307,11 +307,20 @@ export type NexusLMBookHtmlChapter = {
   content: string;
 };
 
+export type NexusLMBookFrontMatter = {
+  preface?: string;
+  introduction?: string;
+  conclusion?: string;
+  aboutAuthor?: string | null;
+  resourcesList?: string[];
+};
+
 export type NexusLMBookHtmlInput = {
   title: string;
   subtitle?: string;
   authorName?: string;
   templateHtml?: string;
+  frontMatter?: NexusLMBookFrontMatter;
   chapters: NexusLMBookHtmlChapter[];
 };
 
@@ -335,6 +344,24 @@ export function nexusLMBookToHtml(input: NexusLMBookHtmlInput): string {
   const title = escapeNexusLMHtml(input.title.trim() || "Untitled book");
   const subtitle = input.subtitle?.trim() ? `<p class="book-subtitle">${escapeNexusLMHtml(input.subtitle.trim())}</p>` : "";
   const author = input.authorName?.trim() ? `<p class="book-author">${escapeNexusLMHtml(input.authorName.trim())}</p>` : "";
+  const frontMatter = input.frontMatter ?? {};
+  const frontMatterSection = (heading: string, content: string | null | undefined): string => {
+    const trimmed = content?.trim();
+    return trimmed
+      ? `<section class="book-front-matter"><h1>${escapeNexusLMHtml(heading)}</h1>${renderNexusLMMarkdownBlocks(trimmed, "html")}</section>`
+      : "";
+  };
+  const frontMatterMarkup = [
+    frontMatterSection("Preface", frontMatter.preface),
+    frontMatterSection("Introduction", frontMatter.introduction),
+  ].filter(Boolean).join("");
+  const backMatterMarkup = [
+    frontMatterSection("Conclusion", frontMatter.conclusion),
+    frontMatterSection("About the Author", frontMatter.aboutAuthor),
+    frontMatter.resourcesList?.length
+      ? frontMatterSection("Resources", frontMatter.resourcesList.map((item) => `- ${item}`).join("\n"))
+      : "",
+  ].filter(Boolean).join("");
   const contents = chapters.map((chapter) => {
     const id = `chapter-${chapter.number}`;
     return `<li><a href="#${id}">Chapter ${chapter.number}: ${escapeNexusLMHtml(chapter.title)}</a></li>`;
@@ -351,16 +378,28 @@ export function nexusLMBookToHtml(input: NexusLMBookHtmlInput): string {
     if (!chapterMarker.test(customTemplate)) {
       throw new Error("The custom HTML design must include {{CHAPTERS}} where saved chapters should be inserted.");
     }
+    const hasFrontMatterMarker = /\{\{\s*(?:FRONT_MATTER|PREFACE|INTRODUCTION)\s*\}\}/i.test(customTemplate);
+    const hasBackMatterMarker = /\{\{\s*(?:BACK_MATTER|CONCLUSION|ABOUT_AUTHOR|RESOURCES)\s*\}\}/i.test(customTemplate);
+    const chaptersWithFallbackMatter = `${hasFrontMatterMarker ? "" : frontMatterMarkup}${chapterMarkup}${hasBackMatterMarker ? "" : backMatterMarkup}`;
     return customTemplate
       .replace(/\{\{\s*BOOK_TITLE\s*\}\}/gi, title)
       .replace(/\{\{\s*BOOK_SUBTITLE\s*\}\}/gi, subtitle.replace(/^<p class="book-subtitle">|<\/p>$/g, ""))
       .replace(/\{\{\s*AUTHOR_NAME\s*\}\}/gi, author.replace(/^<p class="book-author">|<\/p>$/g, ""))
       .replace(/\{\{\s*TOC\s*\}\}/gi, `<nav class="book-contents" aria-label="Table of contents"><h2>Contents</h2><ol>${contents}</ol></nav>`)
-      .replace(chapterMarker, chapterMarkup);
+      .replace(/\{\{\s*FRONT_MATTER\s*\}\}/gi, frontMatterMarkup)
+      .replace(/\{\{\s*PREFACE\s*\}\}/gi, frontMatterSection("Preface", frontMatter.preface))
+      .replace(/\{\{\s*INTRODUCTION\s*\}\}/gi, frontMatterSection("Introduction", frontMatter.introduction))
+      .replace(/\{\{\s*BACK_MATTER\s*\}\}/gi, backMatterMarkup)
+      .replace(/\{\{\s*CONCLUSION\s*\}\}/gi, frontMatterSection("Conclusion", frontMatter.conclusion))
+      .replace(/\{\{\s*ABOUT_AUTHOR\s*\}\}/gi, frontMatterSection("About the Author", frontMatter.aboutAuthor))
+      .replace(/\{\{\s*RESOURCES\s*\}\}/gi, frontMatter.resourcesList?.length
+        ? frontMatterSection("Resources", frontMatter.resourcesList.map((item) => `- ${item}`).join("\n"))
+        : "")
+      .replace(chapterMarker, chaptersWithFallbackMatter);
   }
 
   return nexusLMDocumentShell(
     input.title.trim() || "Untitled book",
-    `<header class="book-cover"><h1>${title}</h1>${subtitle}${author}</header><nav class="book-contents" aria-label="Table of contents"><h2>Contents</h2><ol>${contents}</ol></nav>${chapterMarkup}`,
+    `<header class="book-cover"><h1>${title}</h1>${subtitle}${author}</header><nav class="book-contents" aria-label="Table of contents"><h2>Contents</h2><ol>${contents}</ol></nav>${frontMatterMarkup}${chapterMarkup}${backMatterMarkup}`,
   );
 }
