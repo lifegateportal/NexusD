@@ -140,10 +140,31 @@ function parseDelimitedNexusLMRow(line: string, delimiter: string): string[] {
   return cells;
 }
 
-export function nexusLMContentToHtml(content: string, title: string, format: NexusLMArtifactFormat): string {
-  const safeTitle = escapeNexusLMHtml(title);
+const NEXUSLM_DOCUMENT_CSS = `
+    @page { size: A4; margin: 0.75in; }
+    :root { color-scheme: light; }
+    body { color: #1f2937; font-family: Arial, sans-serif; font-size: 11pt; line-height: 1.55; margin: 0 auto; max-width: 52rem; padding: 2.5rem 1.5rem; }
+    h1 { font-size: 22pt; margin: 0 0 18pt; } h2 { font-size: 18pt; margin-top: 18pt; } h3 { font-size: 15pt; margin-top: 14pt; }
+    p { margin: 0 0 10pt; } strong { font-weight: 700; } em { font-style: italic; } del { text-decoration: line-through; }
+    ul, ol { margin: 0 0 12pt; padding-left: 24pt; } li { margin: 0 0 5pt; }
+    blockquote { margin: 12pt 0; padding: 4pt 12pt; border-left: 3pt solid #0891b2; color: #475569; }
+    code { font-family: "Courier New", monospace; } pre { white-space: pre-wrap; background: #f3f4f6; padding: 10pt; border: 1px solid #d1d5db; overflow-x: auto; }
+    hr, .nexus-horizontal-rule { margin: 18pt 0; border: 0; border-top: 1px solid #cbd5e1; }
+    .nexus-horizontal-rule { height: 0; }
+    table { width: 100%; border-collapse: collapse; margin: 12pt 0 16pt; } th, td { border: 1px solid #cbd5e1; padding: 6pt 8pt; text-align: left; vertical-align: top; } th { background: #e2e8f0; font-weight: 700; }
+    .book-cover { border-bottom: 1px solid #cbd5e1; margin-bottom: 3rem; padding: 4rem 0 3rem; text-align: center; }
+    .book-cover h1 { font-size: 32pt; margin: 0; } .book-subtitle { color: #475569; font-size: 14pt; margin: 1rem 0 0; } .book-author { color: #64748b; margin: 1.5rem 0 0; }
+    .book-contents { border-bottom: 1px solid #e2e8f0; margin-bottom: 3rem; padding-bottom: 2rem; } .book-contents h2 { margin-top: 0; }
+    .book-contents ol { list-style: none; padding-left: 0; } .book-contents li { margin-bottom: 0.65rem; }
+    .book-contents a { color: #0e7490; text-decoration: none; } .chapter { break-before: page; } .chapter:first-of-type { break-before: auto; }
+    .chapter-label { color: #0e7490; font-size: 10pt; font-weight: 700; letter-spacing: 0.16em; margin-bottom: 0.5rem; text-transform: uppercase; }
+    .chapter-title { font-size: 26pt; margin: 0 0 1.5rem; }
+    @media (max-width: 640px) { body { padding: 1.5rem 1rem; } .book-cover { padding: 2.5rem 0 2rem; } .book-cover h1 { font-size: 25pt; } .chapter-title { font-size: 22pt; } }
+  `;
+
+function renderNexusLMMarkdownBlocks(content: string, format: NexusLMArtifactFormat): string {
   const normalized = content.replace(/^\uFEFF/, "").trim();
-  const lines = normalized.split(/\r?\n/);
+  const lines = normalized ? normalized.split(/\r?\n/) : [];
   const body: string[] = [];
   let inCode = false;
   let codeLanguage = "";
@@ -269,15 +290,62 @@ export function nexusLMContentToHtml(content: string, title: string, format: Nex
   flushList();
   flushCode();
 
-  return `<!doctype html><html><head><meta charset="utf-8"><title>${safeTitle}</title><style>
-    @page { size: A4; margin: 0.75in; }
-    body { color: #1f2937; font-family: Arial, sans-serif; font-size: 11pt; line-height: 1.55; }
-    h1 { font-size: 22pt; margin: 0 0 18pt; } h2 { font-size: 18pt; margin-top: 18pt; } h3 { font-size: 15pt; margin-top: 14pt; }
-    p { margin: 0 0 10pt; } strong { font-weight: 700; } em { font-style: italic; } del { text-decoration: line-through; }
-    ul, ol { margin: 0 0 12pt; padding-left: 24pt; } li { margin: 0 0 5pt; }
-    blockquote { margin: 12pt 0; padding: 4pt 12pt; border-left: 3pt solid #0891b2; color: #475569; }
-    code { font-family: "Courier New", monospace; } pre { white-space: pre-wrap; background: #f3f4f6; padding: 10pt; border: 1px solid #d1d5db; }
-    .nexus-horizontal-rule { height: 0; margin: 18pt 0; border-top: 1px solid #cbd5e1; }
-    table { width: 100%; border-collapse: collapse; margin: 12pt 0 16pt; } th, td { border: 1px solid #cbd5e1; padding: 6pt 8pt; text-align: left; vertical-align: top; } th { background: #e2e8f0; font-weight: 700; }
-  </style></head><body><h1>${safeTitle}</h1>${body.join("")}</body></html>`;
+  return body.join("");
+}
+
+function nexusLMDocumentShell(title: string, body: string): string {
+  return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${escapeNexusLMHtml(title)}</title><style>${NEXUSLM_DOCUMENT_CSS}</style></head><body>${body}</body></html>`;
+}
+
+export function nexusLMContentToHtml(content: string, title: string, format: NexusLMArtifactFormat): string {
+  return nexusLMDocumentShell(title, `<h1>${escapeNexusLMHtml(title)}</h1>${renderNexusLMMarkdownBlocks(content, format)}`);
+}
+
+export type NexusLMBookHtmlChapter = {
+  number: number;
+  title: string;
+  content: string;
+};
+
+export type NexusLMBookHtmlInput = {
+  title: string;
+  subtitle?: string;
+  authorName?: string;
+  chapters: NexusLMBookHtmlChapter[];
+};
+
+function removeDuplicateChapterHeading(chapter: NexusLMBookHtmlChapter): string {
+  const lines = chapter.content.replace(/^\uFEFF/, "").split(/\r?\n/);
+  const firstContentIndex = lines.findIndex((line) => line.trim());
+  if (firstContentIndex < 0) return "";
+  const firstHeading = lines[firstContentIndex].trim().match(/^#\s+(.+)$/);
+  if (!firstHeading) return chapter.content;
+  const headingText = firstHeading[1].replace(/[*_`]/g, "").replace(/\s+/g, " ").trim().toLowerCase();
+  const chapterTitle = chapter.title.replace(/[*_`]/g, "").replace(/\s+/g, " ").trim().toLowerCase();
+  if (!/^chapter\b/i.test(headingText) && headingText !== chapterTitle) return chapter.content;
+  lines.splice(firstContentIndex, 1);
+  return lines.join("\n").trim();
+}
+
+export function nexusLMBookToHtml(input: NexusLMBookHtmlInput): string {
+  const chapters = [...input.chapters].sort((a, b) => a.number - b.number);
+  if (chapters.length === 0) throw new Error("At least one saved chapter is required to compile the book.");
+
+  const title = escapeNexusLMHtml(input.title.trim() || "Untitled book");
+  const subtitle = input.subtitle?.trim() ? `<p class="book-subtitle">${escapeNexusLMHtml(input.subtitle.trim())}</p>` : "";
+  const author = input.authorName?.trim() ? `<p class="book-author">${escapeNexusLMHtml(input.authorName.trim())}</p>` : "";
+  const contents = chapters.map((chapter) => {
+    const id = `chapter-${chapter.number}`;
+    return `<li><a href="#${id}">Chapter ${chapter.number}: ${escapeNexusLMHtml(chapter.title)}</a></li>`;
+  }).join("");
+  const chapterMarkup = chapters.map((chapter) => {
+    const id = `chapter-${chapter.number}`;
+    const content = renderNexusLMMarkdownBlocks(removeDuplicateChapterHeading(chapter), "html");
+    return `<article id="${id}" class="chapter"><p class="chapter-label">Chapter ${chapter.number}</p><h1 class="chapter-title">${escapeNexusLMHtml(chapter.title)}</h1>${content}</article>`;
+  }).join("");
+
+  return nexusLMDocumentShell(
+    input.title.trim() || "Untitled book",
+    `<header class="book-cover"><h1>${title}</h1>${subtitle}${author}</header><nav class="book-contents" aria-label="Table of contents"><h2>Contents</h2><ol>${contents}</ol></nav>${chapterMarkup}`,
+  );
 }

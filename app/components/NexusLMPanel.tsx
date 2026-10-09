@@ -20,7 +20,7 @@ import {
 import { NEXUSLM_WRITING_STYLES, type NexusLMWritingStyle } from "@/lib/nexuslm-writing-styles";
 import { NEXUSLM_AGENTS, type NexusLMAgent } from "@/lib/nexuslm-agents";
 import { isNexusLMLongFormRequest, NEXUSLM_RESPONSE_LENGTHS, sanitizeNexusLMText, type NexusLMResponseLength } from "@/lib/nexuslm-response";
-import { safeNexusLMFilename, type NexusLMArtifactFormat } from "@/lib/nexuslm-artifacts";
+import { nexusLMBookToHtml, safeNexusLMFilename, type NexusLMArtifactFormat } from "@/lib/nexuslm-artifacts";
 import {
   buildManifestChangeEntries,
   clearEbookUndoSnapshot,
@@ -1229,6 +1229,30 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
     }
   }
 
+  function compileManuscriptHtml(): void {
+    if (manuscript.chapters.length === 0) {
+      setAttachmentError("Add at least one saved chapter before compiling the book HTML.");
+      return;
+    }
+    try {
+      const html = nexusLMBookToHtml({
+        title: manuscript.title,
+        subtitle: manuscript.subtitle,
+        authorName: manuscript.authorName,
+        chapters: manuscript.chapters,
+      });
+      const preview: PreviewDocument = {
+        name: `${manuscript.title || "NexusLM book"}.html`,
+        content: html,
+        kind: "html",
+      };
+      openGeneratedHtmlPreview(html);
+      void downloadHtmlArtifact(preview, "html");
+    } catch (error) {
+      setAttachmentError(`Book HTML could not be compiled: ${readableError(error)}`);
+    }
+  }
+
   async function streamGeneralResponse(
     instruction: string,
     activeMode: "ask" | "socratic" | "plan",
@@ -2225,7 +2249,7 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
             </span>
           </summary>
           <div className="pb-1">
-            <p className="mt-2 text-xs leading-5 text-slate-500">Keep chapters in the form NexusLM created them. HTML designs stay available in the exact preview; manuscript exports use the selected book template, while HTML exports preserve the visual design.</p>
+            <p className="mt-2 text-xs leading-5 text-slate-500">Compile the saved chapters locally into one styled HTML book. This does not ask NexusLM to rewrite or reprint the chapters.</p>
           <div className="mt-3 space-y-2">
             <input
               value={manuscript.title}
@@ -2278,6 +2302,14 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
               className="min-h-12 rounded-xl bg-cyan-300 px-3 text-xs font-bold text-slate-950 disabled:opacity-40"
             >
               {pdfExporting ? "Generating PDF..." : "Generate PDF"}
+            </button>
+            <button
+              type="button"
+              onClick={compileManuscriptHtml}
+              disabled={loading || manuscript.chapters.length === 0}
+              className="min-h-12 rounded-xl border border-cyan-400/40 px-3 text-xs font-bold text-cyan-200 disabled:opacity-40"
+            >
+              Compile HTML
             </button>
           </div>
           {manuscript.chapters.length > 0 && (
