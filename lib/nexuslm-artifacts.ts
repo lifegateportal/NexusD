@@ -340,8 +340,21 @@ function removeDuplicateChapterHeading(chapter: NexusLMBookHtmlChapter): string 
 function prepareNexusLMTemplate(template: string): {
   template: string;
   chapterMarker: RegExp;
+  chapterClassName?: string;
 } {
   const chapterMarker = /\{\{\s*(?:CHAPTERS|MANUSCRIPT|BOOK_CONTENT|CONTENT)\s*\}\}|<!--\s*NEXUSLM:(?:CHAPTERS|MANUSCRIPT|BOOK_CONTENT|CONTENT)\s*-->|<!--\s*(?:CHAPTERS|MANUSCRIPT|BOOK[\s-]*CONTENT)\s*(?:HERE)?\s*-->/i;
+  const markerInPageShell = template.match(new RegExp(
+    `<(article|section|div)\\b([^>]*\\b(?:class|id)\\s*=\\s*["'][^"']*(?:chapter|book-page|chapter-page|page)[^"']*["'][^>]*)>[\\s\\S]*?${chapterMarker.source}[\\s\\S]*?<\\/\\1>`,
+    "i",
+  ));
+  if (markerInPageShell) {
+    const chapterClassName = markerInPageShell[2].match(/\bclass\s*=\s*["']([^"']+)["']/i)?.[1]?.trim();
+    return {
+      template: template.replace(markerInPageShell[0], "{{CHAPTERS}}"),
+      chapterMarker,
+      chapterClassName,
+    };
+  }
   if (chapterMarker.test(template)) return { template, chapterMarker };
 
   const namedContainer = /(<(?:main|section|article|div)\b[^>]*(?:id|class|data-[\w-]+)\s*=\s*["'][^"']*(?:chapters|manuscript|book[\s-]*content|content)[^"']*["'][^>]*>)(\s*)(<\/(?:main|section|article|div)>)/i;
@@ -352,16 +365,39 @@ function prepareNexusLMTemplate(template: string): {
   const withEmptyMain = template.replace(emptyMain, "$1{{CHAPTERS}}$3");
   if (withEmptyMain !== template) return { template: withEmptyMain, chapterMarker };
 
-  const chapterBlocks = /<(article|section|div)\b[^>]*(?:id|class)\s*=\s*["'][^"']*(?:chapter|chapters)[^"']*["'][^>]*>[\s\S]*?<\/\1>/gi;
+  const chapterBlocks = /<(article|section|div)\b([^>]*(?:id|class)\s*=\s*["'][^"']+["'][^>]*)>([\s\S]*?)<\/\1>/gi;
   let insertedChapterMarker = false;
-  const withSampleChaptersRemoved = template.replace(chapterBlocks, () => {
+  let chapterClassName: string | undefined;
+  const withSampleChaptersRemoved = template.replace(chapterBlocks, (fullMatch: string, tag: string, attributes: string, body: string) => {
+    const isChapterShell = /(?:chapter|chapters|chapter-page|book-page)/i.test(attributes)
+      || /\b(?:chapter-label|chapter-title|chapter-content|chapter-body)\b/i.test(body);
+    if (!isChapterShell) return fullMatch;
     if (insertedChapterMarker) return "";
     insertedChapterMarker = true;
-    return "{{CHAPTERS}}";
+    chapterClassName = attributes.match(/\bclass\s*=\s*["']([^"']+)["']/i)?.[1]?.trim();
+    return `{{CHAPTERS}}`;
   });
-  if (insertedChapterMarker) return { template: withSampleChaptersRemoved, chapterMarker };
+  if (insertedChapterMarker) return { template: withSampleChaptersRemoved, chapterMarker, chapterClassName };
 
   throw new Error("The HTML design needs a chapter insertion point: add {{CHAPTERS}} inside the book content area.");
+}
+
+function templatePageDimension(template: string, property: "width" | "height"): string | null {
+  const pageSize = template.match(/@page[\s\S]{0,500}\bsize\s*:\s*[^;{}]*/i)?.[0] ?? "";
+  const pageSizeMatch = pageSize.match(/\bsize\s*:\s*([\d.]+(?:in|cm|mm|px|pt))\s+([\d.]+(?:in|cm|mm|px|pt))/i);
+  if (pageSizeMatch) return property === "width" ? pageSizeMatch[1] : pageSizeMatch[2];
+  const declaration = template.match(new RegExp(`\\b(?:${property}|min-${property}|max-${property})\\s*:\\s*([\\d.]+(?:in|cm|mm|px|pt))`, "i"));
+  return declaration?.[1] ?? null;
+}
+
+function compilationStyles(template: string): string {
+  const width = templatePageDimension(template, "width") ?? "5.5in";
+  const height = templatePageDimension(template, "height") ?? "8.5in";
+  return `<style id="nexuslm-compiler-flow">
+    html, body { overflow: visible !important; }
+    .nexuslm-compiled-page { display: block !important; width: 100% !important; max-width: ${width}; min-height: ${height}; height: auto !important; max-height: none !important; margin-left: auto !important; margin-right: auto !important; box-sizing: border-box !important; overflow: visible !important; break-before: page; page-break-before: always; }
+    .nexuslm-compiled-page:first-child { break-before: auto; page-break-before: auto; }
+  </style>`;
 }
 
 export function nexusLMBookToHtml(input: NexusLMBookHtmlInput): string {
@@ -393,10 +429,11 @@ export function nexusLMBookToHtml(input: NexusLMBookHtmlInput): string {
     const id = `chapter-${chapter.number}`;
     return `<li><a href="#${id}">Chapter ${chapter.number}: ${escapeNexusLMHtml(chapter.title)}</a></li>`;
   }).join("");
-  const chapterMarkup = chapters.map((chapter) => {
+  const chapterMarkup = (chapterClassName = "") => chapters.map((chapter) => {
     const id = `chapter-${chapter.number}`;
     const content = renderNexusLMMarkdownBlocks(removeDuplicateChapterHeading(chapter), "html");
-    return `<article id="${id}" class="chapter"><p class="chapter-label">Chapter ${chapter.number}</p><h1 class="chapter-title">${escapeNexusLMHtml(chapter.title)}</h1>${content}</article>`;
+    const classes = ["chapter", "nexuslm-compiled-page", chapterClassName].filter(Boolean).join(" ");
+    return `<article id="${id}" class="${classes}"><p class="chapter-label">Chapter ${chapter.number}</p><h1 class="chapter-title">${escapeNexusLMHtml(chapter.title)}</h1>${content}</article>`;
   }).join("");
 
   const customTemplate = input.templateHtml?.trim();
@@ -404,10 +441,11 @@ export function nexusLMBookToHtml(input: NexusLMBookHtmlInput): string {
     const preparedTemplate = prepareNexusLMTemplate(customTemplate);
     const chapterMarker = preparedTemplate.chapterMarker;
     const template = preparedTemplate.template;
+    const renderedChapters = chapterMarkup(preparedTemplate.chapterClassName);
     const hasFrontMatterMarker = /\{\{\s*(?:FRONT_MATTER|PREFACE|INTRODUCTION)\s*\}\}/i.test(template);
     const hasBackMatterMarker = /\{\{\s*(?:BACK_MATTER|CONCLUSION|ABOUT_AUTHOR|RESOURCES)\s*\}\}/i.test(template);
-    const chaptersWithFallbackMatter = `${hasFrontMatterMarker ? "" : frontMatterMarkup}${chapterMarkup}${hasBackMatterMarker ? "" : backMatterMarkup}`;
-    return template
+    const chaptersWithFallbackMatter = `${hasFrontMatterMarker ? "" : frontMatterMarkup}${renderedChapters}${hasBackMatterMarker ? "" : backMatterMarkup}`;
+    const compiledTemplate = template
       .replace(/\{\{\s*BOOK_TITLE\s*\}\}/gi, title)
       .replace(/\{\{\s*BOOK_SUBTITLE\s*\}\}/gi, subtitle.replace(/^<p class="book-subtitle">|<\/p>$/g, ""))
       .replace(/\{\{\s*AUTHOR_NAME\s*\}\}/gi, author.replace(/^<p class="book-author">|<\/p>$/g, ""))
@@ -422,10 +460,17 @@ export function nexusLMBookToHtml(input: NexusLMBookHtmlInput): string {
         ? frontMatterSection("Resources", frontMatter.resourcesList.map((item) => `- ${item}`).join("\n"))
         : "")
       .replace(chapterMarker, chaptersWithFallbackMatter);
+    const styles = compilationStyles(template);
+    return /<\/head\s*>/i.test(compiledTemplate)
+      ? compiledTemplate.replace(/<\/head\s*>/i, `${styles}</head>`)
+      : /<body\b/i.test(compiledTemplate)
+        ? compiledTemplate.replace(/<body\b/i, `${styles}<body`)
+        : `${styles}${compiledTemplate}`;
   }
 
+  const defaultChapterMarkup = chapterMarkup();
   return nexusLMDocumentShell(
     input.title.trim() || "Untitled book",
-    `<header class="book-cover"><h1>${title}</h1>${subtitle}${author}</header><nav class="book-contents" aria-label="Table of contents"><h2>Contents</h2><ol>${contents}</ol></nav>${frontMatterMarkup}${chapterMarkup}${backMatterMarkup}`,
+    `<header class="book-cover"><h1>${title}</h1>${subtitle}${author}</header><nav class="book-contents" aria-label="Table of contents"><h2>Contents</h2><ol>${contents}</ol></nav>${frontMatterMarkup}${defaultChapterMarkup}${backMatterMarkup}`,
   );
 }

@@ -89,7 +89,17 @@ function isGeneratedChapter(message: NexusLMCompileMessage, previousUserMessage:
 export function parseNexusLMCompileInstruction(instruction: string): NexusLMCompileRequest | null {
   const text = instruction.trim();
   if (!text) return null;
-  const isCompileRequest = /\b(?:compile|assemble|reassemble|build|put\s+together)\b/i.test(text)
+  const compileVerb = /\b(?:compile|assemble|reassemble|build|put\s+together)\b/i;
+  const isNegated = /\b(?:don't|do\s+not|never|without|avoid|before|until)\b[\s\S]{0,50}\b(?:compile|assemble|reassemble|build)\b/i.test(text)
+    || /\b(?:compile|assemble|reassemble|build)\b[\s\S]{0,24}\b(?:yet|now|for\s+now)\b/i.test(text);
+  const isExplanatoryRequest = /\b(?:explain|describe|what\s+(?:is|does)|how\s+(?:does|do\s+i|can\s+i)|why\s+(?:does|should)|when\s+should)\b[\s\S]{0,80}\b(?:compile|assemble|reassemble|build)\b/i.test(text);
+  const isExplicitCommand = /^(?:please\s+)?(?:use|compile|assemble|reassemble|build|put\s+together)\b/i.test(text)
+    || /\b(?:please|can\s+you|could\s+you|would\s+you|i\s+(?:want|need)\s+you\s+to|help\s+me)\b[\s\S]{0,50}\b(?:compile|assemble|reassemble|build)\b/i.test(text)
+    || /\b(?:use|from|using)\b[\s\S]{0,80}\b(?:compile|assemble|reassemble|build)\b/i.test(text);
+  const isCompileRequest = !isNegated
+    && !isExplanatoryRequest
+    && isExplicitCommand
+    && compileVerb.test(text)
     && (/\b(?:book|manuscript|chapters?|html|ebook|template|design|layout)\b/i.test(text)
       || /<!doctype\s+html|<html\b/i.test(text));
   if (!isCompileRequest) return null;
