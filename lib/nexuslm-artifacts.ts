@@ -311,6 +311,7 @@ export type NexusLMBookHtmlInput = {
   title: string;
   subtitle?: string;
   authorName?: string;
+  templateHtml?: string;
   chapters: NexusLMBookHtmlChapter[];
 };
 
@@ -343,6 +344,20 @@ export function nexusLMBookToHtml(input: NexusLMBookHtmlInput): string {
     const content = renderNexusLMMarkdownBlocks(removeDuplicateChapterHeading(chapter), "html");
     return `<article id="${id}" class="chapter"><p class="chapter-label">Chapter ${chapter.number}</p><h1 class="chapter-title">${escapeNexusLMHtml(chapter.title)}</h1>${content}</article>`;
   }).join("");
+
+  const customTemplate = input.templateHtml?.trim();
+  if (customTemplate) {
+    const chapterMarker = /\{\{\s*CHAPTERS\s*\}\}|<!--\s*NEXUSLM:CHAPTERS\s*-->/i;
+    if (!chapterMarker.test(customTemplate)) {
+      throw new Error("The custom HTML design must include {{CHAPTERS}} where saved chapters should be inserted.");
+    }
+    return customTemplate
+      .replace(/\{\{\s*BOOK_TITLE\s*\}\}/gi, title)
+      .replace(/\{\{\s*BOOK_SUBTITLE\s*\}\}/gi, subtitle.replace(/^<p class="book-subtitle">|<\/p>$/g, ""))
+      .replace(/\{\{\s*AUTHOR_NAME\s*\}\}/gi, author.replace(/^<p class="book-author">|<\/p>$/g, ""))
+      .replace(/\{\{\s*TOC\s*\}\}/gi, `<nav class="book-contents" aria-label="Table of contents"><h2>Contents</h2><ol>${contents}</ol></nav>`)
+      .replace(chapterMarker, chapterMarkup);
+  }
 
   return nexusLMDocumentShell(
     input.title.trim() || "Untitled book",

@@ -32,6 +32,7 @@ export type NexusLMManuscript = {
   subtitle: string;
   authorName: string;
   template: z.infer<typeof BookTemplateEnum>;
+  htmlTemplate?: string;
   chapters: NexusLMManuscriptChapter[];
 };
 
@@ -87,6 +88,7 @@ const ManuscriptSchema = z.object({
   subtitle: z.string().max(500),
   authorName: z.string().trim().min(1).max(200),
   template: BookTemplateEnum,
+  htmlTemplate: z.string().max(2_000_000).optional(),
   chapters: z.array(ManuscriptChapterSchema).max(200),
 }).strict();
 

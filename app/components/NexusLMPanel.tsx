@@ -1013,7 +1013,7 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
     setAttachmentError(null);
   }
 
-  function updateManuscriptField(field: "title" | "subtitle" | "authorName" | "template", value: string): void {
+  function updateManuscriptField(field: "title" | "subtitle" | "authorName" | "template" | "htmlTemplate", value: string): void {
     setManuscript((current) => ({
       ...current,
       [field]: field === "template" ? value as NexusLMManuscript["template"] : value,
@@ -1239,6 +1239,7 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
         title: manuscript.title,
         subtitle: manuscript.subtitle,
         authorName: manuscript.authorName,
+        templateHtml: manuscript.htmlTemplate,
         chapters: manuscript.chapters,
       });
       const preview: PreviewDocument = {
@@ -2283,6 +2284,43 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
               ))}
             </select>
           </div>
+          <details className="mt-3 rounded-xl border border-slate-800 bg-slate-900/50">
+            <summary className="flex min-h-12 cursor-pointer list-none items-center justify-between gap-3 px-3 text-xs font-semibold text-slate-300">
+              <span>Custom HTML design</span>
+              <span className="text-[10px] uppercase tracking-widest text-slate-500">{manuscript.htmlTemplate?.trim() ? "Saved" : "Optional"}</span>
+            </summary>
+            <div className="space-y-2 border-t border-slate-800 p-3">
+              <p className="text-[11px] leading-5 text-slate-500">
+                Paste a complete HTML design from General mode. Add <code className="text-cyan-200">{"{{CHAPTERS}}"}</code> where saved chapters belong. Optional tokens: <code className="text-cyan-200">{"{{BOOK_TITLE}}"}</code>, <code className="text-cyan-200">{"{{BOOK_SUBTITLE}}"}</code>, <code className="text-cyan-200">{"{{AUTHOR_NAME}}"}</code>, and <code className="text-cyan-200">{"{{TOC}}"}</code>.
+              </p>
+              {generatedPreview && attachmentKind(generatedPreview) === "html" && (
+                <button
+                  type="button"
+                  onClick={() => updateManuscriptField("htmlTemplate", generatedPreview.content)}
+                  className="min-h-12 w-full rounded-xl border border-cyan-400/40 px-3 text-xs font-semibold text-cyan-200"
+                >
+                  Use current HTML preview as design
+                </button>
+              )}
+              <textarea
+                value={manuscript.htmlTemplate ?? ""}
+                onChange={(event) => updateManuscriptField("htmlTemplate", event.target.value)}
+                aria-label="Custom HTML book design"
+                placeholder={'<!doctype html>...<main>{{CHAPTERS}}</main>...</html>'}
+                className="min-h-48 w-full resize-y rounded-xl border border-slate-700 bg-slate-950 p-3 font-mono text-base leading-6 text-slate-300"
+                spellCheck={false}
+              />
+              {manuscript.htmlTemplate?.trim() && (
+                <button
+                  type="button"
+                  onClick={() => updateManuscriptField("htmlTemplate", "")}
+                  className="min-h-12 rounded-xl border border-rose-500/30 px-3 text-xs font-semibold text-rose-300"
+                >
+                  Clear custom design
+                </button>
+              )}
+            </div>
+          </details>
           <div className="mt-3 flex flex-wrap gap-2">
             <button
               type="button"
