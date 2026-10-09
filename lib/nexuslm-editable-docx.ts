@@ -50,6 +50,7 @@ type InlineModel = {
 
 type ParagraphModel = {
   kind: "paragraph";
+  isBlockQuote: boolean;
   heading: number;
   runs: InlineModel[];
   pageIndex: number;
@@ -329,6 +330,7 @@ async function extractDocumentModel(html: string): Promise<DocumentModel> {
         const listKind = list ?? (parentList?.tagName === "OL" ? "number" : parentList?.tagName === "UL" ? "bullet" : null);
         return {
           kind: "paragraph",
+          isBlockQuote: element.tagName === "BLOCKQUOTE",
           heading,
           runs: runsFor(element, element.tagName === "PRE"),
           pageIndex: Math.max(0, Math.floor(Math.max(0, rect.top - 1) / window.innerHeight)),
@@ -434,6 +436,8 @@ function runFor(model: InlineModel): TextRun | ExternalHyperlink {
 }
 
 function paragraphFor(model: ParagraphModel): Paragraph {
+  const leftIndent = model.leftTwips || (model.isBlockQuote ? model.paddingLeftTwips : 0);
+  const rightIndent = model.rightTwips;
   const options = {
     children: model.runs.length > 0 ? model.runs.map(runFor) : [new TextRun({ text: "" })],
     alignment: alignment(model.alignment),
@@ -442,8 +446,8 @@ function paragraphFor(model: ParagraphModel): Paragraph {
       after: model.afterTwips,
       ...(model.lineTwips ? { line: model.lineTwips } : {}),
     },
-    indent: model.leftTwips || model.rightTwips
-      ? { left: model.leftTwips || undefined, right: model.rightTwips || undefined }
+    indent: leftIndent || rightIndent
+      ? { left: leftIndent || undefined, right: rightIndent || undefined }
       : undefined,
     shading: model.backgroundColor ? { type: ShadingType.SOLID, fill: model.backgroundColor } : undefined,
     border: model.borderWidth > 0
@@ -479,12 +483,14 @@ function paragraphFor(model: ParagraphModel): Paragraph {
 
 function isBoxedParagraph(model: ParagraphModel): boolean {
   return Boolean(
-    model.backgroundColor
+    !model.isBlockQuote && (
+      model.backgroundColor
       || model.paddingTopTwips
       || model.paddingRightTwips
       || model.paddingBottomTwips
       || model.paddingLeftTwips
-      || model.borderWidth,
+      || model.borderWidth
+    ),
   );
 }
 
