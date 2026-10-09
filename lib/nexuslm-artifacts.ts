@@ -265,7 +265,7 @@ function renderNexusLMMarkdownBlocks(content: string, format: NexusLMArtifactFor
         quoteLines.push(nextQuote[1]);
         index += 1;
       }
-      body.push(`<blockquote><p>${quoteLines.map(renderNexusLMInlineHtml).join("<br>")}</p></blockquote>`);
+      body.push(`<blockquote><p>${quoteLines.map(renderNexusLMInlineHtml).join(" ")}</p></blockquote>`);
       continue;
     }
 

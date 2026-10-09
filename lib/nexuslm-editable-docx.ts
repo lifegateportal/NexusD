@@ -285,6 +285,7 @@ async function extractDocumentModel(html: string): Promise<DocumentModel> {
       }
       function runsFor(root: Element, preserveWhitespace = false): InlineModel[] {
         const runs: InlineModel[] = [];
+        const flowQuoteLines = root.tagName === "BLOCKQUOTE";
         function visit(node: Node, link: string | null): void {
           if (node.nodeType === Node.TEXT_NODE) {
             const raw = node.textContent ?? "";
@@ -311,7 +312,7 @@ async function extractDocumentModel(html: string): Promise<DocumentModel> {
           if (["SCRIPT", "STYLE", "SVG", "IMG", "UL", "OL", "TABLE"].includes(element.tagName)) return;
           if (element.tagName === "BR") {
             const style = styleFor(element.parentElement ?? root);
-            runs.push({ text: "\n", href: link, ...style });
+            runs.push({ text: flowQuoteLines ? " " : "\n", href: link, ...style });
             return;
           }
           const nextLink = element.tagName === "A" ? element.getAttribute("href") : link;
