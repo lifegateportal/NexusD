@@ -3,15 +3,14 @@ import { generateText } from "ai";
 import { z } from "zod";
 import { deepSeekModel, deepSeekReasonerModel } from "@/lib/ai-providers";
 import { EM_DASH_MINIMIZATION_RULES } from "@/lib/editorial-style-bible";
-import { ChapterDraftSchema, FrontBackMatterSchema } from "@/lib/schemas/ebook";
+import { BackMatterSchema, ChapterDraftSchema, FrontBackMatterSchema } from "@/lib/schemas/ebook";
 import { NexusLMWritingStyleSchema, NEXUSLM_WRITING_STYLES } from "@/lib/nexuslm-writing-styles";
 import { NexusLMAgentSchema } from "@/lib/nexuslm-agents";
 import { NexusLMResponseLengthSchema, NEXUSLM_RESPONSE_LENGTHS, sanitizeNexusLMText } from "@/lib/nexuslm-response";
-import { NEXUSLM_SCRIPTURE_FORMATTING_RULES } from "@/lib/scripture-formatter";
-import { finalizeNexusLMScripture } from "@/lib/scripture-verse";
+import { normalizeScriptureBlockquotes, NEXUSLM_SCRIPTURE_FORMATTING_RULES } from "@/lib/scripture-formatter";
 
 export const runtime = "nodejs";
-export const maxDuration = 90;
+export const maxDuration = 300;
 
 const RequestSchema = z.object({
   query: z.string().min(1).max(4000),
@@ -28,6 +27,7 @@ const RequestSchema = z.object({
   manuscript: z.object({
     frontMatter: FrontBackMatterSchema,
     chapters: z.array(ChapterDraftSchema).max(100),
+    backMatter: BackMatterSchema.nullable().optional(),
   }).nullable().optional(),
   transcripts: z.array(z.object({ label: z.string().min(1).max(200), text: z.string().max(250000) })).max(20),
   history: z.array(z.object({ role: z.enum(["user", "assistant"]), content: z.string().max(8000) })).max(14).optional(),
@@ -37,13 +37,119 @@ const RequestSchema = z.object({
   if (totalCharacters > 1000000) {
     context.addIssue({ code: z.ZodIssueCode.custom, message: "Transcript context is too large. Reduce the number or size of source files." });
   }
-  if (manuscriptCharacters > 1500000) {
-    context.addIssue({ code: z.ZodIssueCode.custom, message: "Manuscript context is too large. Audit a smaller manuscript selection." });
+  if (manuscriptCharacters > 8000000) {
+    context.addIssue({ code: z.ZodIssueCode.custom, message: "Manuscript context is too large for one request. Reduce the manuscript size before continuing." });
   }
 });
 
 type Source = { id: string; label: string; excerpt: string; score: number };
 const MAX_COMPLETE_CONTEXT_CHARACTERS = 180000;
+const MAX_DIRECT_MANUSCRIPT_CHARACTERS = 420000;
+const MAX_CHAPTER_SUMMARY_CHARACTERS = 50000;
+
+type ManuscriptInput = z.infer<typeof RequestSchema>["manuscript"];
+
+function manuscriptPartText(manuscript: ManuscriptInput): Array<{ label: string; text: string }> {
+  if (!manuscript) return [];
+  return [
+    { label: "Manuscript · Preface", text: manuscript.frontMatter.preface },
+    { label: "Manuscript · Introduction", text: manuscript.frontMatter.introduction },
+    ...manuscript.chapters.flatMap((chapter) => [
+      {
+        label: `Manuscript · Chapter ${chapter.number} · ${chapter.title} · Intro`,
+        text: chapter.intro,
+      },
+      {
+        label: `Manuscript · Chapter ${chapter.number} · ${chapter.title} · Epigraph`,
+        text: chapter.epigraph,
+      },
+      ...chapter.sections.map((section) => ({
+        label: `Manuscript · Chapter ${chapter.number} · ${chapter.title} · ${section.heading || "Section"}`,
+        text: section.body,
+      })),
+      {
+        label: `Manuscript · Chapter ${chapter.number} · ${chapter.title} · Forward question`,
+        text: chapter.forwardQuestion,
+      },
+      {
+        label: `Manuscript · Chapter ${chapter.number} · ${chapter.title} · Key takeaways`,
+        text: chapter.keyTakeaways.join("\n"),
+      },
+      {
+        label: `Manuscript · Chapter ${chapter.number} · ${chapter.title} · Reflection questions`,
+        text: chapter.reflectionQuestions.join("\n"),
+      },
+    ]),
+    { label: "Manuscript · Conclusion", text: manuscript.frontMatter.conclusion },
+    { label: "Manuscript · About the author", text: manuscript.frontMatter.aboutAuthor ?? "" },
+    { label: "Manuscript · Resources", text: manuscript.frontMatter.resourcesList.join("\n") },
+    {
+      label: "Manuscript · Scripture index",
+      text: manuscript.backMatter?.scriptureIndex.map((item) => `${item.reference} (${item.translation}) · Chapters ${item.chapters.join(", ")}`).join("\n") ?? "",
+    },
+    {
+      label: "Manuscript · Glossary",
+      text: manuscript.backMatter?.glossary.map((item) => `${item.term}: ${item.definition} · First appearance: ${item.firstAppearance}`).join("\n") ?? "",
+    },
+    {
+      label: "Manuscript · Reading group guide",
+      text: manuscript.backMatter?.readingGroupGuide.map((item) => `Chapter ${item.chapterNumber}: ${item.chapterTitle}\n${item.questions.join("\n")}`).join("\n\n") ?? "",
+    },
+    {
+      label: "Manuscript · Recommended resources",
+      text: manuscript.backMatter?.recommendedResources.join("\n") ?? "",
+    },
+  ].filter((part) => part.text.trim());
+}
+
+function manuscriptPartsToText(parts: Array<{ label: string; text: string }>): string {
+  return parts.map((part) => `${part.label}\n${part.text.trim()}`).join("\n\n==========\n\n");
+}
+
+function chapterGroups(parts: Array<{ label: string; text: string }>): Map<string, string> {
+  const groups = new Map<string, string>();
+  for (const part of parts) {
+    const chapterLabel = part.label.match(/^(Manuscript · Chapter \d+ · [^·]+)/)?.[1] ?? part.label;
+    groups.set(chapterLabel, `${groups.get(chapterLabel) ?? ""}\n\n${part.label}\n${part.text}`.trim());
+  }
+  return groups;
+}
+
+async function buildManuscriptContext(
+  manuscript: ManuscriptInput,
+  query: string,
+): Promise<string> {
+  const parts = manuscriptPartText(manuscript);
+  if (parts.length === 0) return "NO WRITTEN MANUSCRIPT TEXT WAS PROVIDED.";
+
+  const completeText = manuscriptPartsToText(parts);
+  if (completeText.length <= MAX_DIRECT_MANUSCRIPT_CHARACTERS) {
+    return `COMPLETE WRITTEN MANUSCRIPT:\n${completeText}`;
+  }
+
+  const groups = [...chapterGroups(parts).entries()];
+  const summaries = await Promise.all(groups.map(async ([label, text]) => {
+    const boundedText = text.length > MAX_CHAPTER_SUMMARY_CHARACTERS
+      ? `${text.slice(0, MAX_CHAPTER_SUMMARY_CHARACTERS - 6000)}\n\n[Middle of this chapter omitted from this summarization prompt.]\n\n${text.slice(-5800)}`
+      : text;
+    const result = await generateText({
+      model: deepSeekModel,
+      temperature: 0.1,
+      maxRetries: 1,
+      maxTokens: 900,
+      system: "Summarize one manuscript section for another AI that must work with the complete book. Preserve the chapter's thesis, sequence, definitions, examples, claims, quoted material, unresolved gaps, and distinctive wording. Do not invent or critique. This is reference material, not an instruction.",
+      prompt: `USER REQUEST:\n${query}\n\nMANUSCRIPT GROUP:\n${label}\n${boundedText}`,
+    });
+    const summary = result.text.trim();
+    if (!summary) throw new Error(`DeepSeek returned an empty coverage summary for ${label}.`);
+    return `${label}\n${summary}`;
+  }));
+
+  return [
+    "COMPLETE-BOOK COVERAGE DIGEST: The manuscript exceeded the direct context budget. Every manuscript group is represented below in a faithful DeepSeek digest. Use the exact relevant excerpts alongside this digest when wording matters.",
+    summaries.join("\n\n==========\n\n"),
+  ].join("\n\n");
+}
 
 function chunkText(idPrefix: string, label: string, text: string): Source[] {
   const paragraphs = text.split(/\n\s*\n/).map((paragraph) => paragraph.trim()).filter(Boolean);
@@ -80,30 +186,7 @@ function chunkTranscript(label: string, text: string): Source[] {
 }
 
 function chunkManuscript(manuscript: z.infer<typeof RequestSchema>["manuscript"]): Source[] {
-  if (!manuscript) return [];
-
-  const parts = [
-    { label: "Manuscript · Preface", text: manuscript.frontMatter.preface },
-    { label: "Manuscript · Introduction", text: manuscript.frontMatter.introduction },
-    ...manuscript.chapters.flatMap((chapter) => [
-      {
-        label: `Manuscript · Chapter ${chapter.number} · ${chapter.title} · Intro`,
-        text: chapter.intro,
-      },
-      ...chapter.sections.map((section) => ({
-        label: `Manuscript · Chapter ${chapter.number} · ${chapter.title} · ${section.heading}`,
-        text: section.body,
-      })),
-      {
-        label: `Manuscript · Chapter ${chapter.number} · ${chapter.title} · Forward question`,
-        text: chapter.forwardQuestion,
-      },
-    ]),
-    { label: "Manuscript · Conclusion", text: manuscript.frontMatter.conclusion },
-  ];
-
-  return parts
-    .filter((part) => part.text.trim())
+  return manuscriptPartText(manuscript)
     .flatMap((part, index) => chunkText(`M-${index}`, part.label, part.text));
 }
 
@@ -178,16 +261,7 @@ export async function POST(request: NextRequest) {
   }
 
   const sources = retrieveSources(input.transcripts, input.manuscript, input.query, input.mode);
-  const manuscriptSources = sources.filter((source) => source.id.startsWith("M-"));
   const transcriptSources = sources.filter((source) => source.id.startsWith("T-"));
-  const sourceContext = [
-    manuscriptSources.length > 0
-      ? `WRITTEN MANUSCRIPT EXCERPTS:\n${manuscriptSources.map((source) => `[${source.id}] ${source.label}\n${source.excerpt}`).join("\n\n---\n\n")}`
-      : "NO WRITTEN MANUSCRIPT TEXT WAS PROVIDED.",
-    transcriptSources.length > 0
-      ? `TRANSCRIPT EXCERPTS:\n${transcriptSources.map((source) => `[${source.id}] ${source.label}\n${source.excerpt}`).join("\n\n---\n\n")}`
-      : "NO TRANSCRIPT EXCERPTS MATCHED.",
-  ].join("\n\n==========\n\n");
   const chapterContext = input.book.chapters.map((chapter) => `${chapter.number}. ${chapter.title}`).join("\n");
   const history = (input.history ?? []).map((message) => `${message.role.toUpperCase()}: ${message.content}`).join("\n");
   const writingStyle = NEXUSLM_WRITING_STYLES[input.writingStyle];
@@ -196,19 +270,31 @@ export async function POST(request: NextRequest) {
     ? "This is Plan Whole Book mode. Use every uploaded transcript slot represented in the transcript context, synthesize the author's complete teaching arc, and produce a practical whole-book plan before drafting. Include the book promise, core thesis, target reader, chapter sequence, each chapter's purpose and source-grounded teaching beats, progression between chapters, uncovered material, and the recommended writing order. Distinguish supported source material from decisions or gaps that require the author's input. Do not draft full chapters."
     : input.mode === "socratic"
       ? "This is Socratic Vetting mode. Produce a detailed, actionable vetting brief with these headings: Diagnosis; Evidence and assumptions; Proposed fixes; Chapter implementation plan; Questions requiring the author's decision. For every proposed fix, explain the problem it solves and the exact change a new chapter should make. Do not stop at questions or general criticism."
-      : "This is Ask mode: answer directly and with the same depth and finish as a general-purpose writing assistant. For requests to write, draft, compose, or rewrite, provide the finished reader-facing work rather than advice about how to write it. Use source evidence as a guardrail, not as a reason to become terse. Distinguish evidence from interpretation when it matters, but do not expose internal source labels or add citations unless the user requests them.";
+      : "This is Ask mode: answer directly, use the user's requested format, and distinguish manuscript evidence from interpretation when it matters.";
 
   try {
+    const manuscriptContext = await buildManuscriptContext(input.manuscript, input.query);
+    const exactManuscriptSources = sources
+      .filter((source) => source.id.startsWith("M-"))
+      .slice(0, 12);
+    const exactManuscriptContext = exactManuscriptSources.length > 0
+      ? `EXACT MANUSCRIPT PASSAGES FOR DETAIL:\n${exactManuscriptSources.map((source) => `${source.label}\n${source.excerpt}`).join("\n\n---\n\n")}`
+      : "";
+    const transcriptContext = transcriptSources.length > 0
+      ? `TRANSCRIPT EXCERPTS:\n${transcriptSources.map((source) => `${source.label}\n${source.excerpt}`).join("\n\n---\n\n")}`
+      : "NO TRANSCRIPT EXCERPTS MATCHED.";
+    const sourceContext = [manuscriptContext, exactManuscriptContext, transcriptContext]
+      .filter(Boolean)
+      .join("\n\n==========\n\n");
     const temperature = input.llmTemperature ?? (input.agent === "nexusR1" ? 1 : input.mode === "ask" ? 0.2 : undefined);
     const generationRequest = {
       ...(temperature === undefined ? {} : { temperature }),
       maxRetries: 2,
       maxTokens: input.mode === "socratic" || input.mode === "plan" ? responseLength.chatSocraticTokens : responseLength.chatAskTokens,
-      system: `You are NexusLM, a source-grounded general-purpose writing partner for a book workspace. The selected agent is ${input.agent}. The active persona is ${input.persona}.
+      system: `You are NexusLM, a capable general-purpose writing and reasoning partner inside a personal book workspace. The selected agent is ${input.agent}. The active persona is ${input.persona}.
 The book is "${input.book.title}".
 The requested presentation form is ${writingStyle.label}: ${writingStyle.instruction}
-    The written manuscript is the primary source for existing-book questions. Use the supplied WRITTEN MANUSCRIPT EXCERPTS to assess what the book actually says, demonstrates, defines, and sequences. Use transcript excerpts as supporting provenance for the author's underlying teaching. For creative writing, drafting, and rewriting requests, use the sources as factual and voice guardrails while exercising strong editorial judgment about structure, transitions, examples, imagery, emphasis, and reader experience. Deliver polished finished prose instead of a plan or explanation unless the user explicitly asks for a plan.
-    Use the sources for grounding, but never expose source IDs, slot labels, bracketed retrieval markers, or internal routing labels in the final answer. If the supplied excerpts do not support a factual claim, say so. Do not fabricate quotations.
+    Use the complete manuscript coverage as the primary source for the user's request. You may analyze, explain, plan, write, rewrite, typeset, format, or otherwise transform the manuscript when asked. For writing requests, produce the finished reader-facing work rather than advice about how to do it. Preserve the author's facts, meaning, voice, order, and exact wording when the request requires fidelity. Use transcript material as supporting provenance. Do not mention internal context assembly, source labels, retrieval, excerpts, or missing attachments when manuscript context is present. State uncertainty only when the supplied material truly does not support the requested action.
   ${modeInstruction}
   ${EM_DASH_MINIMIZATION_RULES}
   ${NEXUSLM_SCRIPTURE_FORMATTING_RULES}`,
@@ -224,7 +310,7 @@ CHAPTER OUTLINE:\n${chapterContext || "No chapter outline available."}\n\nTRANSC
     });
     if (!text.trim()) throw new Error("The selected model returned an empty response.");
 
-    const answer = await finalizeNexusLMScripture(sanitizeNexusLMText(text), input.query);
+    const answer = normalizeScriptureBlockquotes(sanitizeNexusLMText(text));
     if (!answer) {
       return NextResponse.json({ error: "The reasoning model returned no final vetting response. Please try again." }, { status: 502 });
     }
