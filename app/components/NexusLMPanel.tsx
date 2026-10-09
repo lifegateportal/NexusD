@@ -971,7 +971,10 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
       return;
     }
     const baseManifest = manifest ?? createEmptyManifest(conversationKey, pipelineSnapshot);
-    const number = baseManifest.chapters.reduce((highest, chapter) => Math.max(highest, chapter.number), 0) + 1;
+    const number = Math.max(
+      baseManifest.chapters.reduce((highest, chapter) => Math.max(highest, chapter.number), 0),
+      manuscript.chapters.reduce((highest, chapter) => Math.max(highest, chapter.number), 0),
+    ) + 1;
     const parsedResponse = parseResponseSections(trimmed, number);
     const sections = parsedResponse.sections.map((section, index) => {
       const wordCount = section.body.split(/\s+/).filter(Boolean).length;
@@ -1008,7 +1011,20 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
       setAttachmentError("The response could not be added to Ebook Studio because the chapter data was invalid.");
       return;
     }
-    onManifestChange(parsed.data, `Chapter ${number} moved into Ebook Studio.`);
+    const now = new Date().toISOString();
+    const manuscriptChapter: ManuscriptChapter = {
+      id: `nexuslm-chapter-${Date.now()}-${number}`,
+      number,
+      title: parsedResponse.title,
+      content: trimmed,
+      createdAt: now,
+      updatedAt: now,
+    };
+    setManuscript((current) => ({
+      ...current,
+      chapters: [...current.chapters, manuscriptChapter].sort((left, right) => left.number - right.number),
+    }));
+    onManifestChange(parsed.data, `Chapter ${number} added to Ebook Studio and the NexusLM manuscript panel.`);
     onOpenManuscript();
     setAttachmentError(null);
   }
