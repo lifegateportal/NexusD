@@ -337,6 +337,33 @@ function removeDuplicateChapterHeading(chapter: NexusLMBookHtmlChapter): string 
   return lines.join("\n").trim();
 }
 
+function prepareNexusLMTemplate(template: string): {
+  template: string;
+  chapterMarker: RegExp;
+} {
+  const chapterMarker = /\{\{\s*(?:CHAPTERS|MANUSCRIPT|BOOK_CONTENT|CONTENT)\s*\}\}|<!--\s*NEXUSLM:(?:CHAPTERS|MANUSCRIPT|BOOK_CONTENT|CONTENT)\s*-->|<!--\s*(?:CHAPTERS|MANUSCRIPT|BOOK[\s-]*CONTENT)\s*(?:HERE)?\s*-->/i;
+  if (chapterMarker.test(template)) return { template, chapterMarker };
+
+  const namedContainer = /(<(?:main|section|article|div)\b[^>]*(?:id|class|data-[\w-]+)\s*=\s*["'][^"']*(?:chapters|manuscript|book[\s-]*content|content)[^"']*["'][^>]*>)(\s*)(<\/(?:main|section|article|div)>)/i;
+  const withNamedContainer = template.replace(namedContainer, "$1{{CHAPTERS}}$3");
+  if (withNamedContainer !== template) return { template: withNamedContainer, chapterMarker };
+
+  const emptyMain = /(<main\b[^>]*>)(\s*)(<\/main>)/i;
+  const withEmptyMain = template.replace(emptyMain, "$1{{CHAPTERS}}$3");
+  if (withEmptyMain !== template) return { template: withEmptyMain, chapterMarker };
+
+  const chapterBlocks = /<(article|section|div)\b[^>]*(?:id|class)\s*=\s*["'][^"']*(?:chapter|chapters)[^"']*["'][^>]*>[\s\S]*?<\/\1>/gi;
+  let insertedChapterMarker = false;
+  const withSampleChaptersRemoved = template.replace(chapterBlocks, () => {
+    if (insertedChapterMarker) return "";
+    insertedChapterMarker = true;
+    return "{{CHAPTERS}}";
+  });
+  if (insertedChapterMarker) return { template: withSampleChaptersRemoved, chapterMarker };
+
+  throw new Error("The HTML design needs a chapter insertion point: add {{CHAPTERS}} inside the book content area.");
+}
+
 export function nexusLMBookToHtml(input: NexusLMBookHtmlInput): string {
   const chapters = [...input.chapters].sort((a, b) => a.number - b.number);
   if (chapters.length === 0) throw new Error("At least one saved chapter is required to compile the book.");
@@ -374,14 +401,13 @@ export function nexusLMBookToHtml(input: NexusLMBookHtmlInput): string {
 
   const customTemplate = input.templateHtml?.trim();
   if (customTemplate) {
-    const chapterMarker = /\{\{\s*CHAPTERS\s*\}\}|<!--\s*NEXUSLM:CHAPTERS\s*-->/i;
-    if (!chapterMarker.test(customTemplate)) {
-      throw new Error("The custom HTML design must include {{CHAPTERS}} where saved chapters should be inserted.");
-    }
-    const hasFrontMatterMarker = /\{\{\s*(?:FRONT_MATTER|PREFACE|INTRODUCTION)\s*\}\}/i.test(customTemplate);
-    const hasBackMatterMarker = /\{\{\s*(?:BACK_MATTER|CONCLUSION|ABOUT_AUTHOR|RESOURCES)\s*\}\}/i.test(customTemplate);
+    const preparedTemplate = prepareNexusLMTemplate(customTemplate);
+    const chapterMarker = preparedTemplate.chapterMarker;
+    const template = preparedTemplate.template;
+    const hasFrontMatterMarker = /\{\{\s*(?:FRONT_MATTER|PREFACE|INTRODUCTION)\s*\}\}/i.test(template);
+    const hasBackMatterMarker = /\{\{\s*(?:BACK_MATTER|CONCLUSION|ABOUT_AUTHOR|RESOURCES)\s*\}\}/i.test(template);
     const chaptersWithFallbackMatter = `${hasFrontMatterMarker ? "" : frontMatterMarkup}${chapterMarkup}${hasBackMatterMarker ? "" : backMatterMarkup}`;
-    return customTemplate
+    return template
       .replace(/\{\{\s*BOOK_TITLE\s*\}\}/gi, title)
       .replace(/\{\{\s*BOOK_SUBTITLE\s*\}\}/gi, subtitle.replace(/^<p class="book-subtitle">|<\/p>$/g, ""))
       .replace(/\{\{\s*AUTHOR_NAME\s*\}\}/gi, author.replace(/^<p class="book-author">|<\/p>$/g, ""))

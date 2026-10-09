@@ -89,19 +89,18 @@ function isGeneratedChapter(message: NexusLMCompileMessage, previousUserMessage:
 export function parseNexusLMCompileInstruction(instruction: string): NexusLMCompileRequest | null {
   const text = instruction.trim();
   if (!text) return null;
-  const isCompileRequest = /\b(?:compile|assemble|reassemble|build|put\s+together)\b[\s\S]{0,120}\b(?:book|manuscript|chapter|html|ebook)\b/i.test(text)
-    || /\b(?:compile|assemble|reassemble|build)\s+(?:from|using)\b/i.test(text);
+  const isCompileRequest = /\b(?:compile|assemble|reassemble|build|put\s+together)\b/i.test(text)
+    && (/\b(?:book|manuscript|chapters?|html|ebook|template|design|layout)\b/i.test(text)
+      || /<!doctype\s+html|<html\b/i.test(text));
   if (!isCompileRequest) return null;
 
-  const fromEbookStudio = /\bebook\s*studio\b|\b(?:saved|complete|full)\s+manuscript\b|\bmanuscript\s+(?:workspace|chapters?)\b/i.test(text);
   const fromChat = /\b(?:generated\s+chapters?|chapters?)\b[\s\S]{0,80}\b(?:chat|chatbox|conversation)\b|\b(?:chat|chatbox|conversation)\b[\s\S]{0,80}\b(?:generated\s+chapters?|chapters?)\b|\bfrom\s+(?:this|the)\s+(?:chat|chatbox|conversation)\b/i.test(text);
-  const source = fromEbookStudio === fromChat
-    ? null
-    : fromEbookStudio ? "ebook-studio" : "chat";
+  const fromEbookStudio = /\bebook\s*studio\b|\bebook\s+manuscript\b|\b(?:saved|complete|full)\s+manuscript\b|\bmanuscript\s+(?:workspace|chapters?)\b|\b(?:compile|assemble|build)\s+(?:my\s+)?(?:full\s+)?book\b/i.test(text);
+  const source = fromChat ? "chat" : fromEbookStudio ? "ebook-studio" : null;
 
   return {
     source,
-    useLatestDesign: /\b(?:latest|current|new|this)\b[\s\S]{0,40}\b(?:design|layout|template|style|html)\b|\b(?:redesign|layout|template|style)\b/i.test(text),
+    useLatestDesign: /\b(?:generated|latest|current|new|this|custom|saved)\b[\s\S]{0,50}\b(?:design|layout|template|style|html)\b|\b(?:redesign|layout|template|style)\b|\btemplate\s+i\s+(?:generated|created|pasted)\b/i.test(text),
   };
 }
 

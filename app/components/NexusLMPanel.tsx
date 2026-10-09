@@ -1251,34 +1251,55 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
     }
   }
 
+  function isReusableHtmlDesign(content: string): boolean {
+    return /<style\b/i.test(content)
+      && (
+        /\{\{\s*(?:CHAPTERS|MANUSCRIPT|BOOK_CONTENT|CONTENT)\s*\}\}|<!--\s*(?:NEXUSLM:)?(?:CHAPTERS|MANUSCRIPT|BOOK[\s-]*CONTENT)\s*(?:HERE)?\s*-->/i.test(content)
+        || /<main\b[^>]*>\s*<\/main>/i.test(content)
+        || /<(?:section|article|div)\b[^>]*(?:id|class|data-[\w-]+)\s*=\s*["'][^"']*(?:chapters|manuscript|book[\s-]*content|content)[^"']*["'][^>]*>\s*<\/(?:section|article|div)>/i.test(content)
+        || /<(?:section|article|div)\b[^>]*(?:id|class)\s*=\s*["'][^"']*(?:chapter|chapters)[^"']*["']/i.test(content)
+      );
+  }
+
   function latestReusableHtmlDesign(): string | undefined {
     return messages
       .slice()
       .reverse()
-      .map((message) => message.role === "assistant" ? extractGeneratedHtml(message.content) : null)
-      .find((candidate): candidate is string => Boolean(candidate && /\{\{\s*CHAPTERS\s*\}\}|<!--\s*NEXUSLM:CHAPTERS\s*-->/i.test(candidate)));
+      .map((message) => extractGeneratedHtml(message.content))
+      .find((candidate): candidate is string => Boolean(candidate && isReusableHtmlDesign(candidate)));
   }
 
-  function compileBookHtml(source: NexusLMCompileSource, useLatestDesign = false): { title: string; chapterCount: number } {
-    const metadata = {
-      title: manuscript.title,
-      subtitle: manuscript.subtitle,
-      authorName: manuscript.authorName,
-    };
+  function compileBookHtml(
+    source: NexusLMCompileSource,
+    useLatestDesign = false,
+    requestedDesign?: string,
+  ): { title: string; chapterCount: number } {
     const book = source === "ebook-studio"
       ? (() => {
           if (!manifest) throw new Error("Ebook Studio does not have a loaded manuscript yet.");
           return ebookStudioManifestToBookInput(manifest);
         })()
-      : chatMessagesToBookInput(messages, metadata);
+      : chatMessagesToBookInput(messages, {
+          title: manuscript.title,
+          subtitle: manuscript.subtitle,
+          authorName: manuscript.authorName,
+        });
     if (book.chapters.length === 0) {
       throw new Error(source === "ebook-studio"
         ? "Ebook Studio has no completed chapters to compile."
         : "No generated chapters were found in this chat. Draft or add a chapter response first.");
     }
 
-    const latestDesign = useLatestDesign ? latestReusableHtmlDesign() : undefined;
-    const templateHtml = latestDesign ?? manuscript.htmlTemplate;
+    const metadata = source === "ebook-studio"
+      ? { title: book.title, subtitle: book.subtitle ?? "", authorName: book.authorName ?? "NexusLM" }
+      : { title: manuscript.title, subtitle: manuscript.subtitle, authorName: manuscript.authorName };
+    const explicitDesign = requestedDesign && isReusableHtmlDesign(requestedDesign) ? requestedDesign : undefined;
+    const latestDesign = useLatestDesign
+      ? (generatedPreview && attachmentKind(generatedPreview) === "html" && isReusableHtmlDesign(generatedPreview.content)
+        ? generatedPreview.content
+        : latestReusableHtmlDesign())
+      : undefined;
+    const templateHtml = explicitDesign ?? latestDesign ?? manuscript.htmlTemplate;
     const html = nexusLMBookToHtml({
       ...book,
       title: metadata.title.trim() || book.title,
@@ -1286,8 +1307,8 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
       authorName: metadata.authorName || book.authorName,
       templateHtml,
     });
-    if (latestDesign && latestDesign !== manuscript.htmlTemplate) {
-      setManuscript((current) => ({ ...current, htmlTemplate: latestDesign }));
+    if (templateHtml && templateHtml !== manuscript.htmlTemplate) {
+      setManuscript((current) => ({ ...current, htmlTemplate: templateHtml }));
     }
     const title = metadata.title.trim() || book.title || "NexusLM book";
     const preview: PreviewDocument = {
@@ -1516,7 +1537,11 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
 
     try {
       if (compileRequest?.source) {
-        const result = compileBookHtml(compileRequest.source, compileRequest.useLatestDesign);
+        const attachedDesign = requestAttachments
+          .find((attachment) => attachment.kind === "html" && isReusableHtmlDesign(attachment.content))
+          ?.content;
+        const requestedDesign = extractGeneratedHtml(instruction) ?? attachedDesign;
+        const result = compileBookHtml(compileRequest.source, compileRequest.useLatestDesign, requestedDesign ?? undefined);
         const sourceLabel = compileRequest.source === "ebook-studio"
           ? "the Ebook Studio manuscript"
           : "the generated chapters in this chat";
