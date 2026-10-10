@@ -178,7 +178,6 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
   const [undoManifest, setUndoManifest] = useState<EbookManifest | null>(null);
   const [memories, setMemories] = useState<NexusLMMemory[]>([]);
   const [memoryInput, setMemoryInput] = useState("");
-  const [showMemoryEditor, setShowMemoryEditor] = useState(false);
   const [selectedTranscriptLabel, setSelectedTranscriptLabel] = useState("");
   const [showMobileContext, setShowMobileContext] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -583,7 +582,7 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
                 {message.role === "assistant" ? renderAssistantContent(message.content, sources) : message.content}
               </div>
             ))}
-            {loading && <div className="text-sm text-slate-500">NexusLM is working...</div>}
+            {loading && <div className="text-sm text-slate-500">NexusLM is thinking...</div>}
           </div>
         </div>
 
@@ -628,16 +627,18 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
                 className="block w-full resize-none rounded-t-2xl border-0 bg-transparent px-4 py-3 text-base leading-6 text-slate-100 outline-none placeholder:text-slate-600 focus:ring-0"
               />
               <div className="flex items-center justify-between gap-3 px-3 pb-2">
+                <p className="hidden text-[11px] text-slate-500 sm:block">Enter to send · Shift+Enter for a new line</p>
                 <div className="flex min-h-12 items-center gap-1">
-                  <p className="hidden text-[11px] text-slate-500 sm:block">Enter to send · Shift+Enter for a new line</p>
-                  {loading ? (
-                    <button type="button" onClick={stopRequest} className="min-h-12 rounded-xl border border-rose-400/40 px-3 text-xs font-semibold text-rose-200">Stop</button>
-                  ) : (
-                    <>
-                      {undoManifest && <button type="button" onClick={undoLastManifestChange} className="min-h-12 rounded-xl border border-amber-400/40 px-3 text-xs font-semibold text-amber-200">Undo</button>}
-                      {lastRequestRef.current && <button type="button" onClick={retryLastRequest} className="min-h-12 rounded-xl border border-slate-700 px-3 text-xs font-semibold text-slate-300">Retry</button>}
-                      {messages.some((message) => message.role === "assistant" && message.content.trim()) && <button type="button" onClick={() => void copyLatestResponse()} className="min-h-12 rounded-xl border border-slate-700 px-3 text-xs font-semibold text-slate-300">Copy</button>}
-                    </>
+                  {loading && <button type="button" onClick={stopRequest} className="min-h-12 rounded-xl border border-rose-400/40 px-3 text-xs font-semibold text-rose-200">Stop</button>}
+                  {!loading && (undoManifest || lastRequestRef.current || messages.some((message) => message.role === "assistant" && message.content.trim())) && (
+                    <details className="relative">
+                      <summary className="flex min-h-12 cursor-pointer list-none items-center rounded-xl border border-slate-700 px-3 text-xs font-semibold text-slate-300 [&::-webkit-details-marker]:hidden">Actions</summary>
+                      <div className="absolute bottom-14 right-0 z-30 flex min-w-32 flex-col gap-1 rounded-xl border border-slate-700 bg-slate-900 p-2 shadow-2xl">
+                        {undoManifest && <button type="button" onClick={undoLastManifestChange} className="min-h-12 rounded-lg px-3 text-left text-xs font-semibold text-amber-200">Undo</button>}
+                        {lastRequestRef.current && <button type="button" onClick={retryLastRequest} className="min-h-12 rounded-lg px-3 text-left text-xs font-semibold text-slate-300">Retry</button>}
+                        {messages.some((message) => message.role === "assistant" && message.content.trim()) && <button type="button" onClick={() => void copyLatestResponse()} className="min-h-12 rounded-lg px-3 text-left text-xs font-semibold text-slate-300">Copy latest</button>}
+                      </div>
+                    </details>
                   )}
                 </div>
                 <button type="button" onClick={() => void send()} disabled={(!manifest && transcripts.length === 0) || !input.trim() || loading} className="min-h-12 rounded-xl bg-cyan-400 px-4 text-sm font-bold text-slate-950 disabled:cursor-not-allowed disabled:opacity-40">Send</button>
@@ -728,49 +729,38 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
           <p className="mt-1 text-xs text-slate-500">Transcript sources: <span className="text-slate-300">{transcripts.length}</span></p>
         </div>
 
-        <div className="mt-4 border-t border-slate-800 pt-4">
-          <button
-            type="button"
-            onClick={() => setShowMemoryEditor((current) => !current)}
-            className="flex min-h-12 w-full items-center justify-between text-left text-xs font-semibold uppercase tracking-widest text-slate-500"
-            aria-expanded={showMemoryEditor}
-          >
+        <details className="mt-4 border-t border-slate-800 pt-4">
+          <summary className="flex min-h-12 cursor-pointer list-none items-center justify-between text-xs font-semibold uppercase tracking-widest text-slate-500 [&::-webkit-details-marker]:hidden">
             <span>Project memory · {memories.length}</span>
-            <span className="text-cyan-300">{showMemoryEditor ? "Hide" : "Manage"}</span>
-          </button>
-          {showMemoryEditor && (
-            <div className="mt-2 space-y-2">
-              {memories.length > 0 && (
-                <ul className="space-y-1">
-                  {memories.map((memory) => (
-                    <li key={memory.id} className="flex items-start gap-2 rounded-lg bg-slate-900/70 px-2 py-2 text-xs leading-5 text-slate-300">
-                      <span className="min-w-0 flex-1">{memory.text}</span>
-                      <button type="button" onClick={() => void removeMemory(memory.id)} className="min-h-12 shrink-0 px-2 text-xs text-slate-500" aria-label={`Delete memory: ${memory.text}`}>Delete</button>
-                    </li>
-                  ))}
-                </ul>
-              )}
-              <div className="flex items-end gap-2">
-                <textarea
-                  value={memoryInput}
-                  onChange={(event) => setMemoryInput(event.target.value)}
-                  onKeyDown={(event) => {
-                    if (event.key === "Enter" && !event.shiftKey) {
-                      event.preventDefault();
-                      void addMemory();
-                    }
-                  }}
-                  rows={2}
-                  maxLength={1000}
-                  placeholder="Save a preference or book fact..."
-                  className="min-w-0 flex-1 resize-none rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-base text-slate-200 placeholder:text-slate-600"
-                />
-                <button type="button" onClick={() => void addMemory()} disabled={!memoryInput.trim()} className="min-h-12 rounded-lg bg-cyan-400 px-3 text-xs font-bold text-slate-950 disabled:opacity-40">Save</button>
+            <span className="text-cyan-300">Manage</span>
+          </summary>
+          <div className="mt-2 space-y-2">
+            {memories.map((memory) => (
+              <div key={memory.id} className="flex items-start gap-2 rounded-lg bg-slate-900/70 px-2 py-2 text-xs leading-5 text-slate-300">
+                <span className="min-w-0 flex-1">{memory.text}</span>
+                <button type="button" onClick={() => void removeMemory(memory.id)} className="min-h-12 shrink-0 px-2 text-xs text-slate-500" aria-label={`Delete memory: ${memory.text}`}>Delete</button>
               </div>
-              <p className="text-[11px] leading-4 text-slate-600">Only approved memories are sent with book questions.</p>
+            ))}
+            <div className="flex items-end gap-2">
+              <textarea
+                value={memoryInput}
+                onChange={(event) => setMemoryInput(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" && !event.shiftKey) {
+                    event.preventDefault();
+                    void addMemory();
+                  }
+                }}
+                rows={2}
+                maxLength={1000}
+                placeholder="Save a preference or book fact..."
+                className="min-w-0 flex-1 resize-none rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-base text-slate-200 placeholder:text-slate-600"
+              />
+              <button type="button" onClick={() => void addMemory()} disabled={!memoryInput.trim()} className="min-h-12 rounded-lg bg-cyan-400 px-3 text-xs font-bold text-slate-950 disabled:opacity-40">Save</button>
             </div>
-          )}
-        </div>
+            <p className="text-[11px] leading-4 text-slate-600">Only approved memories are sent with book questions.</p>
+          </div>
+        </details>
 
         <div className="mt-6 border-t border-slate-800 pt-5">
           <p className="text-xs font-semibold uppercase tracking-widest text-slate-500">Transcript slots</p>
