@@ -667,6 +667,7 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
   const [showHistory, setShowHistory] = useState(false);
   const [selectedTranscriptLabel, setSelectedTranscriptLabel] = useState("");
   const [showMobileContext, setShowMobileContext] = useState(false);
+  const [showScrollToLatest, setShowScrollToLatest] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const stickToBottomRef = useRef(true);
@@ -733,6 +734,8 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
   useEffect(() => {
     let cancelled = false;
     historyLoadedRef.current = false;
+    stickToBottomRef.current = true;
+    setShowScrollToLatest(false);
     void getNexusLMChat(activeConversationKey)
       .then((archive) => {
         if (cancelled) return;
@@ -756,6 +759,12 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
   }, [activeConversationKey]);
 
   useEffect(() => {
+    void listNexusLMChats(conversationKey)
+      .then(setChatHistory)
+      .catch((error) => setAttachmentError(`Chat history could not be listed: ${readableError(error)}`));
+  }, [conversationKey]);
+
+  useEffect(() => {
     if (!historyLoadedRef.current || !activeConversationKey) return;
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
     saveTimerRef.current = setTimeout(() => {
@@ -773,20 +782,20 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
   }, [activeConversationKey, attachments, conversationKey, manuscript, messages]);
 
   useEffect(() => {
-    void listNexusLMChats(conversationKey)
-      .then(setChatHistory)
-      .catch((error) => setAttachmentError(`Chat history could not be listed: ${readableError(error)}`));
-  }, [conversationKey]);
-
-  useEffect(() => {
     if (selectedTranscriptLabel && transcripts.some((transcript) => transcript.label === selectedTranscriptLabel)) return;
     setSelectedTranscriptLabel(transcripts[0]?.label ?? "");
   }, [selectedTranscriptLabel, transcripts]);
 
   useEffect(() => {
     if (!stickToBottomRef.current) return;
-    scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
-  }, [messages, loading]);
+    const frame = window.requestAnimationFrame(() => {
+      const element = scrollRef.current;
+      if (!element || !stickToBottomRef.current) return;
+      element.scrollTo({ top: element.scrollHeight });
+      setShowScrollToLatest(false);
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [activeConversationKey, messages, loading]);
 
   useEffect(() => {
     const textarea = inputRef.current;
@@ -800,7 +809,17 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
   function handleConversationScroll(): void {
     const element = scrollRef.current;
     if (!element) return;
-    stickToBottomRef.current = element.scrollHeight - element.scrollTop - element.clientHeight < 64;
+    const atLatest = element.scrollHeight - element.scrollTop - element.clientHeight < 64;
+    stickToBottomRef.current = atLatest;
+    setShowScrollToLatest(!atLatest && element.scrollHeight > element.clientHeight + 64);
+  }
+
+  function scrollToLatest(): void {
+    const element = scrollRef.current;
+    if (!element) return;
+    stickToBottomRef.current = true;
+    setShowScrollToLatest(false);
+    element.scrollTo({ top: element.scrollHeight, behavior: "smooth" });
   }
 
   async function startNewConversation(): Promise<void> {
@@ -1758,7 +1777,7 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
           ref={scrollRef}
           onScroll={handleConversationScroll}
           aria-busy={loading}
-          className="min-h-0 flex-1 overflow-y-auto px-4 py-5 lg:px-8 lg:py-7"
+          className="relative min-h-0 flex-1 overflow-y-auto px-4 py-5 lg:px-8 lg:py-7"
           style={{ WebkitOverflowScrolling: "touch" }}
         >
           <div className="mx-auto flex max-w-6xl flex-col gap-5">
@@ -1847,6 +1866,19 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
               </div>
             )}
           </div>
+          {showScrollToLatest && (
+            <button
+              type="button"
+              onClick={scrollToLatest}
+              className="absolute bottom-4 right-4 z-10 flex min-h-12 min-w-12 items-center justify-center rounded-full border border-cyan-400/50 bg-slate-900/95 text-cyan-200 shadow-lg backdrop-blur-sm lg:right-8"
+              aria-label="Jump to latest message"
+              title="Jump to latest message"
+            >
+              <svg viewBox="0 0 24 24" aria-hidden="true" className="h-5 w-5 fill-none stroke-current stroke-2">
+                <path d="M6 9l6 6 6-6" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+            </button>
+          )}
         </div>
 
         <div className="shrink-0 bg-shell-950 px-3 pb-[max(env(safe-area-inset-bottom),0.75rem)] pt-2 lg:px-8 lg:pb-5 lg:pt-3">
