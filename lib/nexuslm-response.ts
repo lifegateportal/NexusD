@@ -61,9 +61,11 @@ export const NEXUSLM_RESPONSE_LENGTHS: Record<NexusLMResponseLength, {
 const INTERNAL_SOURCE_REFERENCE = /\[(?:SOURCE\s*:\s*[^\]]+|(?:M|T)(?:-[A-Za-z0-9_.]+)+|(?:[A-Z]+-)?Slot-[^\]]+|NON-TEACHING-SLOT-[^\]]+)\]/gi;
 const INTERNAL_SLOT_TOKEN = /\b(?:T-)?Slot-\d+\b/gi;
 
-export function sanitizeNexusLMText(value: string): string {
-  return value
-    .replace(INTERNAL_SOURCE_REFERENCE, "")
+export function sanitizeNexusLMText(value: string, options: { preserveSourceReferences?: boolean } = {}): string {
+  const sourceSafeValue = options.preserveSourceReferences
+    ? value
+    : value.replace(INTERNAL_SOURCE_REFERENCE, "");
+  return sourceSafeValue
     .replace(INTERNAL_SLOT_TOKEN, "")
     .replace(/\[source-id\]/gi, "")
     .replace(/\[([^\]]+)\]\([^)]*\)/g, "$1")

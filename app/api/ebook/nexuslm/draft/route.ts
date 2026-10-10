@@ -4,8 +4,7 @@ import { z } from "zod";
 import { deepSeekModel, deepSeekReasonerModel } from "@/lib/ai-providers";
 import { EM_DASH_MINIMIZATION_RULES } from "@/lib/editorial-style-bible";
 import { ChapterDraftSchema } from "@/lib/schemas/ebook";
-import { NEXUSLM_SCRIPTURE_FORMATTING_RULES } from "@/lib/scripture-formatter";
-import { finalizeNexusLMScripture } from "@/lib/scripture-verse";
+import { normalizeScriptureBlockquotes, NEXUSLM_SCRIPTURE_FORMATTING_RULES } from "@/lib/scripture-formatter";
 import { NexusLMWritingStyleSchema, NEXUSLM_WRITING_STYLES } from "@/lib/nexuslm-writing-styles";
 import { NexusLMAgentSchema } from "@/lib/nexuslm-agents";
 import { NexusLMResponseLengthSchema, NEXUSLM_RESPONSE_LENGTHS, sanitizeNexusLMText } from "@/lib/nexuslm-response";
@@ -28,6 +27,7 @@ const RequestSchema = z.object({
   responseLength: NexusLMResponseLengthSchema.default("default"),
   llmTemperature: z.number().min(0).max(1).optional(),
   transcriptScope: z.enum(["all", "selected"]).default("all"),
+  memories: z.array(z.string().trim().min(1).max(1000)).max(40).optional(),
 }).superRefine((value, context) => {
   const totalCharacters = value.transcripts.reduce((sum, transcript) => sum + transcript.text.length, 0);
   if (totalCharacters > 1000000) context.addIssue({ code: z.ZodIssueCode.custom, message: "Transcript context is too large." });
@@ -55,21 +55,24 @@ export async function POST(request: NextRequest) {
   const transcriptScopeInstruction = input.transcriptScope === "selected"
     ? "Use only the selected transcript slot supplied below as source material for this chapter."
     : "Use all transcript slots supplied below as source material, choosing the strongest material for this chapter.";
+  const memoryContext = input.memories?.length
+    ? `APPROVED PROJECT MEMORY:\n${input.memories.map((memory, index) => `M${index + 1}. ${memory}`).join("\n")}`
+    : "NO APPROVED PROJECT MEMORY.";
 
   try {
     const system = `Return only one valid JSON object matching the ChapterDraft schema. Do not wrap it in markdown fences and do not include reasoning outside the JSON object.
 You are NexusLM, a professional book ghostwriter. Selected agent: ${input.agent}. Persona: ${input.persona}.
 Presentation form: ${writingStyle.label}. ${writingStyle.instruction}
-The JSON wrapper is transport only. Inside each section body, prioritize the same finished, immersive, reader-facing quality as a strong general-purpose writing assistant. Develop the chapter fully with specific transitions, varied rhythm, concrete supported detail, meaningful emphasis, and a satisfying ending. Do not compress the chapter into notes, generic advice, transcript commentary, or a thin summary merely because the response must be valid JSON.
   ${transcriptScopeInstruction} The source material constrains factual, theological, biographical, and scriptural truth, but it does not constrain your creative judgment about the chapter's title, introduction, section architecture, body prose, transitions, emphasis, or ending. Do not treat an existing outline, manuscript chapter, chapter premise, key point, or prior wording as mandatory. Choose the strongest material and shape a coherent chapter freely.
   You may create original framing, synthesis, transitions, imagery, rhetorical movement, and reader-facing introduction when these clarify and develop ideas supported by the sources. Do not invent concrete facts, quotations, scripture references, testimonies, doctrine, or claims that the sources do not support.
   Write polished reader-facing book prose and remove live-audience language. Trust your editorial judgment about what the chapter needs instead of mechanically preserving transcript order or filling a predetermined premise.
+  Honor the approved project memory below when it applies, without treating it as a substitute for source evidence.
   CHAPTER OPENING PLACEMENT: Leave the ChapterDraft intro field empty. Do not write a separate premise, overview, thesis summary, or chapter-preview block before the body. The actual chapter introduction belongs in the opening paragraphs of Section 1, written as finished reader-facing prose that enters the chapter's material directly. Section 1 must begin with the chapter body, not planning language or a summary of what the chapter will discuss.
   SERIES-SERMON TO BOOK TRANSFORMATION: Sermon transcripts may recap earlier messages. Treat that recap as source context, not as mandatory chapter-opening material. Do not open with "last week," "as we saw," "continuing this series," or a replay of an earlier chapter. If the recap helps orient the reader, compress it into the shortest useful bridge and pivot quickly to this chapter's new movement. Write for a reader who may not have attended the sermon, and do not make the book repeat live-series catch-up.
   ${EM_DASH_MINIMIZATION_RULES}
 ${NEXUSLM_SCRIPTURE_FORMATTING_RULES}
 Return a complete ChapterDraft object. The sections must contain readable prose in the body field, not planning notes. ${responseLength.instruction}
-Do not expose source IDs, slot labels, retrieval markers, or internal routing labels in any field. Follow the user's requested Scripture presentation exactly.`;
+Do not expose source IDs, slot labels, retrieval markers, or internal routing labels in any field. Use standalone blockquotes for Scripture exactly as required above.`;
     const prompt = `RESPONSE LENGTH: ${responseLength.label}. ${responseLength.instruction}
 
 BOOK: ${input.book.title}
@@ -86,6 +89,8 @@ Treat this as optional background only. You may substantially reshape or replace
 TRANSCRIPT SOURCES:
 ${transcriptContext || "No transcript sources were uploaded. State that source material is insufficient in the chapter draft."}
 
+${memoryContext}
+
 Return JSON only.`;
 
     const { object } = await generateObject({
@@ -99,7 +104,7 @@ Return JSON only.`;
       prompt,
     });
     let sections = await Promise.all(object.sections.map(async (section, index) => {
-      const body = await finalizeNexusLMScripture(sanitizeNexusLMText(section.body.trim()), input.instruction);
+      const body = normalizeScriptureBlockquotes(sanitizeNexusLMText(section.body.trim()));
       return {
         chapterNumber: input.chapterNumber,
         sectionNumber: section.sectionNumber || index + 1,
@@ -112,20 +117,17 @@ Return JSON only.`;
     if (sections.length === 0 || sections.every((section) => !section.body.trim())) {
       throw new Error("The selected model returned no usable chapter sections.");
     }
-    const formatText = (value: string) => finalizeNexusLMScripture(
-      sanitizeNexusLMText(value),
-      input.instruction,
-    );
+    const normalizeText = (value: string) => normalizeScriptureBlockquotes(sanitizeNexusLMText(value));
     const normalizedCandidate = {
       ...object,
       number: input.chapterNumber,
       title: sanitizeNexusLMText(object.title.trim()) || `Chapter ${input.chapterNumber}`,
       intro: "",
-      epigraph: await formatText(object.epigraph.trim()),
+      epigraph: normalizeText(object.epigraph.trim()),
       sections,
-      forwardQuestion: await formatText(object.forwardQuestion.trim()),
-      keyTakeaways: await Promise.all(object.keyTakeaways.map((value) => formatText(String(value)))),
-      reflectionQuestions: await Promise.all(object.reflectionQuestions.map((value) => formatText(String(value)))),
+      forwardQuestion: normalizeText(object.forwardQuestion.trim()),
+      keyTakeaways: object.keyTakeaways.map((value) => normalizeText(String(value))),
+      reflectionQuestions: object.reflectionQuestions.map((value) => normalizeText(String(value))),
       totalWordCount: sections.reduce((sum, section) => sum + section.wordCount, 0),
       status: "complete" as const,
     };

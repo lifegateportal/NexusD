@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { generateObject } from "ai";
 import { z } from "zod";
+import { createHash } from "crypto";
 import { deepSeekModel, deepSeekReasonerModel } from "@/lib/ai-providers";
 import {
   EbookManifestSchema,
@@ -19,7 +20,6 @@ import {
 } from "@/lib/editorial-style-bible";
 import { SCRIPTURE_FORMATTING_RULES } from "@/lib/scripture-formatter";
 import { NexusLMResponseLengthSchema, NEXUSLM_RESPONSE_LENGTHS } from "@/lib/nexuslm-response";
-import { computeEbookManifestVersion } from "@/lib/ebook-manifest-version";
 
 export const runtime = "nodejs";
 export const maxDuration = 120;
@@ -42,6 +42,7 @@ const RequestSchema = z.object({
   llmTemperature: z.number().min(0).max(1).optional(),
   transcriptSources: z.array(TranscriptSourceSchema).max(20).optional(),
   selectedTranscriptLabel: z.string().min(1).max(200).optional(),
+  memories: z.array(z.string().trim().min(1).max(1000)).max(40).optional(),
   dryRun: z.boolean().optional(),
   manifestVersion: z.string().optional(),
   pipeline: z.object({
@@ -155,13 +156,22 @@ export async function POST(req: NextRequest) {
   }
 
   const { manifest, instruction, history, pipeline } = input;
+  const memoryContext = input.memories?.length
+    ? input.memories.map((memory, index) => `M${index + 1}. ${memory}`).join("\n")
+    : "None";
   const responseLength = NEXUSLM_RESPONSE_LENGTHS[input.responseLength];
   const dryRun       = input.dryRun ?? false;
 
   // ── Optimistic locking ───────────────────────────────────────────────
   // Hash the mutable content fields so concurrent edits from multiple tabs
   // are detected and rejected with 409 instead of silently stomping each other.
-  const currentVersion = computeEbookManifestVersion(manifest);
+  function computeManifestVersion(m: typeof manifest): string {
+    return createHash("sha256")
+      .update(JSON.stringify({ bookTitle: m.bookTitle, subtitle: m.subtitle, authorName: m.authorName, chapters: m.chapters, frontMatter: m.frontMatter, backMatter: m.backMatter }))
+      .digest("hex")
+      .slice(0, 12);
+  }
+  const currentVersion = computeManifestVersion(manifest);
   if (input.manifestVersion && input.manifestVersion !== currentVersion) {
     return NextResponse.json(
       { error: "Conflict: the book has been modified since you last loaded it. Please reload before editing.", code: "VERSION_CONFLICT" },
@@ -386,6 +396,10 @@ BOOK-SAFETY RULE — ALWAYS APPLY
 - Remove or avoid church-room chatter that does not belong in a book: greetings to congregation, thanking attendees/teams, service-flow remarks, crowd-response prompts, and stage directions.
 - Keep only reader-appropriate teaching prose.
 
+APPROVED PROJECT MEMORY
+${memoryContext}
+Honor these approved preferences and project facts when relevant, but do not treat them as a substitute for manuscript or transcript evidence.
+
 ════════════════════════════════════════════
 NATURAL LANGUAGE MAPPINGS — interpret these colloquial phrases correctly
 ════════════════════════════════════════════
@@ -532,6 +546,8 @@ ${isChapterWideEdit ? "- This is a chapter-wide edit. For each explicitly named 
           transcriptEvidence,
         ].join("\n") : "NO TRANSCRIPT SOURCE EVIDENCE WAS PROVIDED.",
         pipelineSummary ? ["CURRENT PIPELINE STATE:", JSON.stringify(pipelineSummary, null, 2)].join("\n") : "",
+        "APPROVED PROJECT MEMORY:",
+        memoryContext,
         "",
         ...(history && history.length > 0
           ? [
@@ -544,6 +560,20 @@ ${isChapterWideEdit ? "- This is a chapter-wide edit. For each explicitly named 
         instruction,
       ].join("\n"),
     });
+
+    // ── Dry-run: return the AI patch without applying it ────────────────────────
+    // The client can diff this against the current manifest and show a preview
+    // before the user confirms the change.
+    if (dryRun) {
+      return NextResponse.json({
+        dryRun: true,
+        patch:  object,
+        summary: object.summary,
+        confidence: object.confidence,
+        ...(object.clarificationNeeded && { clarificationNeeded: object.clarificationNeeded }),
+        manifestVersion: currentVersion,
+      }, { status: 200 });
+    }
 
     // ── Confidence gate ───────────────────────────────────────────────────
     // When the AI flags low confidence and provides a clarifying question,
@@ -834,9 +864,7 @@ ${isChapterWideEdit ? "- This is a chapter-wide edit. For each explicitly named 
     const normalizedManifest = {
       ...harmonized,
       totalWordCount: harmonized.chapters.reduce((sum, chapter) => sum + chapter.totalWordCount, 0),
-      ...(dryRun
-        ? (existingLog.length > 0 ? { changeLog: existingLog } : {})
-        : { changeLog: [...existingLog, changeLogEntry].slice(-50) }),
+      changeLog: [...existingLog, changeLogEntry].slice(-50),
     };
 
     const validated = EbookManifestSchema.safeParse(normalizedManifest);
@@ -848,12 +876,10 @@ ${isChapterWideEdit ? "- This is a chapter-wide edit. For each explicitly named 
     }
 
     return NextResponse.json({
-      dryRun,
       manifest:        validated.data,
-      patch:            dryRun ? object : undefined,
       summary:         object.summary,
       confidence:      object.confidence,
-      manifestVersion: dryRun ? currentVersion : computeEbookManifestVersion(validated.data),
+      manifestVersion: computeManifestVersion(validated.data!),
       ...(object.clarificationNeeded && { clarificationNeeded: object.clarificationNeeded }),
       ...(object.libraryPatch !== undefined && { libraryPatch: object.libraryPatch }),
     }, { status: 200 });
