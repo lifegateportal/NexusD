@@ -21,7 +21,6 @@ import { NEXUSLM_WRITING_STYLES, type NexusLMWritingStyle } from "@/lib/nexuslm-
 import { NEXUSLM_AGENTS, type NexusLMAgent } from "@/lib/nexuslm-agents";
 import { isNexusLMLongFormRequest, NEXUSLM_RESPONSE_LENGTHS, sanitizeNexusLMText, type NexusLMResponseLength } from "@/lib/nexuslm-response";
 import { safeNexusLMFilename, type NexusLMArtifactFormat } from "@/lib/nexuslm-artifacts";
-import { deleteNexusLMMemory, listNexusLMMemories, saveNexusLMMemory, type NexusLMMemory } from "@/lib/nexuslm-memory-store";
 import {
   buildManifestChangeEntries,
   clearEbookUndoSnapshot,
@@ -49,11 +48,6 @@ type Message = {
   attachments?: Array<{ id: string; name: string }>;
 };
 type Source = { id: string; label: string; excerpt: string };
-type StreamEvent =
-  | { type: "sources"; sources: Source[] }
-  | { type: "text"; text: string }
-  | { type: "done" }
-  | { type: "error"; error: string };
 type ChatAttachment = NexusLMChatAttachment;
 type PreviewDocument = Pick<ChatAttachment, "name" | "content" | "kind" | "previewDataUrl">;
 type ArtifactDownloadFormat = NexusLMArtifactFormat;
@@ -109,11 +103,7 @@ type BookAuditReport = {
 };
 
 function cleanAssistantLine(line: string): string {
-  return sanitizeNexusLMText(line, { preserveSourceReferences: true });
-}
-
-function sourceAnchorId(sourceId: string): string {
-  return `source-${sourceId.replace(/[^a-z0-9_-]/gi, "-")}`;
+  return sanitizeNexusLMText(line);
 }
 
 function readableError(error: unknown): string {
@@ -434,16 +424,7 @@ function renderInlineMarkdown(text: string) {
   });
 }
 
-function renderSourceReferences(text: string, sources: Source[], keyPrefix: string): ReactNode {
-  return text.split(/(\[[^\]]+\])/g).map((part, index) => {
-    const sourceId = part.match(/^\[([^\]]+)\]$/)?.[1];
-    return sourceId && sources.some((source) => source.id === sourceId)
-      ? <a key={`${keyPrefix}-${index}`} href={`#${sourceAnchorId(sourceId)}`} className="font-semibold text-cyan-300 underline decoration-cyan-400/40 underline-offset-2">{part}</a>
-      : part;
-  });
-}
-
-function renderAssistantContent(content: string, markdown = false, onPreviewHtml?: (content: string) => void, sources: Source[] = []) {
+function renderAssistantContent(content: string, markdown = false, onPreviewHtml?: (content: string) => void) {
   const lines = content.split("\n");
   const rendered: ReactNode[] = [];
   let codeLines: string[] = [];
@@ -500,56 +481,27 @@ function renderAssistantContent(content: string, markdown = false, onPreviewHtml
     const heading = raw.match(/^#{1,3}\s+(.+)$/);
     if (heading) {
       const text = markdown ? heading[1] : cleanAssistantLine(heading[1]);
-      rendered.push(text ? <h3 key={`heading-${index}`} className="mt-5 text-base font-semibold tracking-tight text-slate-100 first:mt-0">{markdown ? renderInlineMarkdown(text) : renderSourceReferences(text, sources, `heading-${index}`)}</h3> : null);
+      rendered.push(text ? <h3 key={`heading-${index}`} className="mt-5 text-base font-semibold tracking-tight text-slate-100 first:mt-0">{markdown ? renderInlineMarkdown(text) : text}</h3> : null);
       return;
     }
 
     const cleaned = markdown ? raw.replace(/^>\s?/, "") : cleanAssistantLine(raw.replace(/^>\s?/, ""));
     if (!cleaned) return;
     if (raw.startsWith("> ")) {
-      rendered.push(<blockquote key={`quote-${index}`} className="my-3 border-l-2 border-cyan-400/60 pl-4 text-slate-300">{markdown ? renderInlineMarkdown(cleaned) : renderSourceReferences(cleaned, sources, `quote-${index}`)}</blockquote>);
+      rendered.push(<blockquote key={`quote-${index}`} className="my-3 border-l-2 border-cyan-400/60 pl-4 text-slate-300">{markdown ? renderInlineMarkdown(cleaned) : cleaned}</blockquote>);
       return;
     }
 
     const listItem = cleaned.match(/^(?:[-*+]\s+|\d+[.)]\s+)(.+)$/);
     rendered.push(
       <p key={`paragraph-${index}`} className={`leading-7 text-slate-300 ${listItem ? "pl-4" : ""}`}>
-        {listItem ? (markdown ? `• ${renderInlineMarkdown(listItem[1])}` : renderSourceReferences(`• ${listItem[1]}`, sources, `list-${index}`)) : markdown ? renderInlineMarkdown(cleaned) : renderSourceReferences(cleaned, sources, `paragraph-${index}`)}
+        {listItem ? `• ${markdown ? renderInlineMarkdown(listItem[1]) : listItem[1]}` : markdown ? renderInlineMarkdown(cleaned) : cleaned}
       </p>,
     );
   });
 
   if (inCodeBlock) pushCodeBlock("code-open");
   return rendered;
-}
-
-async function readNexusLMStream(
-  response: Response,
-  onText: (text: string) => void,
-  onSources: (sources: Source[]) => void,
-): Promise<void> {
-  if (!response.body) throw new Error("NexusLM returned an empty stream.");
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = "";
-
-  const consume = (line: string) => {
-    if (!line.trim()) return;
-    const event = JSON.parse(line) as StreamEvent;
-    if (event.type === "error") throw new Error(event.error);
-    if (event.type === "text") onText(event.text);
-    if (event.type === "sources") onSources(event.sources);
-  };
-
-  while (true) {
-    const { done, value } = await reader.read();
-    buffer += decoder.decode(value ?? new Uint8Array(), { stream: !done });
-    const lines = buffer.split("\n");
-    buffer = lines.pop() ?? "";
-    lines.forEach(consume);
-    if (done) break;
-  }
-  if (buffer.trim()) consume(buffer);
 }
 
 function readDataUrl(file: File): Promise<string> {
@@ -707,8 +659,6 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
   const [showDocumentPreview, setShowDocumentPreview] = useState(false);
   const [previewExpanded, setPreviewExpanded] = useState(false);
   const [sources, setSources] = useState<Source[]>([]);
-  const [memories, setMemories] = useState<NexusLMMemory[]>([]);
-  const [memoryInput, setMemoryInput] = useState("");
   const [pendingEdit, setPendingEdit] = useState<PendingEdit | null>(null);
   const [pendingDraft, setPendingDraft] = useState<ChapterDraft | null>(null);
   const [auditReport, setAuditReport] = useState<BookAuditReport | null>(null);
@@ -826,20 +776,6 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
     void listNexusLMChats(conversationKey)
       .then(setChatHistory)
       .catch((error) => setAttachmentError(`Chat history could not be listed: ${readableError(error)}`));
-  }, [conversationKey]);
-
-  useEffect(() => {
-    let cancelled = false;
-    void listNexusLMMemories(conversationKey)
-      .then((items) => {
-        if (!cancelled) setMemories(items);
-      })
-      .catch((error) => {
-        if (!cancelled) setAttachmentError(`Project memory could not be loaded: ${readableError(error)}`);
-      });
-    return () => {
-      cancelled = true;
-    };
   }, [conversationKey]);
 
   useEffect(() => {
@@ -1001,27 +937,6 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
 
   function stopGenerating(): void {
     abortControllerRef.current?.abort();
-  }
-
-  async function addMemory(): Promise<void> {
-    const text = memoryInput.trim();
-    if (!text) return;
-    try {
-      const memory = await saveNexusLMMemory(conversationKey, text);
-      setMemories((current) => [...current.filter((item) => item.id !== memory.id), memory]);
-      setMemoryInput("");
-    } catch (error) {
-      setAttachmentError(`Project memory could not be saved: ${readableError(error)}`);
-    }
-  }
-
-  async function removeMemory(id: string): Promise<void> {
-    try {
-      await deleteNexusLMMemory(id);
-      setMemories((current) => current.filter((memory) => memory.id !== id));
-    } catch (error) {
-      setAttachmentError(`Project memory could not be deleted: ${readableError(error)}`);
-    }
   }
 
   const selectedAttachment = attachments.find((attachment) => attachment.id === selectedAttachmentId) ?? null;
@@ -1525,18 +1440,12 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
     setMessages(nextMessages);
     setInput("");
     setLoading(true);
-    const requestController = new AbortController();
-    if (requestUsesBook) {
-      abortControllerRef.current = requestController;
-      setCanAbort(true);
-    }
 
     try {
       if (requestUsesBook && manifest && isAuditIntent(instruction)) {
         const res = await fetch("/api/ebook/audit", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          signal: requestController.signal,
           body: JSON.stringify({ manifest }),
         });
         const json = await res.json() as BookAuditReport & { error?: string };
@@ -1572,7 +1481,6 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
         const res = await fetch("/api/ebook/nexuslm/draft", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          signal: requestController.signal,
           body: JSON.stringify({
             instruction,
             chapterNumber,
@@ -1588,7 +1496,6 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
             },
             transcripts: draftTranscriptScope === "selected" && selectedTranscript ? [selectedTranscript] : transcripts,
             transcriptScope: draftTranscriptScope,
-            memories: memories.map((memory) => memory.text),
           }),
         });
         const json = await res.json() as { chapter?: unknown; error?: string };
@@ -1601,12 +1508,9 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
       }
 
       if (activeMode !== "edit") {
-        const assistantIndex = nextMessages.length;
-        setMessages([...nextMessages, { role: "assistant", content: "" }]);
         const res = await fetch("/api/ebook/nexuslm/chat", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          signal: requestController.signal,
           body: JSON.stringify({
             query: instruction,
             mode: activeMode,
@@ -1619,36 +1523,19 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
             manuscript: manifest ? { frontMatter: manifest.frontMatter, chapters: manifest.chapters, backMatter: manifest.backMatter ?? null } : null,
             transcripts,
             history: compactHistory(nextMessages),
-            memories: memories.map((memory) => memory.text),
           }),
         });
-        if (!res.ok) {
-          const json = await res.json().catch(() => null) as { error?: string } | null;
-          throw new Error(json?.error ?? `Request failed (${res.status})`);
-        }
-        let streamedAnswer = "";
-        await readNexusLMStream(
-          res,
-          (chunk) => {
-            streamedAnswer += chunk;
-            setMessages((current) => current.map((message, index) => (
-              index === assistantIndex ? { ...message, content: streamedAnswer } : message
-            )));
-          },
-          (nextSources) => setSources((current) => {
-            const merged = new Map(current.map((source) => [source.id, source]));
-            nextSources.forEach((source) => merged.set(source.id, source));
-            return [...merged.values()].slice(-32);
-          }),
-        );
-        if (!streamedAnswer.trim()) throw new Error("NexusLM returned no answer.");
+        const json = await res.json() as { answer?: string; sources?: Source[]; error?: string };
+        if (!res.ok || json.error) throw new Error(json.error ?? `Request failed (${res.status})`);
+        setSources(json.sources ?? []);
+        const answer = sanitizeNexusLMText(json.answer ?? "NexusLM returned no answer.");
+        setMessages((current) => [...current, { role: "assistant", content: answer }]);
         return;
       }
 
       const res = await fetch("/api/ebook/assistant", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        signal: requestController.signal,
         body: JSON.stringify({
           manifest,
           instruction: `${MODES[activeMode].prompt}\nPersona: ${PERSONAS[persona].description}\n\nUser request:\n${userMessage}`,
@@ -1659,7 +1546,6 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
           manifestVersion: (manifest as Record<string, unknown>).__version as string | undefined,
           transcriptSources: transcripts,
           selectedTranscriptLabel: selectedTranscript?.label,
-          memories: memories.map((memory) => memory.text),
           dryRun: true,
         }),
       });
@@ -1717,13 +1603,8 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
         content: sanitizeNexusLMText(json.summary ?? (json.noChanges ? "No manuscript changes were applied." : "NexusLM completed the request.")),
       }]);
     } catch (error) {
-      const stopped = error instanceof DOMException && error.name === "AbortError";
-      setMessages((current) => [...current, { role: "assistant", content: stopped ? "Response stopped." : readableError(error) }]);
+      setMessages((current) => [...current, { role: "assistant", content: readableError(error) }]);
     } finally {
-      if (requestUsesBook) {
-        abortControllerRef.current = null;
-        setCanAbort(false);
-      }
       setLoading(false);
     }
   }
@@ -1919,7 +1800,7 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
                   </>
                 ) : message.role === "assistant" ? (
                   <>
-                    {renderAssistantContent(message.content, message.format === "markdown", openGeneratedHtmlPreview, sources)}
+                    {renderAssistantContent(message.content, message.format === "markdown", openGeneratedHtmlPreview)}
                     {message.content.trim() && (
                       <div className="mt-3 flex flex-wrap justify-end gap-2">
                         <button
@@ -2568,43 +2449,6 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
           </div>
         </details>
 
-        <details className="mt-6 border-t border-slate-800 pt-5">
-          <summary className="flex min-h-12 cursor-pointer list-none items-center justify-between text-xs font-semibold uppercase tracking-widest text-slate-500">
-            <span>Project memory</span>
-            <span className="text-cyan-300">{memories.length}</span>
-          </summary>
-          <div className="pt-2">
-            {memories.length > 0 && (
-              <div className="space-y-2">
-                {memories.map((memory) => (
-                  <div key={memory.id} className="flex items-start gap-2 rounded-xl border border-slate-800 bg-slate-900/70 px-3 py-2">
-                    <p className="min-w-0 flex-1 text-xs leading-5 text-slate-300">{memory.text}</p>
-                    <button type="button" onClick={() => void removeMemory(memory.id)} className="min-h-12 shrink-0 px-2 text-[11px] text-slate-500" aria-label={`Delete memory: ${memory.text}`}>Delete</button>
-                  </div>
-                ))}
-              </div>
-            )}
-            <div className="mt-2 flex items-end gap-2">
-              <textarea
-                value={memoryInput}
-                onChange={(event) => setMemoryInput(event.target.value)}
-                onKeyDown={(event) => {
-                  if (event.key === "Enter" && !event.shiftKey) {
-                    event.preventDefault();
-                    void addMemory();
-                  }
-                }}
-                rows={2}
-                maxLength={1000}
-                placeholder="Save a preference or book fact..."
-                className="min-w-0 flex-1 resize-none rounded-xl border border-slate-800 bg-slate-900 p-3 text-base leading-5 text-slate-300 placeholder:text-slate-600"
-              />
-              <button type="button" onClick={() => void addMemory()} disabled={!memoryInput.trim()} className="min-h-12 rounded-xl bg-cyan-400 px-3 text-xs font-bold text-slate-950 disabled:opacity-40">Save</button>
-            </div>
-            <p className="mt-2 text-[11px] leading-4 text-slate-600">Only approved memories are sent with book requests.</p>
-          </div>
-        </details>
-
         {manifest?.changeLog && manifest.changeLog.length > 0 && (
           <div className="mt-6 border-t border-slate-800 pt-5">
             <button type="button" onClick={() => setShowHistory((current) => !current)} className="flex min-h-12 w-full items-center justify-between text-left text-xs font-semibold uppercase tracking-widest text-slate-500">
@@ -2686,7 +2530,7 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
             ) : (
               <div className="space-y-3">
                 {sources.map((source) => (
-                  <article key={source.id} id={sourceAnchorId(source.id)} className="rounded-xl border border-slate-800 bg-slate-900/70 p-3">
+                  <article key={source.id} className="rounded-xl border border-slate-800 bg-slate-900/70 p-3">
                     <p className="text-xs font-semibold text-cyan-300">[{source.id}] {source.label}</p>
                     <p className="mt-1 line-clamp-5 text-xs leading-5 text-slate-400">{source.excerpt}</p>
                   </article>
