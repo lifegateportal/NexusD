@@ -18,10 +18,8 @@ Used where the task requires structural thinking, multi-step planning, or editor
 | **backmatter** | Generates notes, bibliography, acknowledgments |
 | **frontmatter** | Writes the preface, introduction, and about-the-author |
 | **ingest** | Processes raw transcript uploads into structured data |
-| **produce** | Orchestrates the final compilation of the completed book |
 | **sermon-assistant** | Provides deep structural guidance for sermon-to-book work |
-| **assistant** *(structural ops)* | Handles complex structural questions in the AI chat |
-| **ebook/assistant** *(structural ops)* | Same, scoped to the ebook pipeline context |
+| **ebook/assistant** *(structural ops)* | Handles complex structural questions in the ebook pipeline context |
 
 ---
 
@@ -42,7 +40,8 @@ Used for creative writing, formatting, editorial tasks, and other standard DeepS
 | **scripture-suggest** | Recommends relevant Bible passages based on chapter themes |
 | **generate-ui** | Generates UI component specs |
 | **generate-logic** | Generates business logic from descriptions |
-| **assistant** *(general ops)* | Handles standard questions in the AI chat |
+| **assistant** *(Academy)* | Edits Academy content, presentation, and site configuration |
+| **ebook/assistant** *(general ops)* | Handles standard questions in the ebook AI chat |
 | **ebook/assistant** *(general ops)* | Same, scoped to ebook context |
 
 ---
@@ -75,3 +74,21 @@ Used for fast, high-volume extraction tasks that don't need the full V3 model.
 | Planning, architecture, audit, reasoning | `deepseek-reasoner` (R1) |
 | Writing, formatting, editing, generating | `deepseek-chat` |
 | Fast extraction, filtering, classification | `deepseek-chat` |
+
+## Academy pipeline
+
+The Academy pipeline is intentionally pinned to `deepseek-chat` (DeepSeek Chat v3)
+for every AI stage, independent of the `DEEPSEEK_MODEL` override used by other
+workspaces:
+
+| Academy stage | Route |
+|---|---|
+| Ingest / blueprint | `/api/ingest` |
+| Logic graph | `/api/generate-logic` |
+| UI manifest | `/api/generate-ui` |
+| Academy production | `/api/produce` |
+| Director edits | `/api/assistant` |
+
+Academy prompts provide the model with the complete available context and treat
+delivery instructions as first-class creative direction. Schema validation and
+server-side patch merging remain in place for reliable output handling.

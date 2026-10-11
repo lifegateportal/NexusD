@@ -65,10 +65,7 @@ import {
 } from "@/lib/project-organization-store";
 
 const INITIAL_MODELS: ModelState[] = [
-  { name: "Gemini",   handle: "gemini",   role: "Analyst",           status: "standby" },
-  { name: "DeepSeek", handle: "deepseek", role: "Engineer",          status: "standby" },
-  { name: "Claude",   handle: "claude",   role: "Designer",          status: "standby" },
-  { name: "Curator",  handle: "curator",  role: "Academy Producer",  status: "standby" },
+  { name: "DeepSeek Chat v3", handle: "deepseek", role: "Academy Pipeline", status: "standby" },
   { name: "Manus",    handle: "manus",    role: "Executive",         status: "standby" }
 ];
 
@@ -327,7 +324,7 @@ export default function HomePage() {
     const now = new Date().toISOString();
     setLogs([
       { id: "sys-1", level: "init",    message: "Nexus Director shell online",                    timestamp: now },
-      { id: "sys-2", level: "init",    message: "5-agent pipeline staged: Analyst → Engineer → Designer → Curator → Executive", timestamp: now },
+      { id: "sys-2", level: "init",    message: "DeepSeek Chat v3 academy pipeline staged end to end", timestamp: now },
       { id: "sys-3", level: "success", message: "Dynamic viewport lock enforced (dvh + safe-area)", timestamp: now }
     ]);
   }, []);
@@ -356,13 +353,13 @@ export default function HomePage() {
   const handleAssistantUpdate = useCallback((updated: AcademyPackage, summary: string) => {
     setAcademyResult(updated);
     localStorage.setItem("nexus_academy_preview", JSON.stringify(updated));
-    addLog({ level: "success", message: `Director: ${summary}`, model: "curator" });
+    addLog({ level: "success", message: `Director: ${summary}`, model: "deepseek" });
   }, [addLog]);
 
   const handleSiteUpdate = useCallback((config: SiteConfig, summary: string) => {
     setSiteConfig(config);
     localStorage.setItem("nexus_site_config", JSON.stringify(config));
-    addLog({ level: "success", message: `Director: ${summary}`, model: "curator" });
+    addLog({ level: "success", message: `Director: ${summary}`, model: "deepseek" });
   }, [addLog]);
 
   // Keep ebookManifest in sync whenever the ebook pipeline finishes or is edited
@@ -1071,7 +1068,7 @@ export default function HomePage() {
       let logicData = existingLogic;
       let uiData = existingUi;
 
-      // ── Stage 2: DeepSeek Engineer → execution logic graph ────────────
+      // ── Stage 2: DeepSeek Chat v3 → execution logic graph ─────────────
       if (!logicData) {
         handleStageChange("reasoning");
         addLog({ level: "info", message: "Blueprint dispatched to Engineer — building execution graph…", model: "deepseek" });
@@ -1101,10 +1098,10 @@ export default function HomePage() {
         addLog({ level: "info", message: "Execution graph already complete — skipping Stage 2" });
       }
 
-      // ── Stage 3: Claude Designer → UI manifest ────────────────────────
+      // ── Stage 3: DeepSeek Chat v3 → UI manifest ───────────────────────
       if (!uiData) {
         handleStageChange("generating");
-        addLog({ level: "info", message: "Execution plan dispatched to Designer — synthesising UI manifest…", model: "claude" });
+        addLog({ level: "info", message: "Execution plan dispatched to DeepSeek Chat v3 — synthesising UI manifest…", model: "deepseek" });
 
         const uiRes = await fetch("/api/generate-ui", {
           method: "POST",
@@ -1130,15 +1127,15 @@ export default function HomePage() {
         addLog({
           level: "success",
           message: `UI manifest complete — ${uiData.components.length} component${uiData.components.length !== 1 ? "s" : ""}  ·  ${uiData.interactions.length} interaction pattern${uiData.interactions.length !== 1 ? "s" : ""}`,
-          model: "claude"
+          model: "deepseek"
         });
       } else {
         addLog({ level: "info", message: "UI manifest already complete — skipping Stage 3" });
       }
 
-      // ── Stage 4: DeepSeek Curator → academy package ───────────────────
+      // ── Stage 4: DeepSeek Chat v3 → academy package ──────────────────
       handleStageChange("producing");
-      addLog({ level: "info", message: "UI spec dispatched to Curator — packaging full academy…", model: "curator" });
+      addLog({ level: "info", message: "UI spec dispatched to DeepSeek Chat v3 — packaging full academy…", model: "deepseek" });
 
       const produceRes = await fetch("/api/produce", {
         method: "POST",
@@ -1186,7 +1183,7 @@ export default function HomePage() {
       addLog({
         level: "success",
         message: `Academy package ready — ${academyData.curriculum.length} module${academyData.curriculum.length !== 1 ? "s" : ""}, ${academyData.pricing.length} pricing tiers`,
-        model: "curator"
+        model: "deepseek"
       });
       handleStageChange("done");
     } catch (err) {
@@ -1548,7 +1545,7 @@ export default function HomePage() {
         ebookManifest={ebookManifest}
         onEbookUpdate={(updated, summary) => {
           setEbookManifest(updated);
-          if (summary) addLog({ level: "success", message: `Director: ${summary}`, model: "curator" });
+          if (summary) addLog({ level: "success", message: `Director: ${summary}`, model: "deepseek" });
         }}
         ebookPipelineSnapshot={ebookSnapshot}
         loadedHistory={chatHistory}

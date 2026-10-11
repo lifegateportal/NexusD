@@ -1,6 +1,6 @@
 import { generateObject } from "ai";
 import { NextRequest, NextResponse } from "next/server";
-import { deepSeekModel } from "@/lib/ai-providers";
+import { deepSeekChatModel } from "@/lib/ai-providers";
 import { UiManifestInputSchema, UiManifestResultSchema } from "@/lib/schemas/ui-manifest";
 
 export const runtime = "nodejs";
@@ -11,7 +11,7 @@ export async function POST(request: NextRequest) {
     const input = UiManifestInputSchema.parse(json);
 
     const { object } = await generateObject({
-      model: deepSeekModel,
+      model: deepSeekChatModel,
       schema: UiManifestResultSchema,
       temperature: 0.3,
       system:

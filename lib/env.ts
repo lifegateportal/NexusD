@@ -2,9 +2,9 @@ import { z } from "zod";
 
 const EnvironmentSchema = z.object({
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
-  GOOGLE_GENERATIVE_AI_API_KEY: z.string().min(1, "Missing Gemini API key"),
+  GOOGLE_GENERATIVE_AI_API_KEY: z.string().min(1, "Missing Gemini API key").optional(),
   DEEPSEEK_API_KEY: z.string().min(1, "Missing DeepSeek API key"),
-  ANTHROPIC_API_KEY: z.string().min(1, "Missing Anthropic API key"),
+  ANTHROPIC_API_KEY: z.string().min(1, "Missing Anthropic API key").optional(),
   DEEPGRAM_API_KEY: z.string().optional(),
   GEMINI_MODEL: z.string().default("gemini-2.0-flash"),
   DEEPSEEK_MODEL: z.enum(["deepseek-chat", "deepseek-reasoner"]).default("deepseek-chat"),

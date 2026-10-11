@@ -1,6 +1,6 @@
 import { generateObject } from "ai";
 import { NextRequest, NextResponse } from "next/server";
-import { deepSeekModel } from "@/lib/ai-providers";
+import { deepSeekChatModel } from "@/lib/ai-providers";
 import {
   LogicTransformRequestSchema,
   LogicTransformResultSchema
@@ -14,7 +14,7 @@ export async function POST(request: NextRequest) {
     const input = LogicTransformRequestSchema.parse(json);
 
     const { object } = await generateObject({
-      model: deepSeekModel,
+      model: deepSeekChatModel,
       schema: LogicTransformResultSchema,
       schemaName: "LogicTransformResult",
       schemaDescription: "Execution logic graph derived from the blueprint",

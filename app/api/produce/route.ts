@@ -1,7 +1,7 @@
 import { NextRequest } from "next/server";
 import { generateObject } from "ai";
 import { z } from "zod";
-import { deepSeekModel, deepSeekReasonerModel } from "@/lib/ai-providers";
+import { deepSeekChatModel } from "@/lib/ai-providers";
 import { ProduceInputSchema, AcademyPackageSchema, AcademyShellSchema } from "@/lib/schemas/academy";
 
 export const runtime = "nodejs";
@@ -27,11 +27,12 @@ export async function POST(req: NextRequest) {
       }, 15_000);
 
       try {
-        // Phase 1 source: sample beginning + middle + end of the FULL raw input
-        // so the curriculum reflects the entire book, not just the opening pages.
-        // Uses input.rawTranscript (pre-truncation) to capture the full range.
+        // Give DeepSeek the complete source whenever it fits the context budget.
+        // Very large sources still receive representative coverage from all regions.
         const buildPhase1Source = (text: string | undefined): string => {
           if (!text) return "";
+          const MAX_SOURCE_CONTEXT_CHARACTERS = 160_000;
+          if (text.length <= MAX_SOURCE_CONTEXT_CHARACTERS) return text;
           const SAMPLE = 4_500; // chars per sample point (~1,200 tokens)
           const len = text.length;
           const beginning = text.slice(0, SAMPLE);
@@ -42,7 +43,7 @@ export async function POST(req: NextRequest) {
         };
         const phase1Source = buildPhase1Source(input.rawTranscript);
         const phase1SourceSection = phase1Source
-          ? `\n\nSOURCE MATERIAL (sampled: beginning · middle · end of the full document):\n${phase1Source}`
+          ? `\n\nSOURCE MATERIAL:\n${phase1Source}`
           : "";
 
         const deliverySection = input.deliveryInstructions
@@ -99,27 +100,23 @@ export async function POST(req: NextRequest) {
         let contentMap: ContentMap = { themes: [] };
         if (phase0Source) {
           const { object: map } = await generateObject({
-            model: deepSeekReasonerModel,
+            model: deepSeekChatModel,
             schema: ContentMapSchema,
             schemaName: "ContentMap",
             schemaDescription: "Distinct major themes found in the source material",
             mode: "json",
             maxTokens: 1_200,
             temperature: 0.1,
-            system: `You are a source analyst. Read the material and identify ${themeCountLabel} completely DISTINCT major theme${scale.maxThemes === 1 ? "" : "s"} or sections. Cover the FULL arc of the document.
+            system: `You are a source analyst. Read the material and identify ${themeCountLabel} useful major theme${scale.maxThemes === 1 ? "" : "s"} or sections. Cover the full arc of the document and use your editorial judgment to choose boundaries that will make the strongest academy.
 
 For each theme:
 - index: 0-based (0 = first theme in the source)
-- title: 4–7 words, the theme name using the source's own language
-- summary: exactly 2 sentences — what the source specifically says about this theme
-- keyPassages: 2–3 short verbatim or near-verbatim quotes (10–30 words each) taken directly from the source for this theme
+- title: 4–7 words, using the source's language where it helps
+- summary: a concise account of what the source says about this theme
+- keyPassages: 1–3 short verbatim or near-verbatim quotes taken directly from the source for this theme
 - sourceRegion: where this theme appears in the document: "beginning" | "early-middle" | "late-middle" | "end"
 
-RULES — non-negotiable:
-- Every theme must be DISTINCT — zero conceptual overlap between themes
-- keyPassages must be actual text from the source, not paraphrases
-- Assign themes across the full document — themes must span beginning to end, not cluster in one region
-- Do NOT invent content absent from the source`,
+Use the source as the foundation, but make sensible connections and framing choices for learners. Do not present unsupported facts as if they came from the source.`,
             prompt: `SOURCE MATERIAL:\n${phase0Source}`,
           });
           contentMap = map;
@@ -144,28 +141,24 @@ RULES — non-negotiable:
         // ── Phase 1: Academy shell ──────────────────────────────────────────────
         // Generates all metadata, landing page, pricing, SEO, and module outlines
         // with lightweight lesson stubs only.
-        const shellMaxTokens = calculateMaxTokens(parsedInput.sourceText.length, contentMap.themes.length);
+        const shellMaxTokens = calculateMaxTokens((input.rawTranscript ?? "").length, contentMap.themes.length);
         
         const { object: shell } = await generateObject({
-          model: deepSeekModel,
+          model: deepSeekChatModel,
           schema: AcademyShellSchema,
           schemaName: "AcademyShell",
           schemaDescription: "Academy structure with landing page, pricing, SEO, and lesson outlines — no lesson content",
           mode: "json",
           maxTokens: shellMaxTokens,
           temperature: 0.3,
-          system: `You are the Curator — a world-class educational content architect. Transform source material into an online academy structure.
+          system: `You are DeepSeek Chat v3, an expert educational content architect. Transform the source material into an online academy structure with strong editorial judgment and a clear learner experience.
 
-OUTPUT ALL ACADEMY FIELDS. TOKEN BUDGET IS TIGHT — be concise in every field.
+OUTPUT ALL ACADEMY FIELDS. Keep the output focused enough to validate reliably.
 
-FOR THE CURRICULUM: produce ${modCountLabel} module${scale.maxMods === 1 ? "" : "s"} (HARD MAX ${scale.maxMods}). Each module gets exactly 2–3 lesson outlines (HARD MAX 3). Lesson outline = title + type + durationMinutes only.
+FOR THE CURRICULUM: produce ${modCountLabel} module${scale.maxMods === 1 ? "" : "s"} within the schema limits. Give each module 2–3 useful lesson outlines. Lesson outline = title + type + durationMinutes only.
 DO NOT write notes, quiz, keyTakeaways, or actionItems in this phase.
 
-CURRICULUM RULE — the content map below defines exactly what each module covers:
-- Module 1 covers ONLY the content of Theme 1. Module 2 covers ONLY Theme 2. Etc.
-- Module title = the theme title (you may rephrase for marketing but must stay on that theme)
-- Lesson titles must name SPECIFIC sub-concepts from that theme's source passages ONLY
-- Zero topic overlap between any two modules — each module owns its theme exclusively
+Use the content map as useful research, not as a rigid script. Let the source, the delivery preferences, and your judgment determine the best curriculum flow. Avoid needless repetition, but allow concepts to connect across modules when that improves teaching.
 
 FIELD GUIDE:
 - academyName: Market-ready title from the core subject matter
@@ -189,11 +182,10 @@ CURRICULUM: moduleTitle, moduleDescription (1–2 sentences), lessonOutlines (ma
 SEO: title (50–60 chars), description (140–155 chars), keywords (6–8)
 onboardingSteps: 3–4 steps
 
-GROUNDING — absolute hard rules:
-- Every module title, lesson title, tagline, headline, and feature bullet must be drawn DIRECTLY from the source material or content map below
-- Do NOT introduce ANY concept, example, framework, statistic, or claim that does not appear in the source
-- If the source does not contain enough material for a field, use a shorter or vaguer value — never pad with invented content
-- Paraphrase only to improve readability; never expand beyond what the speaker/author actually said`,
+EDITORIAL JUDGMENT:
+- Make the academy coherent, engaging, and useful rather than mechanically mirroring the source.
+- Use the delivery preferences as first-class direction for voice, audience, emphasis, and presentation.
+- Add reasonable framing and learner-facing language when it improves the result, but do not invent specific source claims, quotations, statistics, or attributions.`,
           prompt: basePrompt + contentMapSection + phase1SourceSection + deliverySection,
         });
 
@@ -230,34 +222,22 @@ GROUNDING — absolute hard rules:
           ? "200–300 words"
           : "350–500 words";
 
-        const phase2System = `You are the Curator — a world-class educational content writer focused on a SINGLE module.
+        const phase2System = `You are DeepSeek Chat v3, an expert educational content writer focused on a single module.
 
 PER MODULE output:
-- learningObjectives: exactly 3 (Understand/Apply/Identify pattern), drawn from the theme's source passages
-- keyTerms: exactly 4 terms that appear in the source, exclusive to this module
+- learningObjectives: useful outcomes for the learner
+- keyTerms: the most useful terms for this module
 
 PER LESSON output:
-- description: 1 sentence stating the specific learning outcome for THIS lesson
-- notes: ${notesWordCount}. Core teaching content — use ONLY what the source says about this specific lesson topic. If the source covers this topic briefly, write briefly — do NOT pad to hit a word count.
-  Format (adapt section count to actual source depth — omit sections if the source doesn't support them):
-  1. Opening paragraph (2–3 sentences): frame the lesson topic grounded in the source.
-  2. "## [Section Title]" — core concept block: explain the main idea using specific language from the source. **bold** key terms where introduced.
-  3. "## Key Insight" — closing 1–2 sentences: the single most important takeaway from THIS lesson.
-  Rules: prose only — no bullet lists. **bold** 1–3 terms. Do NOT repeat content from other lessons.
-- keyTakeaways: exactly 3 — specific, distinct insights from THIS lesson only
-- actionItems: exactly 2 practical steps grounded in the source
-- quiz: exactly 3 questions, each with exactly 4 options, correct index 0–3
+- description: state the specific learning outcome for this lesson
+- notes: aim for ${notesWordCount}, adapting to the depth of the source rather than padding. Use readable prose and markdown where it helps.
+- keyTakeaways: the clearest insights from this lesson
+- actionItems: practical next steps that fit the lesson
+- quiz: useful questions with four options and one correct index
 
-GROUNDING — non-negotiable hard rules:
-- Every sentence must be directly traceable to the source material or theme passages provided
-- Do NOT introduce concepts, examples, statistics, frameworks, or advice the speaker/author did not state
-- Do NOT extrapolate or fill gaps with common knowledge — if the source is silent on a point, omit it
-- Paraphrase for clarity only; never add meaning beyond what was said
-- Quiz wrong-answer options must be plausible distractors from the source context, not invented facts`;
+Use the source, the module outline, and the delivery preferences as direction. Make the teaching coherent and engaging, connect ideas when helpful, and use your judgment about emphasis and explanation. Do not invent specific source claims, quotations, statistics, or attributions.`;
 
         const allModuleContents: z.infer<typeof SingleModuleContentSchema>[] = [];
-        // Track key terms defined in earlier modules so subsequent modules don't redefine them.
-        const definedTerms: Array<{ term: string; definedInModule: number }> = [];
 
         for (const [mi, mod] of shell.curriculum.entries()) {
           const theme = contentMap.themes[mi] ?? contentMap.themes[contentMap.themes.length - 1];
@@ -269,16 +249,11 @@ GROUNDING — non-negotiable hard rules:
             ? `THEME PASSAGES:\nTheme \u201c${theme.title}\u201d (${theme.sourceRegion}): ${theme.summary}\n  Passages: ${theme.keyPassages.map(p => `\u201c${p}\u201d`).join(" | ")}`
             : "";
 
-          // Cross-module dedup: tell each module what terms are already owned by prior modules.
-          const priorTermsBlock = definedTerms.length > 0
-            ? `\nALREADY-DEFINED TERMS \u2014 DO NOT REDEFINE IN THIS MODULE:\nThe following terms were defined and explained in earlier modules. Do NOT add them to keyTerms and do NOT re-explain them in notes \u2014 at most reference them by name:\n${definedTerms.map((t) => `  \u2022 "${t.term}" (Module ${t.definedInModule + 1})`).join("\n")}`
-            : "";
-
-          const lessonCount = modOutline.lessons.length;
-          const moduleMaxTokens = calculateMaxTokens(parsedInput.sourceText.length, lessonCount);
+          const lessonCount = mod.lessonOutlines.length;
+          const moduleMaxTokens = calculateMaxTokens((input.rawTranscript ?? "").length, lessonCount);
           
           const { object: modContent } = await generateObject({
-            model: deepSeekModel,
+            model: deepSeekChatModel,
             schema: SingleModuleContentSchema,
             schemaName: "ModuleContent",
             schemaDescription: "Full lesson content for one academy module",
@@ -291,17 +266,12 @@ GROUNDING — non-negotiable hard rules:
               modOutline,
               "",
               themePassage,
-              priorTermsBlock,
               "",
-              phase1Source ? `SOURCE MATERIAL (sampled):\n${phase1Source}` : "",
+              phase1Source ? `SOURCE MATERIAL:\n${phase1Source}` : "",
               deliverySection,
             ].filter(Boolean).join("\n"),
           });
           allModuleContents.push(modContent);
-          // Register this module's key terms so subsequent modules can avoid redefining them.
-          for (const kt of modContent.keyTerms ?? []) {
-            definedTerms.push({ term: kt.term, definedInModule: mi });
-          }
         }
 
         // Merge Phase 2 content back onto the Phase 1 shell
@@ -358,4 +328,3 @@ GROUNDING — non-negotiable hard rules:
     },
   });
 }
-
