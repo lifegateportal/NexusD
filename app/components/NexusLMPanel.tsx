@@ -717,6 +717,7 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
   const spokenMessageRef = useRef<string | null>(null);
   const voiceInstructionRef = useRef("");
   const speechGenerationRef = useRef(0);
+  const speechUnlockedRef = useRef(false);
   const voiceResumeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const hasBookContext = Boolean(manifest || transcripts.length > 0);
   const useBookContext = contextMode === "book" || (contextMode === "auto" && hasBookContext);
@@ -776,6 +777,35 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
     speechGenerationRef.current += 1;
     clearVoiceResumeTimer();
     if (typeof window !== "undefined") window.speechSynthesis?.cancel();
+  }
+
+  function speakVoiceNotice(text: string, onFinished?: () => void): void {
+    if (typeof window === "undefined" || !window.speechSynthesis || typeof SpeechSynthesisUtterance === "undefined") {
+      setVoiceError("Spoken responses are not supported in this browser. Written responses will continue normally.");
+      onFinished?.();
+      return;
+    }
+    stopVoiceOutput();
+    window.speechSynthesis.resume();
+    const utterance = new SpeechSynthesisUtterance(text);
+    const voice = pickVoice(window.speechSynthesis.getVoices());
+    if (voice) utterance.voice = voice;
+    utterance.rate = 1;
+    utterance.pitch = 1;
+    utterance.onstart = () => {
+      speechUnlockedRef.current = true;
+    };
+    utterance.onend = () => {
+      speechUnlockedRef.current = true;
+      onFinished?.();
+    };
+    utterance.onerror = (event) => {
+      if (event.error !== "canceled" && event.error !== "interrupted") {
+        setVoiceError("Nexus could not start spoken responses. Tap the mic again to enable audio.");
+      }
+      onFinished?.();
+    };
+    window.speechSynthesis.speak(utterance);
   }
 
   function failVoiceMode(message: string): void {
@@ -1014,6 +1044,7 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
     }
 
     stopVoiceOutput();
+    window.speechSynthesis.resume();
     const generation = speechGenerationRef.current;
     let chunkIndex = 0;
     setVoiceStatus("speaking");
@@ -1050,6 +1081,7 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
     persistVoiceMode(false);
     stopVoiceRecognition();
     stopVoiceOutput();
+    speechUnlockedRef.current = false;
     clearVoiceRestartTimer();
     setVoiceStatus("off");
     setVoiceError(null);
@@ -1057,6 +1089,16 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
 
   function toggleVoiceMode(): void {
     if (voiceModeRef.current) {
+      if (!speechUnlockedRef.current) {
+        setVoiceError(null);
+        setVoiceStatus("speaking");
+        speakVoiceNotice("Nexus voice mode is on.", () => {
+          if (!voiceModeRef.current) return;
+          setVoiceStatus("waiting");
+          startWakeRecognition();
+        });
+        return;
+      }
       stopVoiceMode();
       return;
     }
@@ -1071,7 +1113,12 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
     setVoiceError(null);
     voiceSpeakCursorRef.current = messages.length;
     spokenMessageRef.current = null;
-    startWakeRecognition();
+    setVoiceStatus("speaking");
+    speakVoiceNotice("Nexus voice mode is on.", () => {
+      if (!voiceModeRef.current) return;
+      setVoiceStatus("waiting");
+      startWakeRecognition();
+    });
   }
 
   useEffect(() => () => {
@@ -1093,7 +1140,7 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
     if (!shouldRestore) return;
     voiceModeRef.current = true;
     setVoiceModeEnabled(true);
-    setVoiceError(null);
+    setVoiceError("Tap the microphone once to enable spoken responses on this device.");
     const timer = setTimeout(() => startWakeRecognition(), 0);
     return () => clearTimeout(timer);
   }, []);
