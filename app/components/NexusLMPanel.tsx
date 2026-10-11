@@ -23,6 +23,8 @@ import { isNexusLMLongFormRequest, NEXUSLM_RESPONSE_LENGTHS, sanitizeNexusLMText
 import { safeNexusLMFilename, type NexusLMArtifactFormat } from "@/lib/nexuslm-artifacts";
 import { pickVoice } from "@/lib/audio-player-context";
 import { formatNexusLMImageObservation, inspectNexusLMImage } from "@/lib/nexuslm-vision";
+import { NEXUSLM_BOOK_STREAM_METADATA_END, NEXUSLM_BOOK_STREAM_METADATA_START } from "@/lib/nexuslm-stream";
+import { normalizeScriptureBlockquotes } from "@/lib/scripture-formatter";
 import {
   cleanNexusVoiceText,
   buildNexusGreetingResponse,
@@ -1851,6 +1853,125 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
     }
   }
 
+  async function streamBookResponse(
+    instruction: string,
+    activeMode: "ask" | "socratic" | "plan",
+    nextMessages: Message[],
+    requestResponseLength: NexusLMResponseLength,
+    voiceInput: boolean,
+  ): Promise<void> {
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
+    setCanAbort(true);
+    setSources([]);
+    setMessages([...nextMessages, { role: "assistant", content: "", format: "markdown" }]);
+    let answer = "";
+    let pendingStreamText = "";
+    let metadataParsed = false;
+
+    const updateAnswer = (content: string) => {
+      setMessages((current) => {
+        const last = current[current.length - 1];
+        if (last?.role === "assistant" && last.format === "markdown") {
+          return [...current.slice(0, -1), { ...last, content }];
+        }
+        return [...current, { role: "assistant", content, format: "markdown" }];
+      });
+    };
+
+    const parseSources = (encoded: string): Source[] => {
+      const base64 = encoded.replace(/-/g, "+").replace(/_/g, "/");
+      const paddedBase64 = base64.padEnd(Math.ceil(base64.length / 4) * 4, "=");
+      const binary = atob(paddedBase64);
+      const bytes = Uint8Array.from(binary, (character) => character.charCodeAt(0));
+      const parsed: unknown = JSON.parse(new TextDecoder().decode(bytes));
+      if (!Array.isArray(parsed) || parsed.some((source) => {
+        if (!source || typeof source !== "object") return true;
+        const candidate = source as Record<string, unknown>;
+        return typeof candidate.id !== "string"
+          || typeof candidate.label !== "string"
+          || typeof candidate.excerpt !== "string";
+      })) {
+        throw new Error("NexusLM returned invalid book source metadata.");
+      }
+      return parsed as Source[];
+    };
+
+    const consumeStreamText = (chunk: string) => {
+      pendingStreamText += chunk;
+      if (!metadataParsed) {
+        if (!NEXUSLM_BOOK_STREAM_METADATA_START.startsWith(pendingStreamText)
+          && !pendingStreamText.startsWith(NEXUSLM_BOOK_STREAM_METADATA_START)) {
+          throw new Error("NexusLM returned an invalid book response stream.");
+        }
+        if (!pendingStreamText.startsWith(NEXUSLM_BOOK_STREAM_METADATA_START)) return;
+        const metadataEnd = pendingStreamText.indexOf(
+          NEXUSLM_BOOK_STREAM_METADATA_END,
+          NEXUSLM_BOOK_STREAM_METADATA_START.length,
+        );
+        if (metadataEnd < 0) return;
+        const encodedSources = pendingStreamText.slice(NEXUSLM_BOOK_STREAM_METADATA_START.length, metadataEnd);
+        setSources(parseSources(encodedSources));
+        pendingStreamText = pendingStreamText.slice(metadataEnd + NEXUSLM_BOOK_STREAM_METADATA_END.length);
+        metadataParsed = true;
+      }
+      if (!pendingStreamText) return;
+      answer += pendingStreamText;
+      pendingStreamText = "";
+      updateAnswer(answer);
+    };
+
+    try {
+      const response = await fetch("/api/ebook/nexuslm/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        signal: controller.signal,
+        body: JSON.stringify({
+          query: instruction,
+          mode: activeMode,
+          persona: PERSONAS[persona].label,
+          agent,
+          writingStyle,
+          responseLength: requestResponseLength,
+          llmTemperature: nexusLMTemperature,
+          book: {
+            title: manifest?.bookTitle ?? pipelineSnapshot?.bookTitle ?? "Untitled book",
+            chapters: manifest?.chapters.map((chapter) => ({ number: chapter.number, title: chapter.title })) ?? [],
+          },
+          manuscript: manifest ? { frontMatter: manifest.frontMatter, chapters: manifest.chapters, backMatter: manifest.backMatter ?? null } : null,
+          transcripts,
+          history: compactHistory(nextMessages),
+          voiceMode: voiceInput,
+        }),
+      });
+      if (!response.ok) {
+        const payload = await response.json().catch(() => null) as { error?: string } | null;
+        throw new Error(payload?.error ?? `Request failed (${response.status})`);
+      }
+      if (!response.body) throw new Error("NexusLM returned no response stream.");
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        consumeStreamText(decoder.decode(value, { stream: true }));
+      }
+      consumeStreamText(decoder.decode());
+      if (!metadataParsed) throw new Error("NexusLM returned an incomplete book response stream.");
+      const finalAnswer = normalizeScriptureBlockquotes(sanitizeNexusLMText(answer));
+      updateAnswer(finalAnswer);
+      if (!finalAnswer) throw new Error("NexusLM returned an empty response.");
+    } catch (error) {
+      const stopped = error instanceof DOMException && error.name === "AbortError";
+      const status = stopped ? "Response stopped." : readableError(error);
+      updateAnswer(answer.trim() ? `${answer}\n\n${status}` : status);
+    } finally {
+      abortControllerRef.current = null;
+      setCanAbort(false);
+    }
+  }
+
   async function clearConversation() {
     try {
       await deleteNexusLMChat(activeConversationKey);
@@ -2054,29 +2175,7 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
       }
 
       if (activeMode !== "edit") {
-        const res = await fetch("/api/ebook/nexuslm/chat", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            query: instruction,
-            mode: activeMode,
-            persona: PERSONAS[persona].label,
-            agent,
-            writingStyle,
-            responseLength: requestResponseLength,
-            llmTemperature: nexusLMTemperature,
-            book: { title: manifest?.bookTitle ?? pipelineSnapshot?.bookTitle ?? "Untitled book", chapters: manifest?.chapters.map((chapter) => ({ number: chapter.number, title: chapter.title })) ?? [] },
-            manuscript: manifest ? { frontMatter: manifest.frontMatter, chapters: manifest.chapters, backMatter: manifest.backMatter ?? null } : null,
-            transcripts,
-            history: compactHistory(nextMessages),
-            voiceMode: voiceInput,
-          }),
-        });
-        const json = await res.json() as { answer?: string; sources?: Source[]; error?: string };
-        if (!res.ok || json.error) throw new Error(json.error ?? `Request failed (${res.status})`);
-        setSources(json.sources ?? []);
-        const answer = sanitizeNexusLMText(json.answer ?? "NexusLM returned no answer.");
-        setMessages((current) => [...current, { role: "assistant", content: answer }]);
+        await streamBookResponse(instruction, activeMode, nextMessages, requestResponseLength, voiceInput);
         return;
       }
 

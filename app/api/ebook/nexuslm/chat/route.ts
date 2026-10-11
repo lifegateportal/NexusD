@@ -3,11 +3,12 @@ import { generateText, streamText } from "ai";
 import { z } from "zod";
 import { deepSeekModel, deepSeekReasonerModel } from "@/lib/ai-providers";
 import { EM_DASH_MINIMIZATION_RULES } from "@/lib/editorial-style-bible";
+import { NEXUSLM_BOOK_STREAM_METADATA_END, NEXUSLM_BOOK_STREAM_METADATA_START } from "@/lib/nexuslm-stream";
 import { BackMatterSchema, ChapterDraftSchema, FrontBackMatterSchema } from "@/lib/schemas/ebook";
 import { NexusLMWritingStyleSchema, NEXUSLM_WRITING_STYLES } from "@/lib/nexuslm-writing-styles";
 import { NexusLMAgentSchema } from "@/lib/nexuslm-agents";
-import { NexusLMResponseLengthSchema, NEXUSLM_RESPONSE_LENGTHS, sanitizeNexusLMText } from "@/lib/nexuslm-response";
-import { normalizeScriptureBlockquotes, NEXUSLM_SCRIPTURE_FORMATTING_RULES } from "@/lib/scripture-formatter";
+import { NexusLMResponseLengthSchema, NEXUSLM_RESPONSE_LENGTHS } from "@/lib/nexuslm-response";
+import { NEXUSLM_SCRIPTURE_FORMATTING_RULES } from "@/lib/scripture-formatter";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
@@ -31,7 +32,6 @@ const RequestSchema = z.object({
   }).nullable().optional(),
   transcripts: z.array(z.object({ label: z.string().min(1).max(200), text: z.string().max(250000) })).max(20),
   history: z.array(z.object({ role: z.enum(["user", "assistant"]), content: z.string().max(8000) })).max(14).optional(),
-  memories: z.array(z.string().trim().min(1).max(1000)).max(40).optional(),
 }).superRefine((value, context) => {
   const totalCharacters = value.transcripts.reduce((sum, transcript) => sum + transcript.text.length, 0);
   const manuscriptCharacters = value.manuscript ? JSON.stringify(value.manuscript).length : 0;
@@ -279,14 +279,11 @@ export async function POST(request: NextRequest) {
       .filter((source) => source.id.startsWith("M-"))
       .slice(0, 12);
     const exactManuscriptContext = exactManuscriptSources.length > 0
-      ? `EXACT MANUSCRIPT PASSAGES FOR DETAIL:\n${exactManuscriptSources.map((source) => `[${source.id}] ${source.label}\n${source.excerpt}`).join("\n\n---\n\n")}`
+      ? `EXACT MANUSCRIPT PASSAGES FOR DETAIL:\n${exactManuscriptSources.map((source) => `${source.label}\n${source.excerpt}`).join("\n\n---\n\n")}`
       : "";
     const transcriptContext = transcriptSources.length > 0
-      ? `TRANSCRIPT EXCERPTS:\n${transcriptSources.map((source) => `[${source.id}] ${source.label}\n${source.excerpt}`).join("\n\n---\n\n")}`
+      ? `TRANSCRIPT EXCERPTS:\n${transcriptSources.map((source) => `${source.label}\n${source.excerpt}`).join("\n\n---\n\n")}`
       : "NO TRANSCRIPT EXCERPTS MATCHED.";
-    const memoryContext = input.memories?.length
-      ? `APPROVED PROJECT MEMORY:\n${input.memories.map((memory, index) => `M${index + 1}. ${memory}`).join("\n")}`
-      : "NO APPROVED PROJECT MEMORY.";
     const sourceContext = [manuscriptContext, exactManuscriptContext, transcriptContext]
       .filter(Boolean)
       .join("\n\n==========\n\n");
@@ -298,50 +295,48 @@ export async function POST(request: NextRequest) {
       system: `You are NexusLM, a capable general-purpose writing and reasoning partner inside a personal book workspace. The selected agent is ${input.agent}. The active persona is ${input.persona}.
 The book is "${input.book.title}".
 The requested presentation form is ${writingStyle.label}: ${writingStyle.instruction}
-    Use the complete manuscript coverage as the primary source for the user's request. You may analyze, explain, plan, write, rewrite, typeset, format, or otherwise transform the manuscript when asked. For writing requests, produce the finished reader-facing work rather than advice about how to do it. Preserve the author's facts, meaning, voice, order, and exact wording when the request requires fidelity. Use transcript material as supporting provenance. Do not mention internal context assembly, retrieval, or prompt mechanics. State uncertainty only when the supplied material truly does not support the requested action.
-  When a claim is grounded in an exact passage, cite it inline using the supplied source ID in square brackets, such as [M-0-1] or [T-2-0]. Never invent a source ID. Use citations selectively rather than adding them to every sentence.
+    Use the complete manuscript coverage as the primary source for the user's request. You may analyze, explain, plan, write, rewrite, typeset, format, or otherwise transform the manuscript when asked. For writing requests, produce the finished reader-facing work rather than advice about how to do it. Preserve the author's facts, meaning, voice, order, and exact wording when the request requires fidelity. Use transcript material as supporting provenance. Do not mention internal context assembly, source labels, retrieval, excerpts, or missing attachments when manuscript context is present. State uncertainty only when the supplied material truly does not support the requested action.
   ${modeInstruction}
   ${EM_DASH_MINIMIZATION_RULES}
   ${NEXUSLM_SCRIPTURE_FORMATTING_RULES}`,
       prompt: `RESPONSE LENGTH: ${responseLength.label}. ${responseLength.instruction}
 
 CHAPTER OUTLINE:\n${chapterContext || "No chapter outline available."}\n\nTRANSCRIPT SOURCES:\n${sourceContext}\n\nRECENT CONVERSATION:\n${history || "None"}\n\nUSER QUESTION:\n${input.query}
-\n\n${memoryContext}
 `,
     };
 
-    const result = streamText({
-      model: input.agent === "nexusR1" ? deepSeekReasonerModel : deepSeekModel,
-      ...generationRequest,
-      abortSignal: request.signal,
-    });
-    const sourcePayload = sources.map(({ score: _score, ...source }) => source);
+    const sourceMetadata = Buffer.from(
+      JSON.stringify(sources.map(({ score: _score, ...source }) => source)),
+      "utf8",
+    ).toString("base64url");
     const encoder = new TextEncoder();
-    const event = (value: unknown) => encoder.encode(`${JSON.stringify(value)}\n`);
     const stream = new ReadableStream<Uint8Array>({
       async start(controller) {
+        let text = "";
         try {
-          controller.enqueue(event({ type: "sources", sources: sourcePayload }));
-          let text = "";
+          controller.enqueue(encoder.encode(`${NEXUSLM_BOOK_STREAM_METADATA_START}${sourceMetadata}${NEXUSLM_BOOK_STREAM_METADATA_END}`));
+          const result = streamText({
+            model: input.agent === "nexusR1" ? deepSeekReasonerModel : deepSeekModel,
+            ...generationRequest,
+            abortSignal: request.signal,
+          });
           for await (const chunk of result.textStream) {
             text += chunk;
-            controller.enqueue(event({ type: "text", text: chunk }));
+            controller.enqueue(encoder.encode(chunk));
           }
-          const answer = normalizeScriptureBlockquotes(sanitizeNexusLMText(text));
-          if (!answer) throw new Error("The selected model returned an empty response.");
-          controller.enqueue(event({ type: "done" }));
+          if (!text.trim()) throw new Error("The selected model returned an empty response.");
           controller.close();
         } catch (error) {
-          controller.enqueue(event({ type: "error", error: error instanceof Error ? error.message : "NexusLM could not answer." }));
-          controller.close();
+          controller.error(error);
         }
       },
     });
     return new Response(stream, {
       headers: {
-        "Content-Type": "application/x-ndjson; charset=utf-8",
+        "Content-Type": "text/plain; charset=utf-8",
         "Cache-Control": "no-cache, no-transform",
         "X-Accel-Buffering": "no",
+        "Connection": "keep-alive",
       },
     });
   } catch (error) {
