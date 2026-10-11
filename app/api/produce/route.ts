@@ -3,6 +3,7 @@ import { generateObject } from "ai";
 import { z } from "zod";
 import { deepSeekChatModel } from "@/lib/ai-providers";
 import { ProduceInputSchema, AcademyPackageSchema, AcademyShellSchema } from "@/lib/schemas/academy";
+import { enforceAcademyMediaCapabilities, normalizeAcademyLearnerVoice } from "@/lib/academy-content";
 
 export const runtime = "nodejs";
 
@@ -42,6 +43,10 @@ export async function POST(req: NextRequest) {
           return [beginning, middle, ending].filter(Boolean).join("\n\n[…]\n\n");
         };
         const phase1Source = buildPhase1Source(input.rawTranscript);
+        const hasVideoSource = input.assets.some((asset) => asset.type.toLowerCase() === "video");
+        const lessonTypeInstruction = hasVideoSource
+          ? "Use video only when it genuinely improves the lesson; reading, quiz, and exercise are also available."
+          : "This course has no video source. Use only reading, quiz, or exercise lessons. Never create a video lesson or imply that a video exists.";
         const phase1SourceSection = phase1Source
           ? `\n\nSOURCE MATERIAL:\n${phase1Source}`
           : "";
@@ -143,7 +148,7 @@ Use the source as the foundation, but make sensible connections and framing choi
         // with lightweight lesson stubs only.
         const shellMaxTokens = calculateMaxTokens((input.rawTranscript ?? "").length, contentMap.themes.length);
         
-        const { object: shell } = await generateObject({
+        const { object: generatedShell } = await generateObject({
           model: deepSeekChatModel,
           schema: AcademyShellSchema,
           schemaName: "AcademyShell",
@@ -157,8 +162,11 @@ OUTPUT ALL ACADEMY FIELDS. Keep the output focused enough to validate reliably.
 
 FOR THE CURRICULUM: produce ${modCountLabel} module${scale.maxMods === 1 ? "" : "s"} within the schema limits. Give each module 2–3 useful lesson outlines. Lesson outline = title + type + durationMinutes only.
 DO NOT write notes, quiz, keyTakeaways, or actionItems in this phase.
+${lessonTypeInstruction}
 
 Use the content map as useful research, not as a rigid script. Let the source, the delivery preferences, and your judgment determine the best curriculum flow. Avoid needless repetition, but allow concepts to connect across modules when that improves teaching.
+
+LEARNER VOICE: Write directly to the learner using "you" and clear instructional language. Do not report on the source or narrate what a speaker, transcript, source, or material said.
 
 FIELD GUIDE:
 - academyName: Market-ready title from the core subject matter
@@ -188,6 +196,17 @@ EDITORIAL JUDGMENT:
 - Add reasonable framing and learner-facing language when it improves the result, but do not invent specific source claims, quotations, statistics, or attributions.`,
           prompt: basePrompt + contentMapSection + phase1SourceSection + deliverySection,
         });
+        const shell = {
+          ...generatedShell,
+          curriculum: generatedShell.curriculum.map((module) => ({
+            ...module,
+            lessonOutlines: module.lessonOutlines.map((lesson) => (
+              !hasVideoSource && lesson.type === "video"
+                ? { ...lesson, type: "reading" as const }
+                : lesson
+            )),
+          })),
+        };
 
         // ── Phase 2: one generateObject call per module ───────────────────────
         // Splitting by module keeps each call well under DeepSeek's 8K output
@@ -236,6 +255,7 @@ PER LESSON output:
 - quiz: useful questions with four options and one correct index
 
 Use the source, the module outline, and the delivery preferences as direction. Make the teaching coherent and engaging, connect ideas when helpful, and use your judgment about emphasis and explanation. Do not invent specific source claims, quotations, statistics, or attributions.`;
+        const learnerVoiceRule = `Write directly to the learner. Use "you" and actionable teaching language. Never use reporting phrases such as "the speaker said", "the transcript explains", "the source states", or "the material teaches".`;
 
         const allModuleContents: z.infer<typeof SingleModuleContentSchema>[] = [];
 
@@ -269,6 +289,7 @@ Use the source, the module outline, and the delivery preferences as direction. M
               "",
               phase1Source ? `SOURCE MATERIAL:\n${phase1Source}` : "",
               deliverySection,
+              learnerVoiceRule,
             ].filter(Boolean).join("\n"),
           });
           allModuleContents.push(modContent);
@@ -302,10 +323,11 @@ Use the source, the module outline, and the delivery preferences as direction. M
         });
 
         // ── Phase 3: Merge and validate ────────────────────────────────────────
-        const academy = AcademyPackageSchema.parse({
+        const academy = normalizeAcademyLearnerVoice(enforceAcademyMediaCapabilities(AcademyPackageSchema.parse({
           ...shell,
           curriculum: fullCurriculum,
-        });
+          sourceCapabilities: { hasVideo: hasVideoSource },
+        }), hasVideoSource));
 
         clearInterval(ping);
         controller.enqueue(encoder.encode(`data: ${JSON.stringify(academy)}\n\n`));

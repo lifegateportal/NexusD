@@ -300,6 +300,7 @@ export default function HomePage() {
                   ebookManifest: null,
                   ebookJobState: null,
                   publishedSlug: remoteProject.publishedSlug,
+                  academyPublishedSlug: remoteProject.academyPublishedSlug,
                   coverImageUrl: remoteProject.coverImageUrl,
                   authorImageUrl: remoteProject.authorImageUrl,
                   hasAcademy: remoteProject.hasAcademy,
@@ -396,6 +397,7 @@ export default function HomePage() {
       ebookManifest: ebookManifest ?? null,
       ebookJobState: ebookJobState ?? undefined,
       publishedSlug: existingProject?.publishedSlug ?? existingEbookProject?.publishedSlug,
+      academyPublishedSlug: existingProject?.academyPublishedSlug,
       coverImageUrl: existingProject?.coverImageUrl ?? existingEbookProject?.coverImageUrl,
       authorImageUrl: existingProject?.authorImageUrl ?? existingEbookProject?.authorImageUrl,
     };
@@ -1049,6 +1051,82 @@ export default function HomePage() {
     }
   }, [addLog]);
 
+  const handlePublishAcademy = useCallback(async (snapshot: ProjectSnapshot): Promise<string | null> => {
+    const fullSnapshot = await getProject(snapshot.id).catch(() => null)
+      ?? await fetchProjectFromCloud(snapshot.id).catch(() => null);
+    if (!fullSnapshot?.academy) {
+      addLog({ level: "error", message: "No Academy content found — run the Academy pipeline first." });
+      return null;
+    }
+    const academy = AcademyPackageSchema.parse(fullSnapshot.academy);
+    try {
+      const res = await fetch("/api/academy/publish", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          projectId: fullSnapshot.id,
+          ...(fullSnapshot.academyPublishedSlug ? { existingSlug: fullSnapshot.academyPublishedSlug } : {}),
+          academy,
+          siteConfig: fullSnapshot.siteConfig,
+        }),
+      });
+      if (!res.ok) {
+        const err = await res.json() as { error?: string };
+        addLog({ level: "error", message: err.error ?? "Academy publish failed." });
+        return null;
+      }
+      const { slug } = await res.json() as { slug: string };
+      const updated = { ...fullSnapshot, academyPublishedSlug: slug };
+      await saveProject(updated);
+      setProjects((current) => current.map((project) => (
+        project.id === updated.id ? { ...project, academyPublishedSlug: slug } : project
+      )));
+      fetch("/api/projects", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ project: updated }),
+      }).catch(() => {});
+      addLog({ level: "success", message: `Published Academy course to /academy/${slug}` });
+      return slug;
+    } catch (err) {
+      addLog({ level: "error", message: err instanceof Error ? err.message : "Academy publish failed." });
+      return null;
+    }
+  }, [addLog]);
+
+  const handleUnpublishAcademy = useCallback(async (snapshot: ProjectSnapshot): Promise<boolean> => {
+    const fullSnapshot = await getProject(snapshot.id).catch(() => null)
+      ?? await fetchProjectFromCloud(snapshot.id).catch(() => null);
+    if (!fullSnapshot?.academyPublishedSlug) return false;
+    try {
+      const res = await fetch("/api/academy/publish", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ slug: fullSnapshot.academyPublishedSlug }),
+      });
+      if (!res.ok) {
+        const err = await res.json() as { error?: string };
+        addLog({ level: "error", message: err.error ?? "Academy unpublish failed." });
+        return false;
+      }
+      const updated = { ...fullSnapshot, academyPublishedSlug: undefined };
+      await saveProject(updated);
+      setProjects((current) => current.map((project) => (
+        project.id === updated.id ? { ...project, academyPublishedSlug: undefined } : project
+      )));
+      fetch("/api/projects", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ project: updated }),
+      }).catch(() => {});
+      addLog({ level: "success", message: `"${snapshot.name}" removed from Academy.` });
+      return true;
+    } catch (err) {
+      addLog({ level: "error", message: err instanceof Error ? err.message : "Academy unpublish failed." });
+      return false;
+    }
+  }, [addLog]);
+
   const handleStageChange = useCallback((s: PipelineStage) => {
     setStage(s);
     if (s === "done" || s === "error" || s === "idle") {
@@ -1369,6 +1447,8 @@ export default function HomePage() {
                     folderSyncError={folderSyncError}
                     onPublish={handlePublishProject}
                     onUnpublish={handleUnpublishProject}
+                    onPublishAcademy={handlePublishAcademy}
+                    onUnpublishAcademy={handleUnpublishAcademy}
                     onUpdateImages={handleUpdateImages}
                   />
                 ) : activeNav === "ebook" ? (
@@ -1412,7 +1492,7 @@ export default function HomePage() {
                     {blueprint ? (
                       <div className="flex flex-col gap-3">
                         <a
-                          href="/preview"
+                          href="/academy"
                           target="_blank"
                           rel="noopener noreferrer"
                           className="flex min-h-12 items-center justify-center gap-2 rounded-xl bg-cyan-500 px-5 text-sm font-semibold text-slate-950 shadow-glow transition hover:bg-cyan-400"
@@ -1421,7 +1501,7 @@ export default function HomePage() {
                           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} className="h-4 w-4"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" strokeLinecap="round" strokeLinejoin="round" /><path d="M15 3h6v6" strokeLinecap="round" strokeLinejoin="round" /><path d="M10 14 21 3" strokeLinecap="round" strokeLinejoin="round" /></svg>
                         </a>
                         <a
-                          href="/preview/learn"
+                          href="/academy/learn"
                           target="_blank"
                           rel="noopener noreferrer"
                           className="flex min-h-12 items-center justify-center gap-2 rounded-xl border border-cyan-500/30 bg-cyan-500/10 px-5 text-sm font-semibold text-cyan-300 transition hover:bg-cyan-500/20 hover:border-cyan-400/50"

@@ -30,6 +30,10 @@ type ProjectsPanelProps = {
   onPublish?: (project: ProjectSnapshot) => Promise<string | null>;
   /** Unpublish (remove from library) a published project */
   onUnpublish?: (project: ProjectSnapshot) => Promise<boolean>;
+  /** Publish an Academy project to the public Academy catalog */
+  onPublishAcademy?: (project: ProjectSnapshot) => Promise<string | null>;
+  /** Remove an Academy project from the public Academy catalog */
+  onUnpublishAcademy?: (project: ProjectSnapshot) => Promise<boolean>;
   /** Called after a cover or author image is uploaded, to persist the new URL */
   onUpdateImages?: (id: string, coverImageUrl?: string, authorImageUrl?: string) => Promise<void>;
 };
@@ -62,6 +66,8 @@ export function ProjectsPanel({
   folderSyncError,
   onPublish,
   onUnpublish,
+  onPublishAcademy,
+  onUnpublishAcademy,
   onUpdateImages,
 }: ProjectsPanelProps) {
   const PROJECT_PAGE_SIZE = 20;
@@ -572,6 +578,78 @@ export function ProjectsPanel({
                         </>
                       )}
                     </button>
+                  )}
+
+                  {onPublishAcademy && (p.hasAcademy || Boolean(p.academy)) && (
+                    <div className="mt-2 space-y-1.5">
+                      {p.academyPublishedSlug ? (
+                        <>
+                          <a
+                            href={`/academy/${p.academyPublishedSlug}`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="flex min-h-10 w-full items-center justify-center gap-2 rounded-lg border border-cyan-500/40 bg-cyan-500/10 text-sm font-semibold text-cyan-400 transition hover:bg-cyan-500/15"
+                          >
+                            View in Academy
+                          </a>
+                          <button
+                            onClick={async () => {
+                              setPublishingId(p.id);
+                              try { await onPublishAcademy(p); }
+                              finally { setPublishingId(null); }
+                            }}
+                            disabled={publishingId === p.id}
+                            className="flex min-h-10 w-full items-center justify-center gap-2 rounded-lg border border-slate-700/60 bg-slate-800/40 text-sm font-medium text-slate-400 transition hover:border-cyan-500/40 hover:bg-cyan-500/10 hover:text-cyan-400 disabled:opacity-50"
+                          >
+                            {publishingId === p.id ? "Republishing…" : "Republish Academy"}
+                          </button>
+                          {onUnpublishAcademy && (
+                            confirmUnpublish === `academy:${p.id}` ? (
+                              <div className="flex gap-2">
+                                <button
+                                  onClick={async () => {
+                                    setUnpublishingId(p.id);
+                                    setConfirmUnpublish(null);
+                                    try { await onUnpublishAcademy(p); }
+                                    finally { setUnpublishingId(null); }
+                                  }}
+                                  disabled={unpublishingId === p.id}
+                                  className="flex min-h-10 flex-1 items-center justify-center rounded-lg bg-red-500/20 text-sm font-semibold text-red-400 transition hover:bg-red-500/30 disabled:opacity-50"
+                                >
+                                  {unpublishingId === p.id ? "Unpublishing…" : "Yes, unpublish"}
+                                </button>
+                                <button
+                                  onClick={() => setConfirmUnpublish(null)}
+                                  className="flex min-h-10 flex-1 items-center justify-center rounded-lg bg-slate-700/50 text-sm text-slate-400 transition hover:bg-slate-700"
+                                >
+                                  Cancel
+                                </button>
+                              </div>
+                            ) : (
+                              <button
+                                onClick={() => setConfirmUnpublish(`academy:${p.id}`)}
+                                disabled={unpublishingId === p.id}
+                                className="flex min-h-10 w-full items-center justify-center gap-2 rounded-lg border border-red-500/30 bg-red-500/10 text-sm font-semibold text-red-400 transition hover:bg-red-500/20 disabled:opacity-50"
+                              >
+                                Unpublish Academy
+                              </button>
+                            )
+                          )}
+                        </>
+                      ) : (
+                        <button
+                          onClick={async () => {
+                            setPublishingId(p.id);
+                            try { await onPublishAcademy(p); }
+                            finally { setPublishingId(null); }
+                          }}
+                          disabled={publishingId === p.id}
+                          className="flex min-h-10 w-full items-center justify-center gap-2 rounded-lg border border-cyan-500/40 bg-cyan-500/10 text-sm font-semibold text-cyan-400 transition hover:bg-cyan-500/15 disabled:opacity-50"
+                        >
+                          {publishingId === p.id ? "Publishing…" : "Publish to Academy"}
+                        </button>
+                      )}
+                    </div>
                   )}
                 </div>
               )}

@@ -6,6 +6,7 @@ import { AcademyPackageSchema } from "@/lib/schemas/academy";
 import type { AcademyPackage } from "@/lib/schemas/academy";
 import { SiteConfigSchema } from "@/lib/schemas/site-config";
 import type { SiteConfig } from "@/lib/schemas/site-config";
+import { enforceAcademyMediaCapabilities, normalizeAcademyLearnerVoice } from "@/lib/academy-content";
 import { z } from "zod";
 
 export const runtime = "nodejs";
@@ -172,7 +173,10 @@ function applyAcademyPatch(
     updated.curriculum = curriculum;
   }
 
-  return AcademyPackageSchema.parse(updated);
+  const parsed = AcademyPackageSchema.parse(updated);
+  const hasVideoSource = parsed.sourceCapabilities.hasVideo
+    || parsed.curriculum.some((module) => module.lessons.some((lesson) => lesson.type === "video"));
+  return normalizeAcademyLearnerVoice(enforceAcademyMediaCapabilities(parsed, hasVideoSource));
 }
 
 function applySiteConfigPatch(
@@ -248,7 +252,7 @@ Return only fields that need to change so the server can merge your patch safely
 
 For curriculum changes, identify modules and lessons by their zero-based indexes in the supplied academy. Use curriculumPatches for module updates, inserts, deletes, and lessonPatches. Use operation="delete" only when the user's instruction actually requests removal. New modules must include complete lesson objects. Use the existing schema's enum values and field shapes.
 
-For site changes, return siteConfigPatch with only the requested keys. For academy metadata, landing pages, pricing, SEO, and onboarding, return only the requested fields. Always include a concise summary and a confidence value.`,
+For site changes, return siteConfigPatch with only the requested keys. For academy metadata, landing pages, pricing, SEO, and onboarding, return only the requested fields. Write learner-facing copy directly to the learner using "you"; do not use reporting phrases such as "the speaker said", "the transcript explains", "the source states", or "the material teaches". Never add video lessons when sourceCapabilities.hasVideo is false. Always include a concise summary and a confidence value.`,
       prompt: [
         "CURRENT ACADEMY (complete context):",
         JSON.stringify(academyContext),

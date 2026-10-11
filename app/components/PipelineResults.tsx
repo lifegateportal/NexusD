@@ -355,11 +355,11 @@ export function PipelineResults({ blueprint, logic, ui, academy, externalTab }: 
               type="button"
               onClick={() => {
                 localStorage.setItem("nexus_academy_preview", JSON.stringify(academy));
-                window.open("/preview", "_blank");
+                window.open("/academy", "_blank");
               }}
               className="flex min-h-12 w-full items-center justify-center gap-2 rounded-xl bg-cyan-500 text-sm font-bold text-slate-950 transition hover:bg-cyan-400"
             >
-              Launch Preview →
+              Launch Academy →
             </button>
           </div>
         )}

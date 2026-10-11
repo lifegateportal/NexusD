@@ -43,6 +43,9 @@ export const AcademyPackageSchema = z.object({
   academyName: z.string(),
   tagline: z.string(),
   targetAudience: z.string(),
+  sourceCapabilities: z.object({
+    hasVideo: z.boolean().default(false),
+  }).default({}),
   difficultyLevel: z.enum(["beginner", "intermediate", "advanced"]).default("intermediate"),
   totalEstimatedHours: z.number().default(0),
   certificateTitle: z.string().default(""),

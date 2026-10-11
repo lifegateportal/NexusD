@@ -74,6 +74,7 @@ function projectSummary(project: Record<string, unknown>) {
     coverImageUrl: project.coverImageUrl,
     authorImageUrl: project.authorImageUrl,
     hasAcademy: Boolean(project.academy),
+    academyPublishedSlug: project.academyPublishedSlug,
     hasEbookContent: Boolean(manifest || jobState),
     ebookChapterCount: chapters.length,
     ebookTotalWordCount: totalWordCount,

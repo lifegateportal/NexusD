@@ -25,6 +25,8 @@ export type ProjectSnapshot = {
   ebookJobState?: EbookJobState | null;
   /** Slug of the published library entry, set after a successful publish */
   publishedSlug?: string;
+  /** Slug of the published Academy course, set after a successful publish */
+  academyPublishedSlug?: string;
   /** R2 public URL for the book cover image */
   coverImageUrl?: string;
   /** R2 public URL for the author's photo */
@@ -45,6 +47,7 @@ export type ProjectCloudSummary = Pick<
   | "updatedAt"
   | "folderId"
   | "publishedSlug"
+  | "academyPublishedSlug"
   | "coverImageUrl"
   | "authorImageUrl"
   | "hasAcademy"
@@ -173,6 +176,7 @@ function makeProjectListSnapshot(item: ProjectSnapshot): ProjectSnapshot {
       ebookManifest: null,
       ebookJobState: null,
       publishedSlug: normalized.publishedSlug,
+      academyPublishedSlug: normalized.academyPublishedSlug,
       coverImageUrl: normalized.coverImageUrl,
       authorImageUrl: normalized.authorImageUrl,
       hasAcademy: Boolean(normalized.academy),
