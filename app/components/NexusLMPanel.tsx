@@ -22,6 +22,7 @@ import { NEXUSLM_AGENTS, type NexusLMAgent } from "@/lib/nexuslm-agents";
 import { isNexusLMLongFormRequest, NEXUSLM_RESPONSE_LENGTHS, sanitizeNexusLMText, type NexusLMResponseLength } from "@/lib/nexuslm-response";
 import { safeNexusLMFilename, type NexusLMArtifactFormat } from "@/lib/nexuslm-artifacts";
 import { pickVoice } from "@/lib/audio-player-context";
+import { formatNexusLMImageObservation, inspectNexusLMImage } from "@/lib/nexuslm-vision";
 import {
   cleanNexusVoiceText,
   buildNexusGreetingResponse,
@@ -229,7 +230,7 @@ function compactHistory(history: Message[]): Array<{ role: "user" | "assistant";
 function initialMessage(manifest: EbookManifest | null): Message {
   return manifest
     ? { role: "system", content: `NexusLM is connected to “${manifest.bookTitle}”. Ask about the manuscript, challenge its thinking, or request a focused edit.` }
-    : { role: "system", content: "NexusLM is ready for general conversation. Ask anything, attach a text, HTML, or PDF document, or connect a book when you want source-grounded manuscript help." };
+    : { role: "system", content: "NexusLM is ready for general conversation. Ask anything, attach a text, HTML, PDF, or image file, or connect a book when you want source-grounded manuscript help." };
 }
 
 function createEmptyManuscript(manifest: EbookManifest | null, pipelineSnapshot: EbookPipelineSnapshot | null): NexusLMManuscript {
@@ -620,6 +621,25 @@ function DocumentPreview({
     );
   }
 
+  if (kind === "image") {
+    return attachment.previewDataUrl ? (
+      <div className="space-y-3">
+        <img
+          src={attachment.previewDataUrl}
+          alt={`Local preview of ${attachment.name}`}
+          className="max-h-[52dvh] min-h-[12rem] w-full rounded-xl border border-slate-800 bg-slate-950 object-contain"
+        />
+        <pre className="max-h-[24dvh] overflow-auto whitespace-pre-wrap rounded-xl border border-slate-800 bg-slate-950 p-4 text-xs leading-6 text-slate-300">
+          {attachment.content}
+        </pre>
+      </div>
+    ) : (
+      <pre className="max-h-[52dvh] overflow-auto whitespace-pre-wrap rounded-xl border border-slate-800 bg-slate-950 p-4 text-xs leading-6 text-slate-300">
+        {attachment.content}
+      </pre>
+    );
+  }
+
   if (kind === "html") {
     return (
       <div className="space-y-2">
@@ -678,6 +698,7 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
   const [attachments, setAttachments] = useState<ChatAttachment[]>([]);
   const [processEntireDocument, setProcessEntireDocument] = useState(false);
   const [attachmentError, setAttachmentError] = useState<string | null>(null);
+  const [visionStatus, setVisionStatus] = useState<string | null>(null);
   const [lastGeneralRequest, setLastGeneralRequest] = useState<GeneralRequest | null>(null);
   const [selectedAttachmentId, setSelectedAttachmentId] = useState<string | null>(null);
   const [generatedPreview, setGeneratedPreview] = useState<PreviewDocument | null>(null);
@@ -1360,14 +1381,16 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
       const isPdf = extension === "pdf" || file.type === "application/pdf";
       const isHtmlFilename = /\.(?:html?|xhtml)(?:\.txt)?$/i.test(file.name);
       const isHtml = isHtmlFilename || file.type === "text/html";
+      const isImage = file.type.startsWith("image/")
+        || ["avif", "gif", "jpeg", "jpg", "png", "webp"].includes(extension);
       const isText = file.type.startsWith("text/")
         || ["csv", "css", "json", "js", "jsx", "md", "tsx", "ts", "xml", "yaml", "yml", "srt", "log"].includes(extension);
-      if (!isText && !isHtml && !isPdf) {
-        setAttachmentError(`${file.name} is not supported yet. Use text, HTML, Markdown, or PDF documents.`);
+      if (!isText && !isHtml && !isPdf && !isImage) {
+        setAttachmentError(`${file.name} is not supported yet. Use text, HTML, Markdown, PDF, or image files.`);
         continue;
       }
-      if ((!isPdf && file.size > 6_000_000) || (isPdf && file.size > 20_000_000)) {
-        setAttachmentError(`${file.name} is too large. Text/HTML files may be up to 6 MB; PDFs may be up to 20 MB.`);
+      if ((!isPdf && !isImage && file.size > 6_000_000) || (isPdf && file.size > 20_000_000) || (isImage && file.size > 12_000_000)) {
+        setAttachmentError(`${file.name} is too large. Text/HTML files may be up to 6 MB, images up to 12 MB, and PDFs up to 20 MB.`);
         continue;
       }
       try {
@@ -1383,6 +1406,11 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
           }
           content = payload.text;
           previewDataUrl = await readDataUrl(file);
+        } else if (isImage) {
+          setVisionStatus(`Analyzing ${file.name} locally...`);
+          const observation = await inspectNexusLMImage(file, (message) => setVisionStatus(`${file.name} · ${message}`));
+          content = formatNexusLMImageObservation(file.name, observation);
+          previewDataUrl = await readDataUrl(file);
         } else {
           content = await file.text();
         }
@@ -1390,20 +1418,25 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
           setAttachmentError(`${file.name} is empty.`);
           continue;
         }
-        const detectedKind = isPdf || !looksLikeHtmlDocument(content) ? (isPdf ? "pdf" : "text") : "html";
+        const detectedKind = isImage
+          ? "image"
+          : isPdf || !looksLikeHtmlDocument(content)
+            ? (isPdf ? "pdf" : "text")
+            : "html";
         accepted.push({
           id: `${file.name}-${file.lastModified}-${accepted.length}`,
           name: file.name,
           content,
           size: file.size,
-          kind: isPdf ? "pdf" : isHtml || detectedKind === "html" ? "html" : "text",
-          mimeType: file.type || (isPdf ? "application/pdf" : isHtml || detectedKind === "html" ? "text/html" : "text/plain"),
+          kind: isImage ? "image" : isPdf ? "pdf" : isHtml || detectedKind === "html" ? "html" : "text",
+          mimeType: file.type || (isImage ? "image/*" : isPdf ? "application/pdf" : isHtml || detectedKind === "html" ? "text/html" : "text/plain"),
           previewDataUrl,
         });
       } catch (error) {
         setAttachmentError(`${file.name} could not be read: ${readableError(error)}`);
       }
     }
+    setVisionStatus(null);
 
     if (accepted.length > 0) {
       const totalCharacters = [...attachments, ...accepted].reduce((total, attachment) => total + attachment.content.length, 0);
@@ -2523,7 +2556,7 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
               <input
                 ref={fileInputRef}
                 type="file"
-                accept=".txt,.md,.csv,.json,.css,.js,.jsx,.ts,.tsx,.xml,.yaml,.yml,.srt,.log,.html,.htm,.pdf,text/*,application/pdf"
+                accept=".txt,.md,.csv,.json,.css,.js,.jsx,.ts,.tsx,.xml,.yaml,.yml,.srt,.log,.html,.htm,.pdf,.avif,.gif,.jpeg,.jpg,.png,.webp,text/*,application/pdf,image/*"
                 multiple
                 className="hidden"
                 onChange={(event) => {
@@ -2569,6 +2602,9 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
               )}
               {attachmentError && (
                 <p className="px-3 pt-2 text-xs text-amber-300" role="alert">{attachmentError}</p>
+              )}
+              {visionStatus && (
+                <p className="px-3 pt-2 text-xs text-cyan-300" role="status" aria-live="polite">{visionStatus}</p>
               )}
               {voiceError && (
                 <p className="px-3 pt-2 text-xs text-amber-300" role="alert">{voiceError}</p>

@@ -13,7 +13,7 @@ export type NexusLMChatAttachment = {
   name: string;
   content: string;
   size: number;
-  kind: "text" | "html" | "pdf";
+  kind: "text" | "html" | "pdf" | "image";
   mimeType?: string;
   previewDataUrl?: string;
 };
@@ -69,7 +69,7 @@ const ChatAttachmentSchema = z.object({
   name: z.string().min(1),
   content: z.string(),
   size: z.number().nonnegative(),
-  kind: z.enum(["text", "html", "pdf"]),
+  kind: z.enum(["text", "html", "pdf", "image"]),
   mimeType: z.string().optional(),
   previewDataUrl: z.string().optional(),
 }).strict();

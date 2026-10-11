@@ -13,6 +13,7 @@
     "start": "node server.mjs",
     "lint": "next lint",
     "typecheck": "tsc --noEmit",
+    "postinstall": "node scripts/prepare-tesseract-assets.mjs",
     "quality:ebook": "node scripts/ebook-quality-check.mjs"
   },
   "dependencies": {
@@ -33,6 +34,8 @@
     "playwright-core": "^1.63.0",
     "react": "^19.2.7",
     "react-dom": "^19.2.7",
+    "@tesseract.js-data/eng": "^1.0.0",
+    "tesseract.js": "^7.0.0",
     "zod": "^3.25.76"
   },
   "devDependencies": {
