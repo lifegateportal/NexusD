@@ -85,6 +85,59 @@ export function cleanNexusVoiceText(text: string): string {
     .trim();
 }
 
+export function isNexusGreeting(text: string): boolean {
+  return /^(?:hi|hello|hey|yo|good\s+(?:morning|afternoon|evening)|thanks|thank\s+you)(?:[\s,!.?]+(?:there|nexus))?[\s!.?]*$/i.test(text.trim());
+}
+
+export function buildNexusGreetingResponse(text: string): string {
+  return /^(?:thanks|thank\s+you)\b/i.test(text.trim())
+    ? "You are welcome. What would you like to work on next?"
+    : "Hi. I am ready to help. What would you like to work on?";
+}
+
+export function isNexusCodeRequest(text: string): boolean {
+  const asksForCode = /\b(?:build|write|create|generate|implement|make|develop|fix|update)\b/i.test(text);
+  const codeSubject = /\b(?:code|coding|script|program|function|component|api|endpoint|website|web\s+app|application|software|javascript|typescript|python|react|next(?:\.js)?|html|css)\b/i.test(text);
+  return asksForCode && codeSubject;
+}
+
+function firstSpokenSentences(text: string, maxSentences = 2, maxCharacters = 360): string {
+  const sentences = text.match(/[^.!?]+[.!?]+|[^.!?]+$/g) ?? [text];
+  const selected: string[] = [];
+  for (const sentence of sentences) {
+    const next = `${selected.join(" ")} ${sentence}`.trim();
+    if (selected.length > 0 && next.length > maxCharacters) break;
+    selected.push(sentence.trim());
+    if (selected.length >= maxSentences) break;
+  }
+  return selected.join(" ").slice(0, maxCharacters).trim();
+}
+
+export function buildNexusSpokenResponse(response: string, request: string): string {
+  const cleaned = cleanNexusVoiceText(response);
+  if (isNexusCodeRequest(request)) {
+    return "I completed the code and placed it in the chat for you to review.";
+  }
+  const codeResponse = /```[\s\S]*```/.test(response);
+  if (codeResponse) {
+    const spokenLead = response.split(/```/)[0];
+    const leadLooksLikeCode = /(?:^|\n)\s*(?:import|export|const|let|var|function|class|def |from |<!doctype|<html|SELECT\s|curl\s)/i.test(spokenLead);
+    const preview = leadLooksLikeCode ? "" : firstSpokenSentences(cleanNexusVoiceText(spokenLead), 2, 300);
+    return preview
+      ? `${preview} The complete code is in the chat.`
+      : "I built the code and placed the complete result in the chat.";
+  }
+  if (isNexusGreeting(request)) {
+    const preview = firstSpokenSentences(cleaned, 2, 220);
+    return preview || "Hi. I am ready to help.";
+  }
+  if (cleaned.length <= 700) return cleaned;
+  const preview = firstSpokenSentences(cleaned);
+  return preview
+    ? `${preview} I put the full response in the chat.`
+    : "I completed the response and placed the full result in the chat.";
+}
+
 export function splitNexusVoiceText(text: string, maxLength = 260): string[] {
   const normalized = cleanNexusVoiceText(text);
   if (!normalized) return [];

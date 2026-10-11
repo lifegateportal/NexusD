@@ -23,9 +23,13 @@ import { isNexusLMLongFormRequest, NEXUSLM_RESPONSE_LENGTHS, sanitizeNexusLMText
 import { safeNexusLMFilename, type NexusLMArtifactFormat } from "@/lib/nexuslm-artifacts";
 import { pickVoice } from "@/lib/audio-player-context";
 import {
+  cleanNexusVoiceText,
+  buildNexusGreetingResponse,
+  buildNexusSpokenResponse,
   createNexusVoiceRecognition,
   extractNexusWakeCommand,
   getNexusRecognitionText,
+  isNexusGreeting,
   splitNexusVoiceText,
   type NexusVoiceRecognition,
 } from "@/lib/nexuslm-voice";
@@ -110,6 +114,7 @@ type BookAuditReport = {
   totalOverusedWords: number;
 };
 type NexusVoiceStatus = "off" | "waiting" | "capturing" | "thinking" | "speaking" | "error";
+const NEXUS_VOICE_MODE_STORAGE_KEY = "nexuslm-voice-mode";
 
 function nexusVoiceStatusLabel(status: NexusVoiceStatus): string {
   return status === "waiting"
@@ -710,7 +715,9 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
   const voiceCommandRef = useRef("");
   const voiceSpeakCursorRef = useRef(0);
   const spokenMessageRef = useRef<string | null>(null);
+  const voiceInstructionRef = useRef("");
   const speechGenerationRef = useRef(0);
+  const voiceResumeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const hasBookContext = Boolean(manifest || transcripts.length > 0);
   const useBookContext = contextMode === "book" || (contextMode === "auto" && hasBookContext);
 
@@ -739,6 +746,20 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
     voiceRestartTimerRef.current = null;
   }
 
+  function clearVoiceResumeTimer(): void {
+    if (!voiceResumeTimerRef.current) return;
+    clearTimeout(voiceResumeTimerRef.current);
+    voiceResumeTimerRef.current = null;
+  }
+
+  function persistVoiceMode(enabled: boolean): void {
+    try {
+      window.localStorage.setItem(NEXUS_VOICE_MODE_STORAGE_KEY, enabled ? "on" : "off");
+    } catch (error) {
+      setVoiceError(`Voice mode preference could not be saved: ${readableError(error)}`);
+    }
+  }
+
   function stopVoiceRecognition(): void {
     voiceSessionRef.current += 1;
     const recognition = voiceRecognitionRef.current;
@@ -753,12 +774,14 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
 
   function stopVoiceOutput(): void {
     speechGenerationRef.current += 1;
+    clearVoiceResumeTimer();
     if (typeof window !== "undefined") window.speechSynthesis?.cancel();
   }
 
   function failVoiceMode(message: string): void {
     voiceModeRef.current = false;
     setVoiceModeEnabled(false);
+    persistVoiceMode(false);
     stopVoiceRecognition();
     stopVoiceOutput();
     clearVoiceRestartTimer();
@@ -772,6 +795,18 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
       voiceRestartTimerRef.current = null;
       startWakeRecognition();
     }, 250);
+  }
+
+  function finishVoiceSpeech(generation: number): void {
+    if (generation !== speechGenerationRef.current || !voiceModeRef.current) return;
+    if (typeof window !== "undefined" && (window.speechSynthesis?.speaking || window.speechSynthesis?.pending)) {
+      clearVoiceResumeTimer();
+      voiceResumeTimerRef.current = setTimeout(() => finishVoiceSpeech(generation), 1000);
+      return;
+    }
+    clearVoiceResumeTimer();
+    setVoiceStatus("waiting");
+    scheduleWakeRecognition();
   }
 
   function startWakeRecognition(): void {
@@ -944,6 +979,7 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
       stopVoiceMode();
       return;
     }
+    voiceInstructionRef.current = normalized;
     if (handleVoiceControlCommand(normalized)) {
       setInput("");
       return;
@@ -958,7 +994,7 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
     spokenMessageRef.current = null;
     setInput(normalized);
     setVoiceStatus("thinking");
-    void send(normalized);
+    void send(normalized, undefined, "all", { voiceInput: true });
   }
 
   function speakAssistantResponse(content: string): void {
@@ -969,7 +1005,8 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
       scheduleWakeRecognition();
       return;
     }
-    const chunks = splitNexusVoiceText(content);
+    const spokenResponse = buildNexusSpokenResponse(content, voiceInstructionRef.current);
+    const chunks = splitNexusVoiceText(spokenResponse);
     if (chunks.length === 0) {
       setVoiceStatus("waiting");
       scheduleWakeRecognition();
@@ -983,8 +1020,7 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
     const speakNext = () => {
       if (generation !== speechGenerationRef.current || !voiceModeRef.current) return;
       if (chunkIndex >= chunks.length) {
-        setVoiceStatus("waiting");
-        scheduleWakeRecognition();
+        finishVoiceSpeech(generation);
         return;
       }
       const utterance = new SpeechSynthesisUtterance(chunks[chunkIndex]);
@@ -993,21 +1029,25 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
       if (voice) utterance.voice = voice;
       utterance.rate = 1;
       utterance.pitch = 1;
-      utterance.onend = speakNext;
+      utterance.onend = () => {
+        speakNext();
+      };
       utterance.onerror = (event) => {
         if (generation !== speechGenerationRef.current || event.error === "canceled" || event.error === "interrupted") return;
         setVoiceError("Nexus could not play the spoken response. The written response is still available.");
-        setVoiceStatus("waiting");
-        scheduleWakeRecognition();
+        finishVoiceSpeech(generation);
       };
       window.speechSynthesis.speak(utterance);
     };
+    const estimatedDurationMs = Math.min(120_000, Math.max(4_000, cleanNexusVoiceText(content).length * 65 + 2_000));
+    voiceResumeTimerRef.current = setTimeout(() => finishVoiceSpeech(generation), estimatedDurationMs);
     speakNext();
   }
 
   function stopVoiceMode(): void {
     voiceModeRef.current = false;
     setVoiceModeEnabled(false);
+    persistVoiceMode(false);
     stopVoiceRecognition();
     stopVoiceOutput();
     clearVoiceRestartTimer();
@@ -1027,6 +1067,7 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
     }
     voiceModeRef.current = true;
     setVoiceModeEnabled(true);
+    persistVoiceMode(true);
     setVoiceError(null);
     voiceSpeakCursorRef.current = messages.length;
     spokenMessageRef.current = null;
@@ -1038,7 +1079,23 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
     stopVoiceRecognition();
     stopVoiceOutput();
     clearVoiceRestartTimer();
+    clearVoiceResumeTimer();
     if (generatedPreviewUrlRef.current) URL.revokeObjectURL(generatedPreviewUrlRef.current);
+  }, []);
+
+  useEffect(() => {
+    let shouldRestore = false;
+    try {
+      shouldRestore = window.localStorage.getItem(NEXUS_VOICE_MODE_STORAGE_KEY) === "on";
+    } catch (error) {
+      setVoiceError(`Voice mode preference could not be loaded: ${readableError(error)}`);
+    }
+    if (!shouldRestore) return;
+    voiceModeRef.current = true;
+    setVoiceModeEnabled(true);
+    setVoiceError(null);
+    const timer = setTimeout(() => startWakeRecognition(), 0);
+    return () => clearTimeout(timer);
   }, []);
 
   useEffect(() => {
@@ -1630,6 +1687,7 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
     requestAttachments: ChatAttachment[],
     shouldProcessEntireDocument: boolean,
     requestResponseLength: NexusLMResponseLength,
+    voiceInput: boolean,
   ): Promise<void> {
     const controller = new AbortController();
     abortControllerRef.current = controller;
@@ -1663,6 +1721,7 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
           processEntireDocument: shouldProcessEntireDocument,
           attachments: requestAttachments.map(({ name, content, kind, mimeType }) => ({ name, content, kind, mimeType })),
           history: compactHistory(nextMessages),
+          voiceMode: voiceInput,
         }),
       });
 
@@ -1778,12 +1837,15 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
       requestAttachments?: ChatAttachment[];
       processEntireDocument?: boolean;
       responseLength?: NexusLMResponseLength;
+      voiceInput?: boolean;
     },
   ) {
     const instruction = (requestText ?? input).trim();
     if (!instruction || loading) return;
+    const voiceInput = options?.voiceInput ?? voiceModeRef.current;
+    const shouldUseShortGreeting = isNexusGreeting(instruction) && (voiceInput || responseLength === "default");
     const requestResponseLength = options?.responseLength
-      ?? (responseLength === "default" && isNexusLMLongFormRequest(instruction) ? "long-form" : responseLength);
+      ?? (shouldUseShortGreeting ? "shorter" : responseLength === "default" && isNexusLMLongFormRequest(instruction) ? "long-form" : responseLength);
     const activeMode = requestMode ?? inferMode(instruction, mode);
     const requestUsesBook = options?.forceGeneral ? false : useBookContext && hasBookContext;
     if (requestUsesBook && activeMode === "edit" && !manifest) {
@@ -1822,11 +1884,23 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
         content: instruction,
         attachments: requestUsesBook ? undefined : requestAttachments.map(({ id, name }) => ({ id, name })),
       }];
+    if (isNexusGreeting(instruction)) {
+      if (voiceInput) {
+        stopVoiceRecognition();
+        stopVoiceOutput();
+        setVoiceStatus("thinking");
+        voiceInstructionRef.current = instruction;
+      }
+      setMessages([...nextMessages, { role: "assistant", content: buildNexusGreetingResponse(instruction) }]);
+      setInput("");
+      return;
+    }
     if (voiceModeRef.current) {
       stopVoiceRecognition();
       stopVoiceOutput();
       setVoiceStatus("thinking");
     }
+    if (voiceInput) voiceInstructionRef.current = instruction;
     stickToBottomRef.current = true;
     setMessages(nextMessages);
     setInput("");
@@ -1858,7 +1932,7 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
         });
         setSources([]);
         setAttachmentError(null);
-        await streamGeneralResponse(instruction, generalMode, nextMessages, requestAttachmentsSnapshot, shouldProcessEntireDocument, requestResponseLength);
+        await streamGeneralResponse(instruction, generalMode, nextMessages, requestAttachmentsSnapshot, shouldProcessEntireDocument, requestResponseLength, voiceInput);
         return;
       }
 
@@ -1887,6 +1961,7 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
             },
             transcripts: draftTranscriptScope === "selected" && selectedTranscript ? [selectedTranscript] : transcripts,
             transcriptScope: draftTranscriptScope,
+            voiceMode: voiceInput,
           }),
         });
         const json = await res.json() as { chapter?: unknown; error?: string };
@@ -1914,6 +1989,7 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
             manuscript: manifest ? { frontMatter: manifest.frontMatter, chapters: manifest.chapters, backMatter: manifest.backMatter ?? null } : null,
             transcripts,
             history: compactHistory(nextMessages),
+            voiceMode: voiceInput,
           }),
         });
         const json = await res.json() as { answer?: string; sources?: Source[]; error?: string };
@@ -1937,6 +2013,7 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
           manifestVersion: (manifest as Record<string, unknown>).__version as string | undefined,
           transcriptSources: transcripts,
           selectedTranscriptLabel: selectedTranscript?.label,
+          voiceMode: voiceInput,
           dryRun: true,
         }),
       });
@@ -2446,6 +2523,9 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
               {attachmentError && (
                 <p className="px-3 pt-2 text-xs text-amber-300" role="alert">{attachmentError}</p>
               )}
+              {voiceError && (
+                <p className="px-3 pt-2 text-xs text-amber-300" role="alert">{voiceError}</p>
+              )}
               <div className="px-2 pb-2 pt-2 lg:px-3">
                 <textarea
                   ref={inputRef}
@@ -2531,36 +2611,6 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
                             {Object.entries(MODES).map(([value, item]) => <option key={value} value={value}>{item.label}</option>)}
                           </select>
                         </div>
-                        <div className="border-t border-slate-800 pt-3">
-                          <div className="flex items-center justify-between gap-3">
-                            <div className="min-w-0">
-                              <p className="text-[10px] font-bold uppercase tracking-widest text-slate-500">Nexus voice mode</p>
-                              <p className="mt-1 text-[11px] leading-5 text-slate-500">Say “Nexus” to give a voice instruction.</p>
-                            </div>
-                            <button
-                              type="button"
-                              role="switch"
-                              aria-checked={voiceModeEnabled}
-                              onClick={toggleVoiceMode}
-                              className={`min-h-12 shrink-0 rounded-xl border px-3 text-xs font-bold ${voiceModeEnabled ? "border-cyan-400/60 bg-cyan-400/15 text-cyan-200" : "border-slate-700 text-slate-400"}`}
-                            >
-                              {voiceModeEnabled ? "On" : "Off"}
-                            </button>
-                          </div>
-                          {(voiceModeEnabled || voiceError) && (
-                            <div className="mt-2 rounded-xl border border-slate-800 bg-slate-950/70 p-3" aria-live="polite">
-                              <div className="flex items-center justify-between gap-2">
-                                <p className="text-xs text-slate-300">{nexusVoiceStatusLabel(voiceStatus)}</p>
-                                {voiceStatus === "speaking" && (
-                                  <button type="button" onClick={() => { stopVoiceOutput(); setVoiceStatus("waiting"); scheduleWakeRecognition(); }} className="min-h-12 rounded-lg border border-slate-700 px-3 text-[11px] font-semibold text-slate-300">
-                                    Stop speaking
-                                  </button>
-                                )}
-                              </div>
-                              {voiceError && <p className="mt-2 text-[11px] leading-5 text-amber-300">{voiceError}</p>}
-                            </div>
-                          )}
-                        </div>
                         <div>
                           <label className="text-[10px] font-bold uppercase tracking-widest text-slate-500" htmlFor="nexuslm-temperature-composer">Temperature</label>
                           <input
@@ -2593,6 +2643,22 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
                   </details>
                   <button type="button" onClick={() => fileInputRef.current?.click()} disabled={loading} className="min-h-12 min-w-12 shrink-0 rounded-xl border border-slate-700 px-3 text-xs font-semibold text-slate-300 disabled:opacity-40" aria-label="Attach a document">
                     +
+                  </button>
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={voiceModeEnabled}
+                    onClick={toggleVoiceMode}
+                    aria-label={voiceModeEnabled ? "Turn Nexus voice mode off" : "Turn Nexus voice mode on"}
+                    title={voiceModeEnabled ? `${nexusVoiceStatusLabel(voiceStatus)}. Click to turn off.` : "Turn on Nexus voice mode"}
+                    className={`relative flex min-h-12 min-w-12 shrink-0 items-center justify-center rounded-xl border px-3 text-xs font-semibold ${voiceModeEnabled ? "border-cyan-400/60 bg-cyan-400/15 text-cyan-200" : "border-slate-700 text-slate-400"}`}
+                  >
+                    <svg viewBox="0 0 24 24" aria-hidden="true" className="h-5 w-5 fill-none stroke-current stroke-2">
+                      <path d="M12 3a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3Z" strokeLinecap="round" strokeLinejoin="round" />
+                      <path d="M5 11a7 7 0 0 0 14 0M12 18v3M9 21h6" strokeLinecap="round" strokeLinejoin="round" />
+                    </svg>
+                    <span className="sr-only">{voiceModeEnabled ? "Nexus voice mode on" : "Nexus voice mode off"}</span>
+                    {voiceModeEnabled && <span className="absolute right-1.5 top-1.5 h-1.5 w-1.5 rounded-full bg-cyan-300" aria-hidden="true" />}
                   </button>
                   <button
                     type="button"
