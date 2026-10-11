@@ -21,6 +21,14 @@ import { NEXUSLM_WRITING_STYLES, type NexusLMWritingStyle } from "@/lib/nexuslm-
 import { NEXUSLM_AGENTS, type NexusLMAgent } from "@/lib/nexuslm-agents";
 import { isNexusLMLongFormRequest, NEXUSLM_RESPONSE_LENGTHS, sanitizeNexusLMText, type NexusLMResponseLength } from "@/lib/nexuslm-response";
 import { safeNexusLMFilename, type NexusLMArtifactFormat } from "@/lib/nexuslm-artifacts";
+import { pickVoice } from "@/lib/audio-player-context";
+import {
+  createNexusVoiceRecognition,
+  extractNexusWakeCommand,
+  getNexusRecognitionText,
+  splitNexusVoiceText,
+  type NexusVoiceRecognition,
+} from "@/lib/nexuslm-voice";
 import {
   buildManifestChangeEntries,
   clearEbookUndoSnapshot,
@@ -101,6 +109,21 @@ type BookAuditReport = {
   totalRepetitionPhrases: number;
   totalOverusedWords: number;
 };
+type NexusVoiceStatus = "off" | "waiting" | "capturing" | "thinking" | "speaking" | "error";
+
+function nexusVoiceStatusLabel(status: NexusVoiceStatus): string {
+  return status === "waiting"
+    ? "Listening for “Nexus”"
+    : status === "capturing"
+      ? "Listening for your instruction"
+      : status === "thinking"
+        ? "Nexus is thinking"
+        : status === "speaking"
+          ? "Nexus is speaking"
+          : status === "error"
+            ? "Voice mode needs attention"
+            : "Voice mode off";
+}
 
 function cleanAssistantLine(line: string): string {
   return sanitizeNexusLMText(line);
@@ -668,6 +691,9 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
   const [selectedTranscriptLabel, setSelectedTranscriptLabel] = useState("");
   const [showMobileContext, setShowMobileContext] = useState(false);
   const [showScrollToLatest, setShowScrollToLatest] = useState(false);
+  const [voiceModeEnabled, setVoiceModeEnabled] = useState(false);
+  const [voiceStatus, setVoiceStatus] = useState<NexusVoiceStatus>("off");
+  const [voiceError, setVoiceError] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const stickToBottomRef = useRef(true);
@@ -677,6 +703,14 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const activeScopeRef = useRef(conversationKey);
   const historyLoadedRef = useRef(false);
+  const voiceModeRef = useRef(false);
+  const voiceRecognitionRef = useRef<NexusVoiceRecognition | null>(null);
+  const voiceSessionRef = useRef(0);
+  const voiceRestartTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const voiceCommandRef = useRef("");
+  const voiceSpeakCursorRef = useRef(0);
+  const spokenMessageRef = useRef<string | null>(null);
+  const speechGenerationRef = useRef(0);
   const hasBookContext = Boolean(manifest || transcripts.length > 0);
   const useBookContext = contextMode === "book" || (contextMode === "auto" && hasBookContext);
 
@@ -699,7 +733,311 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
     setGeneratedPreview(preview);
   }
 
+  function clearVoiceRestartTimer(): void {
+    if (!voiceRestartTimerRef.current) return;
+    clearTimeout(voiceRestartTimerRef.current);
+    voiceRestartTimerRef.current = null;
+  }
+
+  function stopVoiceRecognition(): void {
+    voiceSessionRef.current += 1;
+    const recognition = voiceRecognitionRef.current;
+    voiceRecognitionRef.current = null;
+    if (!recognition) return;
+    try {
+      recognition.abort();
+    } catch {
+      // The browser may already have ended the recognition session.
+    }
+  }
+
+  function stopVoiceOutput(): void {
+    speechGenerationRef.current += 1;
+    if (typeof window !== "undefined") window.speechSynthesis?.cancel();
+  }
+
+  function failVoiceMode(message: string): void {
+    voiceModeRef.current = false;
+    setVoiceModeEnabled(false);
+    stopVoiceRecognition();
+    stopVoiceOutput();
+    clearVoiceRestartTimer();
+    setVoiceStatus("error");
+    setVoiceError(message);
+  }
+
+  function scheduleWakeRecognition(): void {
+    if (!voiceModeRef.current || voiceRestartTimerRef.current) return;
+    voiceRestartTimerRef.current = setTimeout(() => {
+      voiceRestartTimerRef.current = null;
+      startWakeRecognition();
+    }, 250);
+  }
+
+  function startWakeRecognition(): void {
+    if (!voiceModeRef.current) return;
+    clearVoiceRestartTimer();
+    stopVoiceRecognition();
+    const recognition = createNexusVoiceRecognition();
+    if (!recognition) {
+      failVoiceMode("Voice mode is not supported in this browser. Try Safari or Chrome with microphone access enabled.");
+      return;
+    }
+
+    const session = voiceSessionRef.current;
+    recognition.continuous = true;
+    recognition.interimResults = true;
+    recognition.lang = "en-US";
+    recognition.onresult = (event) => {
+      if (session !== voiceSessionRef.current || !voiceModeRef.current) return;
+      const { isFinal, transcript } = getNexusRecognitionText(event);
+      if (!isFinal) return;
+      const command = extractNexusWakeCommand(transcript);
+      if (command === null) return;
+      if (command) {
+        submitVoiceCommand(command);
+      } else {
+        startVoiceCommandCapture();
+      }
+    };
+    recognition.onerror = (event) => {
+      if (session !== voiceSessionRef.current || !voiceModeRef.current) return;
+      if (event.error === "not-allowed" || event.error === "service-not-allowed") {
+        failVoiceMode("Microphone permission was denied. Allow microphone access and turn Nexus mode on again.");
+        return;
+      }
+      if (event.error !== "no-speech" && event.error !== "aborted") {
+        setVoiceError(event.message || "Voice listening was interrupted. Nexus will keep trying.");
+      }
+    };
+    recognition.onend = () => {
+      if (session !== voiceSessionRef.current || !voiceModeRef.current) return;
+      voiceRecognitionRef.current = null;
+      scheduleWakeRecognition();
+    };
+    voiceRecognitionRef.current = recognition;
+    setVoiceStatus("waiting");
+    setVoiceError(null);
+    try {
+      recognition.start();
+    } catch (error) {
+      failVoiceMode(readableError(error));
+    }
+  }
+
+  function startVoiceCommandCapture(initialCommand = ""): void {
+    if (!voiceModeRef.current) return;
+    clearVoiceRestartTimer();
+    stopVoiceRecognition();
+    const recognition = createNexusVoiceRecognition();
+    if (!recognition) {
+      failVoiceMode("Voice command capture is not supported in this browser.");
+      return;
+    }
+
+    const session = voiceSessionRef.current;
+    voiceCommandRef.current = initialCommand;
+    setInput(initialCommand);
+    setVoiceStatus("capturing");
+    recognition.continuous = false;
+    recognition.interimResults = true;
+    recognition.lang = "en-US";
+    recognition.onresult = (event) => {
+      if (session !== voiceSessionRef.current || !voiceModeRef.current) return;
+      const { transcript } = getNexusRecognitionText(event);
+      if (!transcript) return;
+      voiceCommandRef.current = transcript.slice(0, 12_000);
+      setInput(voiceCommandRef.current);
+    };
+    recognition.onerror = (event) => {
+      if (session !== voiceSessionRef.current || !voiceModeRef.current) return;
+      if (event.error !== "no-speech" && event.error !== "aborted") {
+        setVoiceError(event.message || "Nexus could not capture that instruction.");
+      }
+    };
+    recognition.onend = () => {
+      if (session !== voiceSessionRef.current || !voiceModeRef.current) return;
+      voiceRecognitionRef.current = null;
+      const command = voiceCommandRef.current.trim();
+      if (command) {
+        submitVoiceCommand(command);
+      } else {
+        setVoiceStatus("waiting");
+        scheduleWakeRecognition();
+      }
+    };
+    voiceRecognitionRef.current = recognition;
+    try {
+      recognition.start();
+    } catch (error) {
+      failVoiceMode(readableError(error));
+    }
+  }
+
+  function handleVoiceControlCommand(command: string): boolean {
+    const normalized = command.replace(/[?.!]+$/, "").trim().toLowerCase();
+    const modeMatch = normalized.match(/^(?:switch|change|set|use)(?:\s+to)?\s+(ask|socratic|plan|draft|edit)(?:\s+mode)?$/);
+    if (modeMatch) {
+      const nextMode = modeMatch[1] as Mode;
+      setMode(nextMode);
+      setVoiceStatus("waiting");
+      speakAssistantResponse(`${MODES[nextMode].label} mode enabled.`);
+      return true;
+    }
+
+    const personaMatch = normalized.match(/^(?:switch|change|set|use)(?:\s+to)?\s+(editorial coach|skeptical reviewer|socratic teacher|voice guardian)(?:\s+persona)?$/);
+    if (personaMatch) {
+      const nextPersona = Object.entries(PERSONAS).find(([, item]) => item.label.toLowerCase() === personaMatch[1])?.[0] as Persona | undefined;
+      if (nextPersona) {
+        setPersona(nextPersona);
+        setVoiceStatus("waiting");
+        speakAssistantResponse(`${PERSONAS[nextPersona].label} selected.`);
+        return true;
+      }
+    }
+
+    const contextMatch = normalized.match(/^(?:switch|change|set)(?:\s+context)?(?:\s+to)?\s+(auto|general|book)$/);
+    if (contextMatch) {
+      setContextMode(contextMatch[1] as ContextMode);
+      setVoiceStatus("waiting");
+      speakAssistantResponse(`${contextMatch[1]} context selected.`);
+      return true;
+    }
+
+    if (/^(?:answer|respond|reply)\s+(?:more\s+)?(?:briefly|concisely|short|shorter)$/.test(normalized)) {
+      setResponseLength("shorter");
+      setVoiceStatus("waiting");
+      speakAssistantResponse("Shorter responses selected.");
+      return true;
+    }
+    if (/^(?:answer|respond|reply)\s+(?:with\s+)?(?:more detail|in detail|longer)$/.test(normalized)) {
+      setResponseLength("longer");
+      setVoiceStatus("waiting");
+      speakAssistantResponse("Longer responses selected.");
+      return true;
+    }
+    if (/^(?:go|jump|show)\s+(?:to\s+)?(?:the\s+)?latest message$/.test(normalized)) {
+      scrollToLatest();
+      setVoiceStatus("waiting");
+      speakAssistantResponse("Showing the latest message.");
+      return true;
+    }
+    return false;
+  }
+
+  function submitVoiceCommand(command: string): void {
+    const normalized = command.replace(/\s+/g, " ").trim().slice(0, 12_000);
+    stopVoiceRecognition();
+    voiceCommandRef.current = "";
+    if (!normalized) {
+      setVoiceStatus("waiting");
+      scheduleWakeRecognition();
+      return;
+    }
+    if (/^(cancel|never mind)$/i.test(normalized)) {
+      setInput("");
+      setVoiceStatus("waiting");
+      scheduleWakeRecognition();
+      return;
+    }
+    if (/^(stop listening|turn off voice mode)$/i.test(normalized)) {
+      stopVoiceMode();
+      return;
+    }
+    if (handleVoiceControlCommand(normalized)) {
+      setInput("");
+      return;
+    }
+    if (loading) {
+      setVoiceError("NexusLM is still responding. Wait for it to finish before giving another instruction.");
+      setVoiceStatus("waiting");
+      scheduleWakeRecognition();
+      return;
+    }
+    voiceSpeakCursorRef.current = messages.length;
+    spokenMessageRef.current = null;
+    setInput(normalized);
+    setVoiceStatus("thinking");
+    void send(normalized);
+  }
+
+  function speakAssistantResponse(content: string): void {
+    if (!voiceModeRef.current) return;
+    if (typeof window === "undefined" || !window.speechSynthesis || typeof SpeechSynthesisUtterance === "undefined") {
+      setVoiceError("Spoken responses are not supported in this browser. Written responses will continue normally.");
+      setVoiceStatus("waiting");
+      scheduleWakeRecognition();
+      return;
+    }
+    const chunks = splitNexusVoiceText(content);
+    if (chunks.length === 0) {
+      setVoiceStatus("waiting");
+      scheduleWakeRecognition();
+      return;
+    }
+
+    stopVoiceOutput();
+    const generation = speechGenerationRef.current;
+    let chunkIndex = 0;
+    setVoiceStatus("speaking");
+    const speakNext = () => {
+      if (generation !== speechGenerationRef.current || !voiceModeRef.current) return;
+      if (chunkIndex >= chunks.length) {
+        setVoiceStatus("waiting");
+        scheduleWakeRecognition();
+        return;
+      }
+      const utterance = new SpeechSynthesisUtterance(chunks[chunkIndex]);
+      chunkIndex += 1;
+      const voice = pickVoice(window.speechSynthesis.getVoices());
+      if (voice) utterance.voice = voice;
+      utterance.rate = 1;
+      utterance.pitch = 1;
+      utterance.onend = speakNext;
+      utterance.onerror = (event) => {
+        if (generation !== speechGenerationRef.current || event.error === "canceled" || event.error === "interrupted") return;
+        setVoiceError("Nexus could not play the spoken response. The written response is still available.");
+        setVoiceStatus("waiting");
+        scheduleWakeRecognition();
+      };
+      window.speechSynthesis.speak(utterance);
+    };
+    speakNext();
+  }
+
+  function stopVoiceMode(): void {
+    voiceModeRef.current = false;
+    setVoiceModeEnabled(false);
+    stopVoiceRecognition();
+    stopVoiceOutput();
+    clearVoiceRestartTimer();
+    setVoiceStatus("off");
+    setVoiceError(null);
+  }
+
+  function toggleVoiceMode(): void {
+    if (voiceModeRef.current) {
+      stopVoiceMode();
+      return;
+    }
+    if (!createNexusVoiceRecognition()) {
+      setVoiceStatus("error");
+      setVoiceError("Voice mode is not supported in this browser. Try Safari or Chrome with microphone access enabled.");
+      return;
+    }
+    voiceModeRef.current = true;
+    setVoiceModeEnabled(true);
+    setVoiceError(null);
+    voiceSpeakCursorRef.current = messages.length;
+    spokenMessageRef.current = null;
+    startWakeRecognition();
+  }
+
   useEffect(() => () => {
+    voiceModeRef.current = false;
+    stopVoiceRecognition();
+    stopVoiceOutput();
+    clearVoiceRestartTimer();
     if (generatedPreviewUrlRef.current) URL.revokeObjectURL(generatedPreviewUrlRef.current);
   }, []);
 
@@ -739,7 +1077,10 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
     void getNexusLMChat(activeConversationKey)
       .then((archive) => {
         if (cancelled) return;
-        setMessages(archive?.messages?.length ? archive.messages : [initialMessage(manifest)]);
+        const loadedMessages = archive?.messages?.length ? archive.messages : [initialMessage(manifest)];
+        setMessages(loadedMessages);
+        voiceSpeakCursorRef.current = loadedMessages.length;
+        spokenMessageRef.current = null;
         setAttachments(archive?.attachments ?? []);
         setManuscript(archive?.manuscript ?? createEmptyManuscript(manifest, pipelineSnapshot));
         setProcessEntireDocument(false);
@@ -796,6 +1137,24 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
     });
     return () => window.cancelAnimationFrame(frame);
   }, [activeConversationKey, messages, loading]);
+
+  useEffect(() => {
+    if (!voiceModeEnabled || loading) return;
+    let latestIndex = -1;
+    for (let index = messages.length - 1; index >= 0; index -= 1) {
+      if (messages[index].role === "assistant" && messages[index].content.trim()) {
+        latestIndex = index;
+        break;
+      }
+    }
+    if (latestIndex < voiceSpeakCursorRef.current) return;
+    const latest = messages[latestIndex];
+    const messageKey = `${activeConversationKey}:${latestIndex}:${latest.content}`;
+    if (spokenMessageRef.current === messageKey) return;
+    spokenMessageRef.current = messageKey;
+    voiceSpeakCursorRef.current = messages.length;
+    speakAssistantResponse(latest.content);
+  }, [activeConversationKey, loading, messages, voiceModeEnabled]);
 
   useEffect(() => {
     const textarea = inputRef.current;
@@ -1432,6 +1791,10 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
         { role: "user", content: instruction },
         { role: "assistant", content: "Load or finish a manuscript before requesting an edit." },
       ]);
+      if (voiceModeRef.current) {
+        setVoiceStatus("waiting");
+        scheduleWakeRecognition();
+      }
       return;
     }
     if (requestUsesBook && attachments.length > 0 && !options?.forceGeneral) {
@@ -1439,6 +1802,10 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
         { role: "user", content: instruction },
         { role: "assistant", content: "These attached documents are ready for general chat. Switch Context to General to process them, or remove the attachments to continue with the book." },
       ]);
+      if (voiceModeRef.current) {
+        setVoiceStatus("waiting");
+        scheduleWakeRecognition();
+      }
       return;
     }
 
@@ -1455,6 +1822,11 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
         content: instruction,
         attachments: requestUsesBook ? undefined : requestAttachments.map(({ id, name }) => ({ id, name })),
       }];
+    if (voiceModeRef.current) {
+      stopVoiceRecognition();
+      stopVoiceOutput();
+      setVoiceStatus("thinking");
+    }
     stickToBottomRef.current = true;
     setMessages(nextMessages);
     setInput("");
@@ -2158,6 +2530,36 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
                           <select id="nexuslm-mode-composer" value={mode} onChange={(event) => setMode(event.target.value as Mode)} className="mt-2 min-h-12 w-full rounded-xl border border-slate-700 bg-slate-900 px-3 text-base text-slate-200">
                             {Object.entries(MODES).map(([value, item]) => <option key={value} value={value}>{item.label}</option>)}
                           </select>
+                        </div>
+                        <div className="border-t border-slate-800 pt-3">
+                          <div className="flex items-center justify-between gap-3">
+                            <div className="min-w-0">
+                              <p className="text-[10px] font-bold uppercase tracking-widest text-slate-500">Nexus voice mode</p>
+                              <p className="mt-1 text-[11px] leading-5 text-slate-500">Say “Nexus” to give a voice instruction.</p>
+                            </div>
+                            <button
+                              type="button"
+                              role="switch"
+                              aria-checked={voiceModeEnabled}
+                              onClick={toggleVoiceMode}
+                              className={`min-h-12 shrink-0 rounded-xl border px-3 text-xs font-bold ${voiceModeEnabled ? "border-cyan-400/60 bg-cyan-400/15 text-cyan-200" : "border-slate-700 text-slate-400"}`}
+                            >
+                              {voiceModeEnabled ? "On" : "Off"}
+                            </button>
+                          </div>
+                          {(voiceModeEnabled || voiceError) && (
+                            <div className="mt-2 rounded-xl border border-slate-800 bg-slate-950/70 p-3" aria-live="polite">
+                              <div className="flex items-center justify-between gap-2">
+                                <p className="text-xs text-slate-300">{nexusVoiceStatusLabel(voiceStatus)}</p>
+                                {voiceStatus === "speaking" && (
+                                  <button type="button" onClick={() => { stopVoiceOutput(); setVoiceStatus("waiting"); scheduleWakeRecognition(); }} className="min-h-12 rounded-lg border border-slate-700 px-3 text-[11px] font-semibold text-slate-300">
+                                    Stop speaking
+                                  </button>
+                                )}
+                              </div>
+                              {voiceError && <p className="mt-2 text-[11px] leading-5 text-amber-300">{voiceError}</p>}
+                            </div>
+                          )}
                         </div>
                         <div>
                           <label className="text-[10px] font-bold uppercase tracking-widest text-slate-500" htmlFor="nexuslm-temperature-composer">Temperature</label>
