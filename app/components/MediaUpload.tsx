@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useRef } from "react";
+import { useState, useCallback, useRef, useEffect } from "react";
 import type { LogEntry, PipelineStage } from "@/lib/types";
 import { IngestResultSchema, type IngestResult } from "@/lib/schemas/blueprint";
 import { storeVideoBlob, setVideoUrl, setYoutubeId } from "@/lib/video-store";
@@ -11,6 +11,7 @@ type MediaUploadProps = {
   onLog: (entry: Omit<LogEntry, "id" | "timestamp">) => void;
   onBlueprint: (data: IngestResult, sourceText: string) => void;
   onStageChange: (stage: PipelineStage) => void;
+  onDeliveryChange?: (text: string) => void;
 };
 
 function formatBytes(b: number) {
@@ -73,7 +74,7 @@ function readFile(file: File): Promise<UploadedFile> {
   });
 }
 
-export function MediaUpload({ onLog, onBlueprint, onStageChange }: MediaUploadProps) {
+export function MediaUpload({ onLog, onBlueprint, onStageChange, onDeliveryChange }: MediaUploadProps) {
   const [files, setFiles] = useState<UploadedFile[]>([]);
   const [isDragging, setIsDragging] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
@@ -81,7 +82,16 @@ export function MediaUpload({ onLog, onBlueprint, onStageChange }: MediaUploadPr
   const [youtubeUrl, setYoutubeUrl] = useState("");
   const [youtubeLoading, setYoutubeLoading] = useState(false);
   const [uploadToCloud, setUploadToCloud] = useState(false);
+  const [prompt, setPrompt] = useState("");
+  const [showDelivery, setShowDelivery] = useState(false);
+  const [deliveryText, setDeliveryText] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    const saved = localStorage.getItem("nexus_delivery_instructions") ?? "";
+    setDeliveryText(saved);
+    onDeliveryChange?.(saved);
+  }, [onDeliveryChange]);
 
   const addFiles = useCallback(async (raw: FileList | File[]) => {
     const processed = await Promise.all(Array.from(raw).map(readFile));
@@ -150,13 +160,15 @@ export function MediaUpload({ onLog, onBlueprint, onStageChange }: MediaUploadPr
   }, [youtubeUrl, youtubeLoading, onLog]);
 
   const runIngest = useCallback(async () => {
-    if (!files.length) return;
+    const promptText = prompt.trim();
+    if (!files.length && !promptText) return;
     setIsLoading(true);
     setError(null);
     onStageChange("ingesting");
 
     // Resolve final content for each file — transcribe video/audio via Deepgram
     let resolvedFiles = [...files];
+    let sourceText = promptText;
     const mediaFiles = files.filter((f) => f.raw);
 
     if (mediaFiles.length > 0) {
@@ -244,13 +256,24 @@ export function MediaUpload({ onLog, onBlueprint, onStageChange }: MediaUploadPr
       }
     }
 
-    onLog({ level: "info", message: `Sending ${files.length} file(s) to DeepSeek ingest pipeline…`, model: "deepseek" });
-
-    try {
-      const sourceText = resolvedFiles
+    if (files.length > 0) {
+      const fileSource = resolvedFiles
         .map((f) => `--- ${f.name} (${f.type || "unknown"}) ---\n${f.content}`)
         .join("\n\n");
+      sourceText = [promptText ? `COURSE BRIEF:\n${promptText}` : "", fileSource]
+        .filter(Boolean)
+        .join("\n\n");
+    }
 
+    onLog({
+      level: "info",
+      message: files.length > 0
+        ? `Sending ${files.length} file(s) to DeepSeek ingest pipeline…`
+        : "Sending course brief to DeepSeek ingest pipeline…",
+      model: "deepseek",
+    });
+
+    try {
       const res = await fetch("/api/ingest", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -274,26 +297,45 @@ export function MediaUpload({ onLog, onBlueprint, onStageChange }: MediaUploadPr
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Ingest failed";
       setError(msg);
-      onLog({ level: "error", message: `Ingest failed: ${msg}`, model: "gemini" });
+      onLog({ level: "error", message: `Ingest failed: ${msg}`, model: "deepseek" });
       onStageChange("error");
     } finally {
       setIsLoading(false);
     }
-  }, [files, onLog, onBlueprint, onStageChange]);
+  }, [files, onLog, onBlueprint, onStageChange, prompt, uploadToCloud]);
+
+  const canRun = (files.length > 0 || prompt.trim().length > 0) && !isLoading;
 
   return (
-    <section className="flex h-full min-h-0 flex-col overflow-hidden rounded-2xl border border-cyan-500/15 glass shadow-panel">
+    <section className="w-full overflow-hidden rounded-2xl border border-cyan-500/15 glass shadow-panel">
       <header className="flex flex-shrink-0 items-center gap-2 border-b border-slate-700/50 px-4 py-3">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} className="h-4 w-4 text-accent-400">
           <path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2" strokeLinecap="round" />
           <path d="M12 4v13M8.5 7.5 12 4l3.5 3.5" strokeLinecap="round" strokeLinejoin="round" />
         </svg>
-        <h2 className="text-sm font-semibold uppercase tracking-widest text-slate-200">Feed the Pipeline</h2>
+        <div>
+          <h2 className="text-sm font-semibold uppercase tracking-widest text-slate-200">Source Intake</h2>
+          <p className="mt-0.5 text-xs text-slate-500">Start with a brief, transcript, URL, audio, or video.</p>
+        </div>
       </header>
 
-      <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto overscroll-contain p-4">
+      <div className="grid gap-3 p-4 lg:grid-cols-[1.2fr_1fr]">
+        <textarea
+          value={prompt}
+          onChange={(event) => setPrompt(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
+              event.preventDefault();
+              void runIngest();
+            }
+          }}
+          placeholder="Describe the course or paste a transcript…"
+          rows={2}
+          className="min-h-24 w-full resize-none rounded-xl border border-slate-600 bg-slate-800/60 px-4 py-3 text-base text-slate-100 placeholder-slate-500 focus:border-cyan-500 focus:outline-none lg:row-start-1"
+        />
+
         {/* YouTube URL input */}
-        <div className="flex gap-2">
+        <div className="flex gap-2 lg:row-start-2">
           <input
             type="url"
             value={youtubeUrl}
@@ -330,7 +372,7 @@ export function MediaUpload({ onLog, onBlueprint, onStageChange }: MediaUploadPr
           onClick={() => inputRef.current?.click()}
           onKeyDown={(e) => e.key === "Enter" && inputRef.current?.click()}
           className={[
-            "focus-ring flex min-h-28 cursor-pointer flex-col items-center justify-center rounded-xl border-2 border-dashed transition-colors",
+            "focus-ring flex min-h-28 cursor-pointer flex-col items-center justify-center rounded-xl border-2 border-dashed transition-colors lg:col-start-2 lg:row-span-2 lg:row-start-1",
             isDragging
               ? "border-accent-500 bg-accent-500/10"
               : "border-slate-600 bg-shell-800/40 hover:border-slate-500 active:border-accent-500/60"
@@ -347,7 +389,7 @@ export function MediaUpload({ onLog, onBlueprint, onStageChange }: MediaUploadPr
 
         {/* File list */}
         {files.length > 0 && (
-          <ul className="space-y-1.5">
+          <ul className="space-y-1.5 lg:col-start-2">
             {files.map((f) => (
               <li key={f.name} className="flex items-center gap-3 rounded-xl border border-slate-700/50 bg-shell-800/50 px-3 py-2.5">
                 <div className="min-w-0 flex-1">
@@ -371,10 +413,35 @@ export function MediaUpload({ onLog, onBlueprint, onStageChange }: MediaUploadPr
 
         {/* Error banner */}
         {error && (
-          <div className="rounded-xl border border-red-500/30 bg-red-500/10 px-3 py-2.5 text-sm text-red-300">
+          <div className="rounded-xl border border-red-500/30 bg-red-500/10 px-3 py-2.5 text-sm text-red-300 lg:col-span-2">
             {error}
           </div>
         )}
+
+        <div className="rounded-xl border border-slate-700/50 bg-slate-900/30 lg:col-span-2">
+          <button
+            type="button"
+            onClick={() => setShowDelivery((visible) => !visible)}
+            className="flex min-h-12 w-full items-center justify-between px-4 text-left text-sm font-medium text-slate-300"
+          >
+            <span>Delivery preferences</span>
+            <span className="text-xs text-slate-500">{showDelivery ? "Hide" : deliveryText ? "Configured" : "Optional"}</span>
+          </button>
+          {showDelivery && (
+            <textarea
+              value={deliveryText}
+              onChange={(event) => {
+                const value = event.target.value;
+                setDeliveryText(value);
+                localStorage.setItem("nexus_delivery_instructions", value);
+                onDeliveryChange?.(value);
+              }}
+              placeholder="Audience, tone, pacing, module style, and lesson outcomes…"
+              rows={3}
+              className="mx-3 mb-3 w-[calc(100%-1.5rem)] resize-none rounded-xl border border-slate-700/60 bg-slate-900/60 px-4 py-3 text-base text-slate-100 placeholder-slate-600 focus:border-cyan-500/60 focus:outline-none"
+            />
+          )}
+        </div>
       </div>
 
       {/* Run button — fixed at bottom */}
@@ -403,11 +470,11 @@ export function MediaUpload({ onLog, onBlueprint, onStageChange }: MediaUploadPr
         )}
         <button
           type="button"
-          disabled={!files.length || isLoading}
+          disabled={!canRun}
           onClick={runIngest}
           className={[
             "focus-ring inline-flex min-h-12 w-full items-center justify-center gap-2 rounded-xl text-base font-semibold transition active:scale-[0.99]",
-            !files.length || isLoading
+            !canRun
               ? "cursor-not-allowed bg-slate-700/50 text-slate-500"
               : "bg-accent-500 text-slate-950 shadow-glow"
           ].join(" ")}

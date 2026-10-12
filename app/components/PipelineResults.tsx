@@ -5,14 +5,14 @@ import type { IngestResult, LogicTransformResult } from "@/lib/schemas/blueprint
 import type { UiManifestResult } from "@/lib/schemas/ui-manifest";
 import type { AcademyPackage } from "@/lib/schemas/academy";
 
-type TabId = "blueprint" | "logic" | "ui" | "academy";
+type StageViewId = "blueprint" | "logic" | "ui" | "academy";
 
 type Props = {
   blueprint: IngestResult;
   logic: LogicTransformResult | null;
   ui: UiManifestResult | null;
   academy: AcademyPackage | null;
-  externalTab?: TabId;
+  externalStage?: StageViewId;
   onSaveProject?: (name: string) => void | boolean | Promise<void | boolean>;
 };
 
@@ -31,23 +31,35 @@ const ENTITY_COLORS: Record<string, string> = {
   action:   "border-emerald-500/30 bg-emerald-500/10 text-emerald-300"
 };
 
-export function PipelineResults({ blueprint, logic, ui, academy, externalTab, onSaveProject }: Props) {
-  const [activeTab, setActiveTab] = useState<TabId>("blueprint");
+export function PipelineResults({ blueprint, logic, ui, academy, externalStage, onSaveProject }: Props) {
+  const [activeStage, setActiveStage] = useState<StageViewId>(externalStage ?? "blueprint");
   const [showSaveBar, setShowSaveBar] = useState(false);
   const [saveName, setSaveName] = useState("");
   const [savedConfirm, setSavedConfirm] = useState(false);
 
   // Sync tab when the nav sidebar selects a different agent view
   useEffect(() => {
-    if (externalTab) setActiveTab(externalTab);
-  }, [externalTab]);
+    if (externalStage) setActiveStage(externalStage);
+  }, [externalStage]);
 
-  const tabs: Array<{ id: TabId; label: string; ready: boolean }> = [
-    { id: "blueprint", label: "Blueprint",  ready: true              },
-    { id: "logic",     label: "Logic Plan", ready: logic !== null    },
-    { id: "ui",        label: "UI Spec",    ready: ui !== null       },
-    { id: "academy",   label: "Academy",    ready: academy !== null  }
-  ];
+  const stageMeta: Record<StageViewId, { label: string; description: string }> = {
+    blueprint: {
+      label: "Blueprint",
+      description: "Confirm the source material, workflow, and risks before continuing.",
+    },
+    logic: {
+      label: "Course plan",
+      description: "Review how the source becomes a structured learning experience.",
+    },
+    ui: {
+      label: "Learner experience",
+      description: "Review the generated interface direction and interaction model.",
+    },
+    academy: {
+      label: "Academy course",
+      description: "Review the finished course package before saving or launching it.",
+    },
+  };
 
   async function saveAcademyProject() {
     if (!academy || !onSaveProject || !saveName.trim()) return;
@@ -59,35 +71,22 @@ export function PipelineResults({ blueprint, logic, ui, academy, externalTab, on
 
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden rounded-2xl border border-cyan-500/15 glass shadow-panel">
-      {/* Tab bar */}
-      <div className="flex flex-shrink-0 items-center gap-0.5 border-b border-cyan-500/10 px-3 pt-2">
-        {tabs.map((tab) => (
-          <button
-            key={tab.id}
-            type="button"
-            onClick={() => tab.ready && setActiveTab(tab.id)}
-            disabled={!tab.ready}
-            className={`flex min-h-8 items-center gap-1.5 rounded-t px-3 pb-2 pt-1 text-xs font-semibold transition-colors ${
-              activeTab === tab.id
-                ? "border-b-2 border-cyan-400 text-cyan-300"
-                : tab.ready
-                ? "text-slate-400 hover:text-slate-100"
-                : "cursor-not-allowed text-slate-700"
-            }`}
-          >
-            {tab.label}
-            {!tab.ready && (
-              <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-slate-700" />
-            )}
-          </button>
-        ))}
+      <div className="flex flex-shrink-0 items-start justify-between gap-4 border-b border-cyan-500/10 px-4 py-3">
+        <div>
+          <p className="text-[10px] font-bold uppercase tracking-widest text-cyan-500">Academy workspace</p>
+          <h2 className="mt-1 text-base font-semibold text-slate-100">{stageMeta[activeStage].label}</h2>
+          <p className="mt-1 max-w-2xl text-xs leading-relaxed text-slate-500">{stageMeta[activeStage].description}</p>
+        </div>
+        <span className="hidden rounded-full border border-slate-700 bg-slate-900/50 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-widest text-slate-500 sm:inline-flex">
+          DeepSeek Chat v3
+        </span>
       </div>
 
       {/* Scrollable content */}
       <div className="flex-1 overflow-y-auto overscroll-contain p-4 text-sm">
 
         {/* ── Blueprint ── */}
-        {activeTab === "blueprint" && (
+        {activeStage === "blueprint" && (
           <div className="space-y-4">
             <div>
               <h3 className="font-semibold text-slate-100">{blueprint.title}</h3>
@@ -147,7 +146,7 @@ export function PipelineResults({ blueprint, logic, ui, academy, externalTab, on
         )}
 
         {/* ── Logic Plan ── */}
-        {activeTab === "logic" && logic !== null && (
+        {activeStage === "logic" && logic !== null && (
           <div className="space-y-4">
             <p className="text-slate-300">{logic.reasoningSummary}</p>
 
@@ -205,7 +204,7 @@ export function PipelineResults({ blueprint, logic, ui, academy, externalTab, on
         )}
 
         {/* ── UI Spec ── */}
-        {activeTab === "ui" && ui !== null && (
+        {activeStage === "ui" && ui !== null && (
           <div className="space-y-4">
             <div>
               <p className="mb-1 text-[11px] font-semibold uppercase tracking-widest text-slate-500">Visual Direction</p>
@@ -257,7 +256,7 @@ export function PipelineResults({ blueprint, logic, ui, academy, externalTab, on
         )}
 
         {/* ── Academy ── */}
-        {activeTab === "academy" && academy !== null && (
+        {activeStage === "academy" && academy !== null && (
           <div className="space-y-5">
             {/* Header */}
             <div>

@@ -6,9 +6,8 @@ import { NexusNav } from "@/app/components/NexusNav";
 import { StatusBar } from "@/app/components/StatusBar";
 import { TerminalLog } from "@/app/components/TerminalLog";
 import { MediaUpload } from "@/app/components/MediaUpload";
-import { ProjectCard } from "@/app/components/ProjectCard";
+import { AcademyPipelineStepper, type AcademyStepId } from "@/app/components/AcademyPipelineStepper";
 import { PipelineResults } from "@/app/components/PipelineResults";
-import { PromptBar } from "@/app/components/PromptBar";
 import { AssistantPanel } from "@/app/components/AssistantPanel";
 import { ProjectsPanel } from "@/app/components/ProjectsPanel";
 import { EbookPipeline } from "@/app/components/EbookPipeline";
@@ -60,7 +59,6 @@ import {
 
 const INITIAL_MODELS: ModelState[] = [
   { name: "DeepSeek Chat v3", handle: "deepseek", role: "Academy Pipeline", status: "standby" },
-  { name: "Manus",    handle: "manus",    role: "Executive",         status: "standby" }
 ];
 
 export default function HomePage() {
@@ -723,8 +721,8 @@ export default function HomePage() {
     await runDownstream(blueprint, rawTranscript, logicResult, uiResult);
   }, [blueprint, rawTranscript, logicResult, uiResult, runDownstream, addLog]);
 
-  // Map left-nav items to the PipelineResults tab they drive
-  const NAV_TAB: Record<string, "blueprint" | "logic" | "ui" | "academy" | null> = {
+  // Map Academy stepper stages to the result view they drive.
+  const STAGE_VIEW_BY_NAV: Record<string, "blueprint" | "logic" | "ui" | "academy" | null> = {
     overview:  null,
     analyse:   "blueprint",
     architect: "logic",
@@ -735,11 +733,43 @@ export default function HomePage() {
     ebook:     null,
     sermon:    null,
   };
-  const focusedTab = NAV_TAB[activeNav] ?? undefined;
+  const focusedStage = STAGE_VIEW_BY_NAV[activeNav] ?? undefined;
   const isFocused = activeNav !== "overview";
   const isSermonView = activeNav === "sermon";
   const isBookView = activeNav === "ebook";
-  const showActivityPanel = !isSermonView && !isBookView;
+  const isAcademyWorkspace = !isSermonView && !isBookView && activeNav !== "projects";
+  const pipelineIsActive = stage === "ingesting"
+    || stage === "reasoning"
+    || stage === "generating"
+    || stage === "producing"
+    || stage === "error";
+  const showActivityPanel = isAcademyWorkspace
+    && activeNav !== "overview"
+    && activeNav !== "deploy"
+    && (pipelineIsActive || isFocused);
+  const showAcademyOverviewHeading = isAcademyWorkspace && activeNav === "overview";
+  const centerAcademyOverview = showAcademyOverviewHeading && stage === "idle" && blueprint === null;
+  const activeAcademyStep: AcademyStepId | null = activeNav === "overview"
+    ? "overview"
+    : activeNav === "analyse" || activeNav === "architect" || activeNav === "design"
+      ? "build"
+      : activeNav === "produce"
+        ? "produce"
+        : activeNav === "deploy"
+          ? "deploy"
+          : null;
+
+  const handleAcademyStepSelect = useCallback((step: AcademyStepId) => {
+    if (step === "overview") {
+      setActiveNav("overview");
+      return;
+    }
+    if (step === "build") {
+      setActiveNav(!logicResult ? "analyse" : !uiResult ? "architect" : "design");
+      return;
+    }
+    setActiveNav(step);
+  }, [logicResult, uiResult]);
 
   const handleSermonTranscriptSelectionChange = useCallback((sources: EbookTranscriptSource[]) => {
     const parsed = EbookTranscriptSourceSchema.array().safeParse(sources);
@@ -823,15 +853,35 @@ export default function HomePage() {
         <StatusBar
           stage={stage}
           models={models}
+          productName={isSermonView ? "Nexus Sermon" : isBookView ? "Nexus Ebook" : "Nexus Academy"}
           onAssistant={() => setAssistantOpen((v) => !v)}
           assistantActive={assistantOpen}
         />
+        {isAcademyWorkspace && (
+          <AcademyPipelineStepper
+            activeStep={activeAcademyStep}
+            pipelineStage={stage}
+            hasBlueprint={blueprint !== null}
+            hasLogic={logicResult !== null}
+            hasUi={uiResult !== null}
+            hasAcademy={academyResult !== null}
+            onSelect={handleAcademyStepSelect}
+          />
+        )}
 
         {/*
           Mobile: flex-col + overflow-y-auto so panels stack and scroll.
           Desktop (lg+): grid 5-cols + overflow-hidden so panels fill height.
         */}
-        <main className={isSermonView ? "flex min-h-0 flex-1 overflow-hidden" : isBookView ? "flex flex-1 flex-col gap-3 overflow-y-auto overscroll-contain p-3 pb-3 lg:min-h-0 lg:overflow-hidden lg:pb-3" : "flex flex-1 flex-col gap-3 overflow-y-auto overscroll-contain p-3 pb-24 lg:grid lg:min-h-0 lg:overflow-hidden lg:pb-3 lg:grid-cols-5"}>
+        <main className={
+          isSermonView
+            ? "flex min-h-0 flex-1 overflow-hidden"
+            : isBookView
+              ? "flex flex-1 flex-col gap-3 overflow-y-auto overscroll-contain p-3 pb-3 lg:min-h-0 lg:overflow-hidden lg:pb-3"
+              : showActivityPanel
+                ? "flex flex-1 flex-col gap-3 overflow-y-auto overscroll-contain p-3 pb-24 lg:grid lg:min-h-0 lg:overflow-hidden lg:pb-3 lg:grid-cols-5"
+                : `flex flex-1 flex-col gap-3 overflow-y-auto overscroll-contain p-3 pb-24 lg:min-h-0 lg:overflow-hidden lg:pb-3${centerAcademyOverview ? " justify-center" : ""}`
+        }>
 
           {/* ── Focused agent views (non-overview nav) ── */}
           {isFocused ? (
@@ -849,7 +899,13 @@ export default function HomePage() {
               {/* Primary panel — full width on mobile, sermon uses full desktop width */}
               <div
                 key={activeNav}
-                className={isSermonView ? "flex h-full min-w-0 flex-1 flex-col" : isBookView ? "flex min-h-[65dvh] flex-col animate-fade-up lg:flex-1 lg:min-h-0" : `min-h-[65dvh] animate-fade-up lg:min-h-0 ${showActivityPanel ? "lg:col-span-4" : "lg:col-span-5"}`}
+                className={isSermonView
+                  ? "flex h-full min-w-0 flex-1 flex-col"
+                  : isBookView
+                    ? "flex min-h-[65dvh] flex-col animate-fade-up lg:flex-1 lg:min-h-0"
+                    : showActivityPanel
+                      ? "min-h-[65dvh] animate-fade-up lg:col-span-4 lg:min-h-0"
+                      : "mx-auto flex w-full max-w-4xl flex-col animate-fade-up"}
               >
                 {activeNav === "projects" ? (
                   <ProjectsPanel
@@ -955,7 +1011,7 @@ export default function HomePage() {
                     logic={logicResult}
                     ui={uiResult}
                     academy={academyResult}
-                    externalTab={focusedTab}
+                    externalStage={focusedStage}
                     onSaveProject={handleSaveProject}
                   />
                 ) : (
@@ -968,17 +1024,39 @@ export default function HomePage() {
           ) : (
             /* ── Overview (default) layout ── */
             <>
-              {/* Terminal log — full width mobile, 3/5 desktop */}
-              <div className="min-h-[220px] lg:min-h-0 lg:col-span-2">
-                <TerminalLog
-                  entries={logs}
-                  isStreaming={stage === "ingesting" || stage === "reasoning"}
-                />
-              </div>
+              {/* Terminal log — full width mobile, compact desktop activity column */}
+              {showActivityPanel && (
+                <div className="min-h-[220px] lg:min-h-0 lg:col-span-1">
+                  <TerminalLog
+                    entries={logs}
+                    isStreaming={stage === "ingesting" || stage === "reasoning"}
+                  />
+                </div>
+              )}
 
-              {/* Right column — full width mobile (stacked), 2/5 desktop (grid-rows-2) */}
-              <div className="flex flex-col gap-3 lg:col-span-3 lg:grid lg:min-h-0 lg:grid-rows-2">
-                {blueprint !== null ? (
+              {/* Workspace — source first, then results and recovery actions */}
+              <div className={showActivityPanel
+                ? "flex flex-col gap-3 lg:col-span-4 lg:grid lg:min-h-0 lg:grid-rows-[minmax(0,1fr)_minmax(0,1fr)_auto]"
+                : "mx-auto flex w-full max-w-4xl flex-col gap-3"}
+              >
+                {showAcademyOverviewHeading && (
+                  <header className="px-1 text-center lg:text-left">
+                    <p className="text-[10px] font-bold uppercase tracking-[0.28em] text-cyan-300">Nexus Academy</p>
+                    <h1 className="mt-1 text-xl font-semibold tracking-tight text-slate-100 sm:text-2xl">
+                      Build a course from your source material
+                    </h1>
+                    <p className="mt-1 text-sm text-slate-500">
+                      Turn a brief, transcript, URL, audio, or video into a deployable Academy course.
+                    </p>
+                  </header>
+                )}
+                <MediaUpload
+                  onLog={addLog}
+                  onBlueprint={handleBlueprint}
+                  onStageChange={handleStageChange}
+                  onDeliveryChange={setDeliveryInstructions}
+                />
+                {blueprint !== null && (
                   <>
                     <PipelineResults
                       blueprint={blueprint}
@@ -999,39 +1077,12 @@ export default function HomePage() {
                       </button>
                     )}
                   </>
-                ) : (
-                  <ProjectCard
-                    title="Mission Control"
-                    status="Healthy"
-                    detail="Upload raw footage, workshop recordings, or podcast archives. One command builds a complete academy with structured outputs."
-                    metrics={[
-                      { label: "Pipeline", value: "Academy" },
-                      { label: "Book", value: "Ready" },
-                      { label: "Sermon", value: "Ready" },
-                      { label: "Viewport", value: "Mobile-first" },
-                    ]}
-                  />
                 )}
 
-                <MediaUpload
-                  onLog={addLog}
-                  onBlueprint={handleBlueprint}
-                  onStageChange={handleStageChange}
-                />
               </div>
             </>
           )}
         </main>
-
-        {!isSermonView && !isBookView && (
-          <PromptBar
-            stage={stage}
-            onLog={addLog}
-            onBlueprint={handleBlueprint}
-            onStageChange={handleStageChange}
-            onDeliveryChange={setDeliveryInstructions}
-          />
-        )}
       </div>
 
       {/* Director AI drawer — toggled from StatusBar */}

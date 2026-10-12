@@ -31,16 +31,17 @@ const MODEL_DOT: Record<string, DotStyle> = {
 type StatusBarProps = {
   stage: PipelineStage;
   models: ModelState[];
+  productName?: string;
   onAssistant?: () => void;
   assistantActive?: boolean;
 };
 
-export function StatusBar({ stage, models: _models, onAssistant, assistantActive }: StatusBarProps) {
+export function StatusBar({ stage, models: _models, productName = "Nexus Director", onAssistant, assistantActive }: StatusBarProps) {
   return (
     <div className="flex h-12 flex-shrink-0 items-center justify-between border-b border-cyan-500/15 px-4 glass-light">
       {/* Brand */}
-      <span className="hidden text-[10px] font-bold uppercase tracking-[0.22em] text-gradient sm:block">
-        Nexus Director
+      <span className="max-w-[10rem] flex-shrink-0 text-[10px] font-bold uppercase tracking-[0.22em] text-gradient sm:max-w-none">
+        {productName}
       </span>
 
       {/* Stage objective label */}
