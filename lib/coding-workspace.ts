@@ -244,6 +244,29 @@ export const CodingRunSchema = z.object({
 
 export type CodingRun = z.infer<typeof CodingRunSchema>;
 
+export const CodingPreviewRequestSchema = z.object({
+  command: z.string().trim().min(1).max(500),
+  revisionId: CodingRevisionIdSchema,
+  port: z.number().int().min(1024).max(65535).default(3000),
+  network: z.boolean().default(false),
+}).strict();
+
+export type CodingPreviewRequest = z.infer<typeof CodingPreviewRequestSchema>;
+
+export const CodingPreviewSchema = z.object({
+  id: z.string().min(1).max(120),
+  workspaceId: CodingWorkspaceIdSchema,
+  revisionId: CodingRevisionIdSchema,
+  command: z.string().trim().min(1).max(500),
+  port: z.number().int().min(1024).max(65535),
+  status: z.enum(["starting", "running", "failed", "stopped"]),
+  createdAt: z.string().datetime(),
+  updatedAt: z.string().datetime(),
+  previewUrl: z.string().max(500).nullable(),
+}).strict();
+
+export type CodingPreview = z.infer<typeof CodingPreviewSchema>;
+
 const CodingAgentEventBaseSchema = z.object({
   runId: z.string().min(1).max(120),
   workspaceId: CodingWorkspaceIdSchema,

@@ -1,4 +1,4 @@
-import { createServer } from "node:http";
+import { createServer, request as httpRequest } from "node:http";
 import { randomUUID, timingSafeEqual } from "node:crypto";
 import { spawn } from "node:child_process";
 import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
@@ -18,12 +18,16 @@ const CPU_LIMIT = process.env.CODING_RUNNER_CPUS || "2";
 const PIDS_LIMIT = positiveInteger(process.env.CODING_RUNNER_PIDS_LIMIT, 256);
 const MAX_LOG_BYTES = positiveInteger(process.env.CODING_RUNNER_MAX_LOG_BYTES, 1_000_000);
 const RUN_RETENTION_MS = positiveInteger(process.env.CODING_RUNNER_RETENTION_MS, 3_600_000);
+const PREVIEW_RETENTION_MS = positiveInteger(process.env.CODING_RUNNER_PREVIEW_RETENTION_MS, 1_800_000);
+const MAX_PREVIEWS = positiveInteger(process.env.CODING_RUNNER_MAX_PREVIEWS, 4);
+const PREVIEW_START_TIMEOUT_MS = positiveInteger(process.env.CODING_RUNNER_PREVIEW_START_TIMEOUT_MS, 30_000);
 
 if (!RUNNER_TOKEN) {
   throw new Error("CODING_RUNNER_TOKEN must be configured.");
 }
 
 const jobs = new Map();
+const previews = new Map();
 const pending = [];
 let activeRuns = 0;
 
@@ -158,6 +162,20 @@ function runPayload(job) {
   };
 }
 
+function previewPayload(preview) {
+  return {
+    id: preview.id,
+    workspaceId: preview.request.workspaceId,
+    revisionId: preview.request.revisionId,
+    command: preview.request.command,
+    port: preview.request.port,
+    status: preview.status,
+    createdAt: preview.createdAt,
+    updatedAt: preview.updatedAt,
+    previewUrl: preview.status === "running" ? `/previews/${preview.id}` : null,
+  };
+}
+
 function appendLog(job, chunk) {
   const text = chunk.toString("utf8");
   if (job.logBytes >= MAX_LOG_BYTES) return;
@@ -195,6 +213,34 @@ function dockerArguments(job, workspaceDirectory) {
   ];
 }
 
+function previewDockerArguments(preview, workspaceDirectory) {
+  const relativeWorkspacePath = relative(WORK_ROOT, workspaceDirectory);
+  if (!relativeWorkspacePath || relativeWorkspacePath.startsWith("..") || isAbsolute(relativeWorkspacePath)) {
+    throw new Error("Runner workspace path escaped the configured work root.");
+  }
+  return [
+    "run",
+    "-d",
+    "--rm",
+    "--name", `nexus-preview-${preview.id}`,
+    "--workdir", "/workspace",
+    "--user", "1000:1000",
+    "--network", preview.request.network ? "bridge" : "none",
+    "--cpus", CPU_LIMIT,
+    "--memory", MEMORY_LIMIT,
+    "--pids-limit", String(PIDS_LIMIT),
+    "--read-only",
+    "--cap-drop=ALL",
+    "--security-opt", "no-new-privileges",
+    "--tmpfs", "/tmp:rw,noexec,nosuid,size=128m",
+    "--mount", `type=bind,src=${join(HOST_WORK_ROOT, relativeWorkspacePath)},dst=/workspace`,
+    SANDBOX_IMAGE,
+    "sh",
+    "-lc",
+    preview.request.command,
+  ];
+}
+
 async function prepareWorkspace(files) {
   const directory = await mkdtemp(join(WORK_ROOT, "run-"));
   await chmod(directory, 0o777);
@@ -208,6 +254,51 @@ async function prepareWorkspace(files) {
   return directory;
 }
 
+function parsePreviewRequest(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("Invalid coding preview request.");
+  }
+  const input = value;
+  const command = typeof input.command === "string" ? input.command.trim() : "";
+  if (command.length === 0 || command.length > 500 || command.includes("\0")) {
+    throw new Error("Preview commands must be between 1 and 500 characters.");
+  }
+  if (typeof input.network !== "boolean") {
+    throw new Error("The preview network setting must be a boolean.");
+  }
+  if (!input.network) {
+    throw new Error("Live previews require explicit network access so the runner can proxy the preview port.");
+  }
+  const port = Number.isInteger(input.port) ? input.port : 3000;
+  if (port < 1024 || port > 65535) throw new Error("Preview port must be between 1024 and 65535.");
+  if (!Array.isArray(input.files) || input.files.length > 200) {
+    throw new Error("A coding preview must contain no more than 200 files.");
+  }
+  const files = [];
+  const names = new Set();
+  let totalBytes = 0;
+  for (const file of input.files) {
+    if (!file || typeof file !== "object" || Array.isArray(file)) throw new Error("Invalid coding file.");
+    const name = relativeFilePath(file.name);
+    if (names.has(name)) throw new Error(`Duplicate coding file: ${name}`);
+    names.add(name);
+    if (typeof file.content !== "string" || file.content.length > 500_000) {
+      throw new Error(`Coding file ${name} is too large.`);
+    }
+    totalBytes += Buffer.byteLength(file.content, "utf8");
+    if (totalBytes > 4_000_000) throw new Error("Coding files are too large.");
+    files.push({ name, content: file.content });
+  }
+  return {
+    workspaceId: workspaceId(input.workspaceId),
+    revisionId: revisionId(input.revisionId),
+    command,
+    port,
+    network: input.network,
+    files,
+  };
+}
+
 async function killContainer(job) {
   await new Promise((resolveKill) => {
     const killer = spawn("docker", ["kill", `nexus-coding-${job.id}`], {
@@ -216,6 +307,74 @@ async function killContainer(job) {
     killer.once("close", resolveKill);
     killer.once("error", resolveKill);
   });
+}
+
+async function stopPreview(preview) {
+  if (preview.workspaceDirectory) {
+    await new Promise((resolveStop) => {
+      const killer = spawn("docker", ["rm", "-f", `nexus-preview-${preview.id}`], { stdio: "ignore" });
+      killer.once("close", resolveStop);
+      killer.once("error", resolveStop);
+    });
+    await rm(preview.workspaceDirectory, { recursive: true, force: true });
+  }
+  preview.workspaceDirectory = undefined;
+  preview.status = "stopped";
+  preview.updatedAt = new Date().toISOString();
+}
+
+async function startPreview(preview) {
+  preview.workspaceDirectory = await prepareWorkspace(preview.request.files);
+  const child = spawn("docker", previewDockerArguments(preview, preview.workspaceDirectory), {
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  const output = [];
+  child.stdout.on("data", (chunk) => output.push(chunk.toString("utf8")));
+  child.stderr.on("data", (chunk) => output.push(chunk.toString("utf8")));
+  const exitCode = await new Promise((resolveStart, rejectStart) => {
+    const timer = setTimeout(() => rejectStart(new Error("Preview container did not start in time.")), PREVIEW_START_TIMEOUT_MS);
+    child.once("error", (error) => {
+      clearTimeout(timer);
+      rejectStart(error);
+    });
+    child.once("close", (code) => {
+      clearTimeout(timer);
+      resolveStart(code);
+    });
+  });
+  if (exitCode !== 0) throw new Error(output.join("").slice(-2000) || "Preview container failed to start.");
+  const inspect = spawn("docker", ["inspect", "-f", "{{range.NetworkSettings.Networks}}{{.IPAddress}}{{end}}", `nexus-preview-${preview.id}`]);
+  let host = "";
+  inspect.stdout.on("data", (chunk) => { host += chunk.toString("utf8"); });
+  await new Promise((resolveInspect) => inspect.once("close", resolveInspect));
+  preview.containerHost = host.trim();
+  if (!preview.containerHost) throw new Error("Preview container address is unavailable.");
+  const deadline = Date.now() + PREVIEW_START_TIMEOUT_MS;
+  let ready = false;
+  while (Date.now() < deadline) {
+    ready = await new Promise((resolveReady) => {
+      const probe = httpRequest({
+        hostname: preview.containerHost,
+        port: preview.request.port,
+        path: "/",
+        method: "GET",
+      }, (response) => {
+        response.resume();
+        response.once("end", () => resolveReady(true));
+      });
+      probe.setTimeout(1000, () => {
+        probe.destroy();
+        resolveReady(false);
+      });
+      probe.once("error", () => resolveReady(false));
+      probe.end();
+    });
+    if (ready) break;
+    await new Promise((resolveWait) => setTimeout(resolveWait, 500));
+  }
+  if (!ready) throw new Error("Preview server did not become ready in time.");
+  preview.status = "running";
+  preview.updatedAt = new Date().toISOString();
 }
 
 async function execute(job) {
@@ -279,6 +438,35 @@ function pruneJobs() {
   }
 }
 
+function prunePreviews() {
+  const cutoff = Date.now() - PREVIEW_RETENTION_MS;
+  for (const [id, preview] of previews) {
+    if (Date.parse(preview.updatedAt) < cutoff) {
+      previews.delete(id);
+      void stopPreview(preview);
+    }
+  }
+}
+
+function proxyPreview(request, response, preview, path) {
+  if (preview.status !== "running") return json(response, 409, { error: "Preview is not running." });
+  const proxy = httpRequest({
+    hostname: preview.containerHost,
+    port: preview.request.port,
+    path,
+    method: request.method,
+    headers: { ...request.headers, host: `${preview.containerHost}:${preview.request.port}` },
+  }, (upstream) => {
+    response.writeHead(upstream.statusCode || 502, upstream.headers);
+    upstream.pipe(response);
+  });
+  proxy.once("error", () => {
+    if (!response.headersSent) json(response, 502, { error: "Preview server is unavailable." });
+    else response.end();
+  });
+  request.pipe(proxy);
+}
+
 async function handle(request, response) {
   const url = new URL(request.url || "/", `http://${request.headers.host || "localhost"}`);
   if (request.method === "GET" && url.pathname === "/healthz") {
@@ -320,11 +508,64 @@ async function handle(request, response) {
     return json(response, 202, runPayload(job));
   }
 
+  if (request.method === "POST" && url.pathname === "/previews") {
+    prunePreviews();
+    if (previews.size >= MAX_PREVIEWS) return json(response, 429, { error: "The preview capacity is full." });
+    let requestBody;
+    try {
+      requestBody = parsePreviewRequest(await readJson(request));
+    } catch (error) {
+      return json(response, 400, { error: error instanceof Error ? error.message : "Invalid coding preview request." });
+    }
+    const now = new Date().toISOString();
+    const preview = {
+      id: `preview-${randomUUID()}`,
+      request: requestBody,
+      status: "starting",
+      createdAt: now,
+      updatedAt: now,
+      workspaceDirectory: undefined,
+      containerHost: null,
+    };
+    previews.set(preview.id, preview);
+    void startPreview(preview).catch(async (error) => {
+      preview.error = error instanceof Error ? error.message : "Preview failed to start.";
+      if (preview.workspaceDirectory) await stopPreview(preview);
+      preview.status = "failed";
+      preview.updatedAt = new Date().toISOString();
+    });
+    return json(response, 202, previewPayload(preview));
+  }
+
   const runMatch = url.pathname.match(/^\/runs\/(run-[a-z0-9-]+)$/);
   if (request.method === "GET" && runMatch) {
     const job = jobs.get(runMatch[1]);
     if (!job) return json(response, 404, { error: "Coding run not found." });
     return json(response, 200, { run: runPayload(job), logs: job.logs });
+  }
+
+  const previewMatch = url.pathname.match(/^\/previews\/(preview-[a-z0-9-]+)(\/.*)?$/);
+  if (previewMatch) {
+    const preview = previews.get(previewMatch[1]);
+    if (!preview) return json(response, 404, { error: "Coding preview not found." });
+    if (request.method === "GET" && previewMatch[2] === undefined) {
+      return json(response, 200, { preview: previewPayload(preview), error: preview.error || null });
+    }
+    if (request.method === "DELETE" && previewMatch[2] === undefined) {
+      await stopPreview(preview);
+      return json(response, 200, { preview: previewPayload(preview) });
+    }
+    if (request.method === "GET" || request.method === "HEAD") {
+      if (!preview.containerHost) {
+        const inspect = spawn("docker", ["inspect", "-f", "{{range.NetworkSettings.Networks}}{{.IPAddress}}{{end}}", `nexus-preview-${preview.id}`]);
+        let output = "";
+        inspect.stdout.on("data", (chunk) => { output += chunk.toString("utf8"); });
+        await new Promise((resolveInspect) => inspect.once("close", resolveInspect));
+        preview.containerHost = output.trim();
+      }
+      if (!preview.containerHost) return json(response, 502, { error: "Preview container address is unavailable." });
+      return proxyPreview(request, response, preview, previewMatch[2] || "/");
+    }
   }
 
   return json(response, 404, { error: "Runner endpoint not found." });

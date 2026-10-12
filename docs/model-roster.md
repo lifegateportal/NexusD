@@ -119,6 +119,12 @@ Nexus Code also supports targeted edits through exact `nexus-patch`
 search/replace blocks. A patch must match one existing location; ambiguous or
 missing matches fail visibly instead of silently changing the wrong code.
 
+The coding workspace can start a temporary live preview from the current
+revision through the isolated runner. The preview command runs inside a
+short-lived sandbox and is proxied back through authenticated Nexus routes;
+it is not executed by the Next.js web process. Live preview requires explicit
+network access because the runner must proxy the sandbox port.
+
 The runner implementation lives in [`coding-runner/`](../coding-runner/). It
 accepts a revision, starts an ephemeral Docker sandbox with network disabled by
 default, and returns a queued run for polling. Keep the runner on a dedicated

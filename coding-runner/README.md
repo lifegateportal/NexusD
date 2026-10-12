@@ -48,3 +48,12 @@ curl http://127.0.0.1:8090/healthz
 
 `POST /runs` returns a queued `CodingRun`. Poll `GET /runs/{runId}` with the
 same bearer token to read status and bounded logs.
+
+Temporary live previews use `POST /previews` with a workspace snapshot,
+revision, command, port, and explicit `network: true`. The runner keeps the
+sandbox container alive for the preview, and the Nexus Code web route proxies
+browser requests through the authenticated sidecar. Stop previews with
+`DELETE /previews/{previewId}`; stale previews are removed after the configured
+retention period. Network access is intentionally required for this feature so
+the sidecar can reach the preview port, and should only be enabled for trusted
+projects.

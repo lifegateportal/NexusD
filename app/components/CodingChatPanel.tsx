@@ -25,11 +25,13 @@ import {
 } from "@/lib/coding-voice";
 import {
   CodingAgentEventSchema,
+  CodingPreviewSchema,
   CodingWorkspaceSchema,
   CodingWorkspaceSnapshotSchema,
   codingLanguageFromName,
   extractCodingFiles,
   type CodingAgentEvent,
+  type CodingPreview,
   type CodingWorkspace,
   type CodingWorkspaceSnapshot,
 } from "@/lib/coding-workspace";
@@ -180,6 +182,10 @@ export function CodingChatPanel() {
   const [previewExpanded, setPreviewExpanded] = useState(false);
   const [previewUrlDraft, setPreviewUrlDraft] = useState("");
   const [previewUrl, setPreviewUrl] = useState("");
+  const [livePreview, setLivePreview] = useState<CodingPreview | null>(null);
+  const [livePreviewCommand, setLivePreviewCommand] = useState("npm run dev -- --host 0.0.0.0");
+  const [livePreviewPort, setLivePreviewPort] = useState("3000");
+  const [livePreviewNetwork, setLivePreviewNetwork] = useState(true);
   const [voiceModeEnabled, setVoiceModeEnabled] = useState(false);
   const [voiceStatus, setVoiceStatus] = useState<CodingVoiceStatus>("off");
   const [voiceError, setVoiceError] = useState<string | null>(null);
@@ -232,6 +238,8 @@ export function CodingChatPanel() {
     setWorkspaceParentRevisionId(snapshot.revision.parentRevisionId);
     setSelectedFileName(snapshot.revision.files[0]?.name ?? null);
     setFiles(snapshot.revision.files);
+    setLivePreview(null);
+    setPreviewUrl("");
     workspaceReadyRef.current = true;
     setWorkspaceStatus("Saved");
   }, []);
@@ -1019,6 +1027,108 @@ export function CodingChatPanel() {
     window.setTimeout(() => URL.revokeObjectURL(objectUrl), 0);
   }, [previewUrl, selectedFile, selectedFileCanPreview]);
 
+  const startLivePreview = useCallback(async () => {
+    if (!workspaceId || !workspaceRevisionId) {
+      setError("Save or create a coding project before starting a live preview.");
+      return;
+    }
+    const command = livePreviewCommand.trim();
+    const port = Number.parseInt(livePreviewPort, 10);
+    if (!command || !Number.isInteger(port) || port < 1024 || port > 65535) {
+      setError("Enter a valid preview command and port between 1024 and 65535.");
+      return;
+    }
+    setError(null);
+    setWorkspaceStatus("Starting live preview");
+    try {
+      if (livePreview) {
+        await fetch(`/api/coding/workspaces/${encodeURIComponent(workspaceId)}/previews/${encodeURIComponent(livePreview.id)}`, {
+          method: "DELETE",
+          credentials: "same-origin",
+        });
+      }
+      const response = await fetch(`/api/coding/workspaces/${encodeURIComponent(workspaceId)}/previews`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "same-origin",
+        body: JSON.stringify({
+          revisionId: workspaceRevisionId,
+          command,
+          port,
+          network: livePreviewNetwork,
+        }),
+      });
+      const payload = await response.json().catch(() => null) as { preview?: unknown; error?: unknown } | null;
+      if (!response.ok) {
+        throw new Error(typeof payload?.error === "string" ? payload.error : "Live preview could not start.");
+      }
+      const parsed = CodingPreviewSchema.safeParse(payload?.preview);
+      if (!parsed.success) throw new Error("Live preview returned an invalid response.");
+      setLivePreview(parsed.data);
+      setPreviewUrl("");
+      setShowPreview(true);
+      setWorkspaceStatus("Live preview starting");
+    } catch (previewError) {
+      setWorkspaceStatus("Needs attention");
+      setError(previewError instanceof Error ? previewError.message : "Live preview could not start.");
+    }
+  }, [
+    livePreview,
+    livePreviewCommand,
+    livePreviewNetwork,
+    livePreviewPort,
+    workspaceId,
+    workspaceRevisionId,
+  ]);
+
+  const stopLivePreview = useCallback(async () => {
+    if (!workspaceId || !livePreview) return;
+    try {
+      await fetch(`/api/coding/workspaces/${encodeURIComponent(workspaceId)}/previews/${encodeURIComponent(livePreview.id)}`, {
+        method: "DELETE",
+        credentials: "same-origin",
+      });
+    } finally {
+      setLivePreview(null);
+      setPreviewUrl("");
+      setWorkspaceStatus("Saved");
+    }
+  }, [livePreview, workspaceId]);
+
+  useEffect(() => {
+    if (!workspaceId || !livePreview || livePreview.status === "running" || livePreview.status === "failed" || livePreview.status === "stopped") return;
+    let cancelled = false;
+    const poll = async () => {
+      try {
+        const response = await fetch(`/api/coding/workspaces/${encodeURIComponent(workspaceId)}/previews/${encodeURIComponent(livePreview.id)}`, {
+          credentials: "same-origin",
+          cache: "no-store",
+        });
+        const payload = await response.json().catch(() => null) as { preview?: unknown; error?: unknown } | null;
+        if (!response.ok) throw new Error(typeof payload?.error === "string" ? payload.error : "Live preview status failed.");
+        const parsed = CodingPreviewSchema.safeParse(payload?.preview);
+        if (!parsed.success) throw new Error("Live preview status was invalid.");
+        if (cancelled) return;
+        setLivePreview(parsed.data);
+        if (parsed.data.status === "running" && parsed.data.previewUrl) {
+          setPreviewUrl(parsed.data.previewUrl);
+          setWorkspaceStatus("Live preview ready");
+        } else if (parsed.data.status === "failed") {
+          setWorkspaceStatus("Live preview failed");
+          setError("The live preview container failed to start.");
+        }
+      } catch (pollError) {
+        if (!cancelled) setError(pollError instanceof Error ? pollError.message : "Live preview status failed.");
+      }
+    };
+    const timer = window.setInterval(() => void poll(), 1500);
+    void poll();
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [livePreview, workspaceId]);
+
   const toggleWorkspacePanel = useCallback((panel: "files" | "preview") => {
     const isMobile = window.matchMedia("(max-width: 1023px)").matches;
     if (panel === "files") {
@@ -1529,6 +1639,54 @@ export function CodingChatPanel() {
               <button type="button" onClick={openPreview} className="min-h-12 min-w-12 rounded-xl bg-violet-400 px-3 text-xs font-bold text-slate-950" aria-label="Open app preview">
                 Open
               </button>
+            </div>
+            <div className="rounded-xl border border-violet-500/20 bg-violet-500/5 p-2">
+              <div className="flex items-center justify-between gap-2">
+                <div>
+                  <p className="text-xs font-semibold text-violet-200">Temporary live preview</p>
+                  <p className="mt-1 text-[10px] leading-4 text-slate-500">Runs the current revision in the isolated runner.</p>
+                </div>
+                <label className="flex min-h-12 shrink-0 items-center gap-2 px-1 text-[10px] text-slate-400">
+                  <input
+                    type="checkbox"
+                    checked={livePreviewNetwork}
+                    onChange={(event) => setLivePreviewNetwork(event.target.checked)}
+                    className="h-4 w-4 accent-violet-400"
+                  />
+                  Network
+                </label>
+              </div>
+              <div className="mt-2 flex flex-col gap-2 sm:flex-row">
+                <input
+                  value={livePreviewCommand}
+                  onChange={(event) => setLivePreviewCommand(event.target.value)}
+                  aria-label="Live preview command"
+                  className="min-w-0 flex-1 rounded-lg border border-slate-700 bg-slate-900 px-3 py-3 text-base text-slate-200 focus:border-violet-400/60 focus:outline-none"
+                  placeholder="npm run dev -- --host 0.0.0.0"
+                />
+                <input
+                  value={livePreviewPort}
+                  onChange={(event) => setLivePreviewPort(event.target.value)}
+                  inputMode="numeric"
+                  aria-label="Live preview port"
+                  className="w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-3 text-base text-slate-200 sm:w-24"
+                  placeholder="3000"
+                />
+                {livePreview && livePreview.status !== "stopped" ? (
+                  <button type="button" onClick={() => void stopLivePreview()} className="min-h-12 rounded-lg border border-rose-400/40 px-3 text-xs font-semibold text-rose-200">
+                    Stop
+                  </button>
+                ) : (
+                  <button type="button" onClick={() => void startLivePreview()} className="min-h-12 rounded-lg bg-violet-400 px-3 text-xs font-bold text-slate-950">
+                    Start
+                  </button>
+                )}
+              </div>
+              {livePreview && (
+                <p className="mt-2 text-[10px] text-violet-300" aria-live="polite">
+                  {livePreview.status === "starting" ? "Starting container..." : livePreview.status === "running" ? "Preview is live." : `Preview ${livePreview.status}.`}
+                </p>
+              )}
             </div>
             <div className="flex items-center justify-between gap-2">
               <span className="text-[10px] text-slate-600">Responsive preview</span>
