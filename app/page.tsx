@@ -737,18 +737,10 @@ export default function HomePage() {
   const isFocused = activeNav !== "overview";
   const isSermonView = activeNav === "sermon";
   const isBookView = activeNav === "ebook";
+  const isProjectsView = activeNav === "projects";
   const isAcademyWorkspace = !isSermonView && !isBookView && activeNav !== "projects";
-  const pipelineIsActive = stage === "ingesting"
-    || stage === "reasoning"
-    || stage === "generating"
-    || stage === "producing"
-    || stage === "error";
-  const showActivityPanel = isAcademyWorkspace
-    && activeNav !== "overview"
-    && activeNav !== "deploy"
-    && (pipelineIsActive || isFocused);
+  const showActivityPanel = isAcademyWorkspace;
   const showAcademyOverviewHeading = isAcademyWorkspace && activeNav === "overview";
-  const centerAcademyOverview = showAcademyOverviewHeading && stage === "idle" && blueprint === null;
   const activeAcademyStep: AcademyStepId | null = activeNav === "overview"
     ? "overview"
     : activeNav === "analyse" || activeNav === "architect" || activeNav === "design"
@@ -879,8 +871,8 @@ export default function HomePage() {
             : isBookView
               ? "flex flex-1 flex-col gap-3 overflow-y-auto overscroll-contain p-3 pb-3 lg:min-h-0 lg:overflow-hidden lg:pb-3"
               : showActivityPanel
-                ? "flex flex-1 flex-col gap-3 overflow-y-auto overscroll-contain p-3 pb-24 lg:grid lg:min-h-0 lg:overflow-hidden lg:pb-3 lg:grid-cols-5"
-                : `flex flex-1 flex-col gap-3 overflow-y-auto overscroll-contain p-3 pb-24 lg:min-h-0 lg:overflow-hidden lg:pb-3${centerAcademyOverview ? " justify-center" : ""}`
+                ? "mx-2 mb-2 flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto overscroll-contain rounded-2xl border border-cyan-500/10 bg-shell-950/20 p-3 pb-24 shadow-panel lg:mx-3 lg:mb-3 lg:grid lg:grid-cols-5 lg:overflow-hidden lg:pb-3"
+                : "mx-2 mb-2 flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto overscroll-contain rounded-2xl border border-cyan-500/10 bg-shell-950/20 p-3 pb-24 shadow-panel lg:mx-3 lg:mb-3 lg:overflow-hidden lg:pb-3"
         }>
 
           {/* ── Focused agent views (non-overview nav) ── */}
@@ -904,8 +896,10 @@ export default function HomePage() {
                   : isBookView
                     ? "flex min-h-[65dvh] flex-col animate-fade-up lg:flex-1 lg:min-h-0"
                     : showActivityPanel
-                      ? "min-h-[65dvh] animate-fade-up lg:col-span-4 lg:min-h-0"
-                      : "mx-auto flex w-full max-w-4xl flex-col animate-fade-up"}
+                      ? "min-h-[65dvh] min-w-0 animate-fade-up lg:h-full lg:col-span-4 lg:min-h-0"
+                      : isProjectsView
+                        ? "mx-auto flex min-h-0 w-full max-w-6xl flex-1 flex-col animate-fade-up"
+                        : "mx-auto flex w-full max-w-4xl flex-col animate-fade-up"}
               >
                 {activeNav === "projects" ? (
                   <ProjectsPanel
@@ -1036,7 +1030,7 @@ export default function HomePage() {
 
               {/* Workspace — source first, then results and recovery actions */}
               <div className={showActivityPanel
-                ? "flex flex-col gap-3 lg:col-span-4 lg:grid lg:min-h-0 lg:grid-rows-[minmax(0,1fr)_minmax(0,1fr)_auto]"
+                ? "flex min-h-0 flex-col gap-3 overflow-y-auto lg:col-span-4 lg:pr-1"
                 : "mx-auto flex w-full max-w-4xl flex-col gap-3"}
               >
                 {showAcademyOverviewHeading && (

@@ -137,7 +137,7 @@ export function AcademyProjectsPanel({
   }
 
   return (
-    <div ref={panelRef} className="flex h-full flex-col gap-4 overflow-y-auto rounded-2xl border border-slate-700/60 glass p-5">
+    <div ref={panelRef} className="flex h-full min-h-0 flex-col gap-4 overflow-y-auto rounded-2xl border border-slate-700/60 glass p-5">
       <div className="flex items-center justify-between gap-2">
         <div>
           <p className="text-[10px] font-bold uppercase tracking-widest text-cyan-500">Academy</p>
