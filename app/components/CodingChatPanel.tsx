@@ -836,8 +836,9 @@ export function CodingChatPanel() {
           )}
         </aside>
 
-        <div ref={scrollRef} className={`${showFiles || showPreview ? "hidden lg:flex" : "flex"} min-h-0 min-w-0 flex-1 flex-col overflow-y-auto px-3 py-4 sm:px-5 lg:px-8`} style={{ WebkitOverflowScrolling: "touch" }}>
-        <div className="mx-auto flex max-w-5xl flex-col gap-4">
+        <div className={`${showFiles || showPreview ? "hidden lg:flex" : "flex"} min-h-0 min-w-0 flex-1 flex-col overflow-hidden`}>
+          <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto px-3 py-4 sm:px-5 lg:px-8" style={{ WebkitOverflowScrolling: "touch" }}>
+          <div className={`mx-auto flex min-h-full w-full max-w-5xl flex-col gap-4 ${messages.length === 1 ? "justify-center" : "justify-end"}`}>
           {messages.map((message) => (
             <article
               key={message.id}
@@ -862,9 +863,10 @@ export function CodingChatPanel() {
               DeepSeek is generating a coding response…
             </div>
           )}
+      </div>
         </div>
 
-      <div className="shrink-0 bg-slate-950/90 p-3 sm:p-4" style={{ paddingBottom: "max(env(safe-area-inset-bottom), 0.75rem)" }}>
+      <div className="shrink-0 border-t border-cyan-500/20 bg-slate-950/95 p-3 sm:p-4" style={{ paddingBottom: "max(env(safe-area-inset-bottom), 0.75rem)" }}>
         {(error || voiceError) && (
           <p role="alert" className="mb-3 rounded-xl border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-xs text-rose-200">
             {error || voiceError}
