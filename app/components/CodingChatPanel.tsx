@@ -381,6 +381,50 @@ export function CodingChatPanel() {
     }
   }, [applyWorkspaceSnapshot, loading, resetProjectConversation]);
 
+  const deleteWorkspace = useCallback(async () => {
+    if (!workspaceId || loading) return;
+    const projectName = workspaceName || "this project";
+    if (!window.confirm(`Delete "${projectName}" permanently? All files and revisions will be removed.`)) return;
+    await workspaceSaveQueueRef.current.catch(() => undefined);
+    workspaceReadyRef.current = false;
+    setWorkspaceStatus("Deleting project");
+    setError(null);
+    try {
+      const response = await fetch(`/api/coding/workspaces/${encodeURIComponent(workspaceId)}`, {
+        method: "DELETE",
+        credentials: "same-origin",
+      });
+      const payload = await response.json().catch(() => null) as { error?: unknown } | null;
+      if (!response.ok) {
+        throw new Error(typeof payload?.error === "string" ? payload.error : "Project could not be deleted.");
+      }
+      const remaining = workspaces.filter((workspace) => workspace.id !== workspaceId);
+      setWorkspaces(remaining);
+      workspaceIdRef.current = null;
+      if (remaining[0]) {
+        setWorkspaceId(null);
+        setFiles([]);
+        setWorkspaceRevisionId(null);
+        setWorkspaceParentRevisionId(null);
+        resetProjectConversation();
+        await openWorkspace(remaining[0].id);
+      } else {
+        setWorkspaceId(null);
+        setWorkspaceName("No project");
+        setWorkspaceRevisionId(null);
+        setWorkspaceParentRevisionId(null);
+        setFiles([]);
+        resetProjectConversation();
+        setWorkspaceStatus("No project");
+        setStatus("Ready");
+      }
+    } catch (workspaceError) {
+      workspaceReadyRef.current = true;
+      setWorkspaceStatus("Needs attention");
+      setError(workspaceError instanceof Error ? workspaceError.message : "Project could not be deleted.");
+    }
+  }, [loading, openWorkspace, resetProjectConversation, workspaceId, workspaceName, workspaces]);
+
   const clearVoiceRestartTimer = useCallback(() => {
     if (!voiceRestartTimerRef.current) return;
     clearTimeout(voiceRestartTimerRef.current);
@@ -1173,10 +1217,18 @@ export function CodingChatPanel() {
               <button
                 type="button"
                 onClick={() => void createWorkspace()}
-                disabled={loading || !workspaceId}
+                disabled={loading}
                 className="min-h-12 shrink-0 rounded-xl border border-cyan-400/40 px-3 text-xs font-semibold text-cyan-200 disabled:opacity-40"
               >
                 New project
+              </button>
+              <button
+                type="button"
+                onClick={() => void deleteWorkspace()}
+                disabled={loading || !workspaceId}
+                className="min-h-12 shrink-0 rounded-xl border border-rose-400/40 px-3 text-xs font-semibold text-rose-200 disabled:opacity-40"
+              >
+                Delete
               </button>
             </div>
             <p className="mt-1 text-xs text-slate-500">DeepSeek Chat default · R1 available for difficult reasoning</p>
