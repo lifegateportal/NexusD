@@ -837,11 +837,11 @@ export default function HomePage() {
   }, [router]);
 
   return (
-    <div className="flex min-h-dvh max-h-dvh overflow-hidden bg-shell-950 bg-grid bg-radial-glow safe-area-frame">
+    <div className="flex h-dvh max-h-dvh overflow-hidden bg-shell-950 bg-grid bg-radial-glow safe-area-frame">
       <NexusNav active={activeNav} onSelect={handleNavSelect} />
 
       {/* Content column — reserves bottom space for mobile bottom nav (~60px) */}
-      <div className="flex min-w-0 flex-1 flex-col overflow-hidden pb-[max(env(safe-area-inset-bottom),_3.75rem)] lg:pb-0">
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden pb-[max(env(safe-area-inset-bottom),_3.75rem)] lg:pb-0">
         <StatusBar
           stage={stage}
           models={models}
@@ -863,17 +863,20 @@ export default function HomePage() {
 
         {/*
           Mobile: flex-col + overflow-y-auto so panels stack and scroll.
-          Desktop (lg+): grid 5-cols + overflow-hidden so panels fill height.
+          Desktop (lg+): two-column grid + overflow-hidden so panels fill height.
         */}
-        <main className={
+        <main
+          style={{ WebkitOverflowScrolling: "touch" }}
+          className={
           isSermonView
             ? "flex min-h-0 flex-1 overflow-hidden"
             : isBookView
               ? "flex flex-1 flex-col gap-3 overflow-y-auto overscroll-contain p-3 pb-3 lg:min-h-0 lg:overflow-hidden lg:pb-3"
               : showActivityPanel
-                ? "mx-2 mb-2 flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto overscroll-contain rounded-2xl border border-cyan-500/10 bg-shell-950/20 p-3 pb-24 shadow-panel lg:mx-3 lg:mb-3 lg:grid lg:grid-cols-[240px_minmax(0,1fr)] lg:overflow-hidden lg:pb-3"
-                : "mx-2 mb-2 flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto overscroll-contain rounded-2xl border border-cyan-500/10 bg-shell-950/20 p-3 pb-24 shadow-panel lg:mx-3 lg:mb-3 lg:overflow-hidden lg:pb-3"
-        }>
+              ? "mx-2 mb-2 flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto overscroll-contain rounded-2xl border border-cyan-500/10 bg-shell-950/20 p-3 shadow-panel lg:mx-3 lg:mb-3 lg:grid lg:grid-cols-[240px_minmax(0,1fr)] lg:overflow-hidden lg:pb-3"
+              : "mx-2 mb-2 flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto overscroll-contain rounded-2xl border border-cyan-500/10 bg-shell-950/20 p-3 shadow-panel lg:mx-3 lg:mb-3 lg:overflow-hidden lg:pb-3"
+        }
+        >
 
           {/* ── Focused agent views (non-overview nav) ── */}
           {isFocused ? (
@@ -898,7 +901,7 @@ export default function HomePage() {
                     : showActivityPanel
                       ? "min-h-[65dvh] min-w-0 animate-fade-up lg:h-full lg:col-span-1 lg:min-h-0"
                       : isProjectsView
-                        ? "mx-auto flex min-h-0 w-full max-w-6xl flex-1 flex-col animate-fade-up"
+                        ? "mx-auto flex min-h-0 w-full max-w-6xl flex-initial shrink-0 flex-col animate-fade-up lg:flex-1"
                         : "mx-auto flex w-full max-w-4xl flex-col animate-fade-up"}
               >
                 {activeNav === "projects" ? (
@@ -1020,7 +1023,7 @@ export default function HomePage() {
             <>
               {/* Terminal log — full width mobile, compact desktop activity column */}
               {showActivityPanel && (
-                <div className="min-h-[220px] lg:min-h-0 lg:col-span-1">
+                <div className="order-2 min-h-0 max-h-64 lg:order-none lg:min-h-0 lg:max-h-none lg:col-span-1">
                   <TerminalLog
                     entries={logs}
                     isStreaming={stage === "ingesting" || stage === "reasoning"}
@@ -1030,7 +1033,7 @@ export default function HomePage() {
 
               {/* Workspace — source first, then results and recovery actions */}
               <div className={showActivityPanel
-                ? "flex min-h-0 flex-col gap-3 overflow-y-auto lg:col-span-1 lg:pr-1"
+                ? "order-1 flex min-h-0 w-full shrink-0 flex-col gap-3 lg:order-none lg:col-span-1 lg:overflow-y-auto lg:pr-1"
                 : "mx-auto flex w-full max-w-4xl flex-col gap-3"}
               >
                 {showAcademyOverviewHeading && (

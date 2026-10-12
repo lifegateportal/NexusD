@@ -307,7 +307,7 @@ export function MediaUpload({ onLog, onBlueprint, onStageChange, onDeliveryChang
   const canRun = (files.length > 0 || prompt.trim().length > 0) && !isLoading;
 
   return (
-    <section className="w-full overflow-hidden rounded-2xl border border-cyan-500/15 glass shadow-panel">
+    <section className="w-full min-w-0 shrink-0 overflow-hidden rounded-2xl border border-cyan-500/15 glass shadow-panel">
       <header className="flex flex-shrink-0 items-center gap-2 border-b border-slate-700/50 px-4 py-3">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} className="h-4 w-4 text-accent-400">
           <path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2" strokeLinecap="round" />
