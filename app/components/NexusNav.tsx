@@ -8,6 +8,7 @@ type NavItem = { id: string; label: string; href?: string };
 const NAV_ITEMS: NavItem[] = [
   { id: "overview", label: "Academy" },
   { id: "ebook", label: "Book" },
+  { id: "coding", label: "Code", href: "/coding" },
   { id: "translate", label: "Translate", href: "/translate" },
   { id: "projects", label: "Projects" },
   { id: "sermon", label: "Sermon" },
@@ -32,6 +33,15 @@ function IconEbook() {
       <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20" strokeLinecap="round" strokeLinejoin="round" />
       <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z" strokeLinecap="round" strokeLinejoin="round" />
       <path d="M9 7h7M9 11h5" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+/** Coding — DeepSeek coding workspace */
+function IconCoding() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} className="h-5 w-5">
+      <path d="m8 8-4 4 4 4M16 8l4 4-4 4M14 4l-4 16" strokeLinecap="round" strokeLinejoin="round" />
     </svg>
   );
 }
@@ -76,6 +86,7 @@ function IconSermon() {
 const NAV_ICONS: Record<string, () => React.JSX.Element> = {
   overview: IconGrid,
   ebook: IconEbook,
+  coding: IconCoding,
   translate: IconTranslate,
   projects: IconProjects,
   sermon: IconSermon,
@@ -104,6 +115,7 @@ export function NexusNav({ active, onSelect }: NexusNavProps) {
     // Skip redundant pushes to avoid unnecessary route remounts.
     if (href === "/translate" && pathname.startsWith("/translate")) return;
     if (href.startsWith("/ebook") && pathname.startsWith("/ebook")) return;
+    if (href.startsWith("/coding") && pathname.startsWith("/coding")) return;
     if (href === "/" && pathname === "/") return;
     router.push(href);
   }, [pathname, router]);
@@ -111,6 +123,7 @@ export function NexusNav({ active, onSelect }: NexusNavProps) {
   useEffect(() => {
     router.prefetch("/");
     router.prefetch("/ebook?tab=pipeline");
+    router.prefetch("/coding");
     router.prefetch("/translate");
   }, [router]);
 
@@ -148,7 +161,7 @@ export function NexusNav({ active, onSelect }: NexusNavProps) {
               ? pathname.startsWith(item.href)
               : isAcademyGroup
                 ? active !== "ebook" && active !== "sermon" && active !== "projects"
-                  && active !== "translate"
+                    && active !== "translate" && active !== "coding"
                 : active === item.id;
             const btnClass = [
               "focus-ring relative flex min-h-12 w-12 items-center justify-center rounded-xl transition-all duration-150",
@@ -215,7 +228,7 @@ export function NexusNav({ active, onSelect }: NexusNavProps) {
 
       {/* ── Mobile bottom bar (<lg) ───────────────────────────── */}
       <nav
-        className="lg:hidden fixed bottom-0 left-0 right-0 z-50 flex items-stretch justify-around border-t border-cyan-500/20 glass-light select-none"
+        className="lg:hidden fixed bottom-0 left-0 right-0 z-50 flex items-stretch justify-start gap-0 overflow-x-auto border-t border-cyan-500/20 glass-light select-none [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
         style={{ paddingBottom: "max(env(safe-area-inset-bottom), 6px)" }}
         aria-label="Nexus Director navigation"
       >
@@ -249,7 +262,7 @@ export function NexusNav({ active, onSelect }: NexusNavProps) {
             ? pathname.startsWith(item.href)
             : isAcademyGroup
               ? active !== "ebook" && active !== "sermon" && active !== "projects"
-                && active !== "translate"
+                  && active !== "translate" && active !== "coding"
               : active === item.id;
           const inner = (
             <>

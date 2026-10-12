@@ -92,3 +92,17 @@ workspaces:
 Academy prompts provide the model with the complete available context and treat
 delivery instructions as first-class creative direction. Schema validation and
 server-side patch merging remain in place for reliable output handling.
+
+## Coding pipeline
+
+The dedicated `/coding` workspace is isolated from the Ebook and NexusLM
+pipelines. It uses only the explicit DeepSeek models:
+
+| Coding task | Model |
+|---|---|
+| Build, debug, review, explain, and ordinary implementation | `deepseek-chat` |
+| User-selected difficult reasoning or architecture work | `deepseek-reasoner` |
+
+The coding workspace defaults to `deepseek-chat`. Selecting R1 is an explicit
+per-conversation choice and does not change the model policy of any other
+workspace.
