@@ -69,6 +69,21 @@ file contents
 - Do not emit nexus-file blocks for a pure explanation or plan unless the user explicitly requests implementation files.`;
 }
 
+function describeCodingStreamError(error: unknown): string {
+  const message = error instanceof Error ? error.message : "";
+  console.error("[coding/chat] DeepSeek request failed", error);
+  if (/401|403|authentication|api key|unauthorized/i.test(message)) {
+    return "DeepSeek authentication failed. Update DEEPSEEK_API_KEY on the server.";
+  }
+  if (/429|rate limit|quota/i.test(message)) {
+    return "DeepSeek rate limit or quota reached. Check the DeepSeek account and try again.";
+  }
+  if (/timeout|timed out|ETIMEDOUT|ECONNRESET/i.test(message)) {
+    return "DeepSeek did not respond in time. Check the server network connection and try again.";
+  }
+  return "DeepSeek could not complete the request. Check the server logs for the provider error.";
+}
+
 export async function POST(request: NextRequest) {
   let input: CodingChatRequest;
   try {
@@ -100,11 +115,12 @@ export async function POST(request: NextRequest) {
       prompt,
     });
 
-    return result.toTextStreamResponse({
+    return result.toDataStreamResponse({
       headers: {
         "Cache-Control": "no-cache, no-transform",
         "X-Accel-Buffering": "no",
       },
+      getErrorMessage: describeCodingStreamError,
     });
   } catch (error) {
     return NextResponse.json(

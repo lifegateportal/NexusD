@@ -115,6 +115,25 @@ function extractGeneratedFiles(content: string): CodingFile[] {
   return generated;
 }
 
+type CodingStreamPart = { type: "text" | "error"; value: string };
+
+function parseCodingStreamLine(line: string): CodingStreamPart | null {
+  const trimmed = line.trim();
+  if (!trimmed) return null;
+  const separator = trimmed.indexOf(":");
+  if (separator < 1) throw new Error("Nexus Code returned an invalid stream.");
+  const code = trimmed.slice(0, separator);
+  if (code !== "0" && code !== "3") return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(trimmed.slice(separator + 1)) as unknown;
+  } catch {
+    throw new Error("Nexus Code returned malformed stream data.");
+  }
+  if (typeof parsed !== "string") throw new Error("Nexus Code returned an invalid stream value.");
+  return { type: code === "0" ? "text" : "error", value: parsed };
+}
+
 function buildCodingTree(files: CodingFile[]): CodingTreeNode[] {
   const root: CodingTreeNode[] = [];
   for (const file of files) {
@@ -743,18 +762,39 @@ export function CodingChatPanel() {
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
       let content = "";
+      let streamBuffer = "";
+      let streamError: string | null = null;
+      const appendStreamPart = (part: CodingStreamPart | null) => {
+        if (!part) return;
+        if (part.type === "error") {
+          streamError = part.value;
+          return;
+        }
+        content += part.value;
+      };
+      const consumeStreamChunk = (chunk: string) => {
+        streamBuffer += chunk;
+        const lines = streamBuffer.split("\n");
+        streamBuffer = lines.pop() ?? "";
+        for (const line of lines) appendStreamPart(parseCodingStreamLine(line));
+      };
       while (true) {
         const result = await reader.read();
         if (result.done) break;
-        content += decoder.decode(result.value, { stream: true });
-        setMessages((current) => current.map((message) => (
-          message.id === assistantId ? { ...message, content } : message
-        )));
-        syncGeneratedFiles(content);
+        consumeStreamChunk(decoder.decode(result.value, { stream: true }));
+        if (content) {
+          setMessages((current) => current.map((message) => (
+            message.id === assistantId ? { ...message, content } : message
+          )));
+          syncGeneratedFiles(content);
+        }
       }
-      content += decoder.decode();
+      consumeStreamChunk(decoder.decode());
+      if (streamBuffer) appendStreamPart(parseCodingStreamLine(streamBuffer));
+      if (streamError) throw new Error(streamError);
+      if (!content) throw new Error("Nexus Code returned an empty response.");
       setMessages((current) => current.map((message) => (
-        message.id === assistantId ? { ...message, content: content || "Nexus Code returned an empty response." } : message
+        message.id === assistantId ? { ...message, content } : message
       )));
       syncGeneratedFiles(content);
       if (content) speakAssistantResponse(content);
