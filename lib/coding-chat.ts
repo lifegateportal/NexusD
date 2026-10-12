@@ -8,7 +8,7 @@ export type CodingAgent = z.infer<typeof CodingAgentSchema>;
 
 export const CodingFileSchema = z.object({
   name: z.string().trim().min(1).max(240),
-  content: z.string().min(1).max(500_000),
+  content: z.string().max(500_000),
   language: z.string().trim().max(40).optional(),
 }).strict();
 

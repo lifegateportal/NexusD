@@ -38,7 +38,7 @@ function formatHistory(request: CodingChatRequest): string {
 }
 
 function buildSystemPrompt(input: CodingChatRequest): string {
-  return `You are Nexus Code, the dedicated software engineering assistant inside NexusD.
+  const basePrompt = `You are Nexus Code, the dedicated software engineering assistant inside NexusD.
 
 MODEL POLICY:
 - The active model is ${input.agent}.
@@ -57,6 +57,16 @@ ENGINEERING RULES:
 - Include tests or concrete verification commands for implementation work.
 - Call out assumptions and unresolved requirements.
 - Return reader-facing Markdown with file headings and fenced code blocks when code is needed.`;
+  return `${basePrompt}
+
+WORKSPACE FILE PROTOCOL:
+- For code or implementation work, emit every new or changed file in its own machine-readable fenced block:
+\`\`\`nexus-file path="src/example.ts"
+file contents
+\`\`\`
+- Keep the file path relative, use forward slashes, and place explanations outside these blocks.
+- The Nexus Code client uses these blocks to build and update its browser-local project tree while the response streams.
+- Do not emit nexus-file blocks for a pure explanation or plan unless the user explicitly requests implementation files.`;
 }
 
 export async function POST(request: NextRequest) {

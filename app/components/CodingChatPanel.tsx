@@ -5,6 +5,7 @@ import { pickVoice } from "@/lib/audio-player-context";
 import {
   CodingAgentSchema,
   CodingChatArchiveSchema,
+  CodingFileSchema,
   CodingModeSchema,
   CODING_MODE_LABELS,
   type CodingAgent,
@@ -36,7 +37,6 @@ type CodingTreeNode = {
   children: CodingTreeNode[];
 };
 
-type PreviewDevice = "mobile" | "desktop";
 type CodingSurface = "assistant" | "editor";
 
 type CodingVoiceStatus = "off" | "waiting" | "capturing" | "thinking" | "speaking" | "error";
@@ -86,6 +86,33 @@ function languageFromName(name: string): string | undefined {
     yml: "yaml",
   };
   return languages[extension];
+}
+
+function normalizeCodingPath(rawPath: string): string | null {
+  const segments = rawPath
+    .trim()
+    .replaceAll("\\", "/")
+    .split("/")
+    .filter((segment) => segment && segment !== "." && segment !== "..");
+  const normalized = segments.join("/");
+  return normalized && normalized.length <= 240 ? normalized : null;
+}
+
+function extractGeneratedFiles(content: string): CodingFile[] {
+  const pattern = /```nexus-file\s+path=(?:"([^"]+)"|'([^']+)'|([^\s]+))\s*\n([\s\S]*?)(?:```|$)/gi;
+  const generated: CodingFile[] = [];
+  let match: RegExpExecArray | null;
+  while ((match = pattern.exec(content)) !== null) {
+    const name = normalizeCodingPath(match[1] ?? match[2] ?? match[3] ?? "");
+    if (!name) continue;
+    const parsed = CodingFileSchema.safeParse({
+      name,
+      content: match[4],
+      language: languageFromName(name),
+    });
+    if (parsed.success) generated.push(parsed.data);
+  }
+  return generated;
 }
 
 function buildCodingTree(files: CodingFile[]): CodingTreeNode[] {
@@ -156,7 +183,6 @@ export function CodingChatPanel() {
   const [showPreview, setShowPreview] = useState(false);
   const [previewUrlDraft, setPreviewUrlDraft] = useState("");
   const [previewUrl, setPreviewUrl] = useState("");
-  const [previewDevice, setPreviewDevice] = useState<PreviewDevice>("desktop");
   const [voiceModeEnabled, setVoiceModeEnabled] = useState(false);
   const [voiceStatus, setVoiceStatus] = useState<CodingVoiceStatus>("off");
   const [voiceError, setVoiceError] = useState<string | null>(null);
@@ -612,6 +638,23 @@ export function CodingChatPanel() {
     )));
   }, [selectedFileName]);
 
+  const syncGeneratedFiles = useCallback((content: string) => {
+    const generatedFiles = extractGeneratedFiles(content);
+    if (generatedFiles.length === 0) return;
+    setFiles((current) => {
+      const merged = new Map(current.map((file) => [file.name, file]));
+      let changed = false;
+      for (const file of generatedFiles) {
+        const previous = merged.get(file.name);
+        if (!previous || previous.content !== file.content || previous.language !== file.language) {
+          merged.set(file.name, file);
+          changed = true;
+        }
+      }
+      return changed ? Array.from(merged.values()).slice(0, MAX_FILES) : current;
+    });
+  }, []);
+
   const openPreview = useCallback(() => {
     const candidate = previewUrlDraft.trim();
     if (!candidate) {
@@ -636,6 +679,23 @@ export function CodingChatPanel() {
       setError(previewError instanceof Error ? previewError.message : "Enter a valid app preview URL.");
     }
   }, [previewUrlDraft, selectedFileCanPreview]);
+
+  const toggleWorkspacePanel = useCallback((panel: "files" | "preview") => {
+    const isMobile = window.matchMedia("(max-width: 1023px)").matches;
+    if (panel === "files") {
+      setShowFiles((current) => {
+        const next = !current;
+        if (isMobile && next) setShowPreview(false);
+        return next;
+      });
+      return;
+    }
+    setShowPreview((current) => {
+      const next = !current;
+      if (isMobile && next) setShowFiles(false);
+      return next;
+    });
+  }, []);
 
   const send = useCallback(async (requestedQuery?: string) => {
     const query = (requestedQuery ?? input).trim();
@@ -690,11 +750,13 @@ export function CodingChatPanel() {
         setMessages((current) => current.map((message) => (
           message.id === assistantId ? { ...message, content } : message
         )));
+        syncGeneratedFiles(content);
       }
       content += decoder.decode();
       setMessages((current) => current.map((message) => (
         message.id === assistantId ? { ...message, content: content || "Nexus Code returned an empty response." } : message
       )));
+      syncGeneratedFiles(content);
       if (content) speakAssistantResponse(content);
       setStatus("Ready");
     } catch (requestError) {
@@ -709,7 +771,7 @@ export function CodingChatPanel() {
       abortRef.current = null;
       setLoading(false);
     }
-  }, [agent, files, input, loading, messages, mode, speakAssistantResponse]);
+  }, [agent, files, input, loading, messages, mode, speakAssistantResponse, syncGeneratedFiles]);
 
   const stop = useCallback(() => {
     abortRef.current?.abort();
@@ -765,17 +827,19 @@ export function CodingChatPanel() {
             </button>
           </div>
         </div>
-        <div className="mt-2 flex gap-2 lg:hidden">
+        <div className="mt-2 flex flex-wrap gap-2">
           <button
             type="button"
-            onClick={() => setShowFiles((current) => !current)}
+            onClick={() => toggleWorkspacePanel("files")}
+            aria-pressed={showFiles}
             className={`min-h-12 rounded-xl border px-3 text-xs font-semibold ${showFiles ? "border-cyan-400/50 bg-cyan-500/15 text-cyan-200" : "border-slate-700 text-slate-400"}`}
           >
-            Files {files.length > 0 ? `(${files.length})` : ""}
+            Explorer {files.length > 0 ? `(${files.length})` : ""}
           </button>
           <button
             type="button"
-            onClick={() => setShowPreview((current) => !current)}
+            onClick={() => toggleWorkspacePanel("preview")}
+            aria-pressed={showPreview}
             className={`min-h-12 rounded-xl border px-3 text-xs font-semibold ${showPreview ? "border-violet-400/50 bg-violet-500/15 text-violet-200" : "border-slate-700 text-slate-400"}`}
           >
             Preview
@@ -784,13 +848,13 @@ export function CodingChatPanel() {
       </header>
 
       <div className="flex min-h-0 flex-1 flex-col lg:flex-row">
-        <aside className={`${showFiles ? "flex" : "hidden"} w-full shrink-0 flex-col border-b border-cyan-500/20 bg-slate-950/80 lg:flex lg:w-64 lg:border-b-0 lg:border-r`} aria-label="Project file tree">
+        <aside className={`${showFiles ? "flex" : "hidden"} w-full shrink-0 flex-col border-b border-cyan-500/20 bg-slate-950/80 lg:w-64 lg:border-b-0 lg:border-r`} aria-label="Project file tree">
           <div className="flex min-h-14 shrink-0 items-center justify-between border-b border-slate-800 px-3">
             <div>
               <p className="text-[10px] font-bold uppercase tracking-widest text-cyan-400">Workspace</p>
               <p className="mt-1 text-xs font-semibold text-slate-200">Project files</p>
             </div>
-            <button type="button" onClick={() => setShowFiles(false)} className="min-h-12 min-w-12 rounded-xl text-xs text-slate-500 lg:hidden" aria-label="Close file tree">
+            <button type="button" onClick={() => setShowFiles(false)} className="min-h-12 min-w-12 rounded-xl text-xs text-slate-500" aria-label="Close file tree">
               ×
             </button>
           </div>
@@ -815,7 +879,7 @@ export function CodingChatPanel() {
           <div className="min-h-0 flex-1 overflow-y-auto p-2" style={{ WebkitOverflowScrolling: "touch" }}>
             {fileTree.length > 0 ? renderTreeNodes(fileTree) : (
               <div className="rounded-xl border border-dashed border-slate-700 p-4 text-xs leading-5 text-slate-500">
-                Open your project folder or attach source files to build the file tree.
+                Open a folder, attach files, or let Nexus Code generate components to build the tree.
               </div>
             )}
           </div>
@@ -1003,13 +1067,13 @@ export function CodingChatPanel() {
       </div>
         </div>
 
-        <aside className={`${showPreview ? "flex" : "hidden"} w-full shrink-0 flex-col border-t border-cyan-500/20 bg-slate-950/80 lg:flex lg:w-[min(34vw,28rem)] lg:border-l lg:border-t-0`} aria-label="Application preview">
+        <aside className={`${showPreview ? "flex" : "hidden"} w-full shrink-0 flex-col border-t border-cyan-500/20 bg-slate-950/80 lg:w-[min(34vw,28rem)] lg:border-l lg:border-t-0`} aria-label="Application preview">
           <div className="flex min-h-14 shrink-0 items-center justify-between border-b border-slate-800 px-3">
             <div>
               <p className="text-[10px] font-bold uppercase tracking-widest text-violet-300">Preview</p>
               <p className="mt-1 text-xs font-semibold text-slate-200">View your app</p>
             </div>
-            <button type="button" onClick={() => setShowPreview(false)} className="min-h-12 min-w-12 rounded-xl text-xs text-slate-500 lg:hidden" aria-label="Close app preview">
+            <button type="button" onClick={() => setShowPreview(false)} className="min-h-12 min-w-12 rounded-xl text-xs text-slate-500" aria-label="Close app preview">
               ×
             </button>
           </div>
@@ -1032,13 +1096,8 @@ export function CodingChatPanel() {
                 Open
               </button>
             </div>
-            <div className="flex items-center gap-2">
-              <button type="button" onClick={() => setPreviewDevice("mobile")} className={`min-h-12 flex-1 rounded-xl border text-xs font-semibold ${previewDevice === "mobile" ? "border-violet-400/50 bg-violet-500/15 text-violet-200" : "border-slate-700 text-slate-500"}`}>
-                Mobile
-              </button>
-              <button type="button" onClick={() => setPreviewDevice("desktop")} className={`min-h-12 flex-1 rounded-xl border text-xs font-semibold ${previewDevice === "desktop" ? "border-violet-400/50 bg-violet-500/15 text-violet-200" : "border-slate-700 text-slate-500"}`}>
-                Desktop
-              </button>
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-[10px] text-slate-600">Responsive preview</span>
               {previewUrl && (
                 <button type="button" onClick={() => window.open(previewUrl, "_blank", "noopener,noreferrer")} className="min-h-12 rounded-xl border border-slate-700 px-3 text-xs font-semibold text-slate-300">
                   New tab
@@ -1048,7 +1107,7 @@ export function CodingChatPanel() {
           </div>
           <div className="min-h-0 flex-1 overflow-auto p-3" style={{ WebkitOverflowScrolling: "touch" }}>
             {previewUrl || selectedFileCanPreview ? (
-              <div className={`mx-auto overflow-hidden rounded-2xl border border-slate-700 bg-white shadow-2xl ${previewDevice === "mobile" ? "max-w-[390px]" : "w-full"}`}>
+              <div className="mx-auto w-full overflow-hidden rounded-2xl border border-slate-700 bg-white shadow-2xl">
                 <div className="flex h-8 items-center gap-1 border-b border-slate-300 bg-slate-100 px-3">
                   <span className="h-2 w-2 rounded-full bg-rose-400" />
                   <span className="h-2 w-2 rounded-full bg-amber-400" />
@@ -1061,7 +1120,7 @@ export function CodingChatPanel() {
                   srcDoc={previewUrl ? undefined : selectedFile?.content}
                   title="Nexus Code application preview"
                   sandbox="allow-forms allow-modals allow-popups allow-presentation allow-scripts"
-                  className={`block h-[55dvh] min-h-[360px] w-full bg-white ${previewDevice === "mobile" ? "min-w-[360px]" : ""}`}
+                  className="block h-[60dvh] min-h-[360px] max-h-[720px] w-full bg-white"
                 />
               </div>
             ) : (
