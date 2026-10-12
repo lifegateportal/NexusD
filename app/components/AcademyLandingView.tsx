@@ -21,6 +21,7 @@ type PreviewPageProps = {
   initialSiteConfig?: SiteConfig | null;
   learnHref?: string;
   catalogHref?: string;
+  catalogOnly?: boolean;
 };
 
 function AcademyCatalog({ courses }: { courses: PublishedAcademyEntry[] }) {
@@ -70,11 +71,13 @@ export function AcademyLandingView({
   initialSiteConfig = null,
   learnHref = "/academy/learn",
   catalogHref = "/academy",
+  catalogOnly = false,
 }: PreviewPageProps) {
   const [academy, setAcademy] = useState<AcademyPackage | null>(null);
   const [missing, setMissing] = useState(false);
   const [siteConfig, setSiteConfig] = useState<SiteConfig | null>(null);
   const [publishedCourses, setPublishedCourses] = useState<PublishedAcademyEntry[]>([]);
+  const [catalogLoaded, setCatalogLoaded] = useState(false);
 
   useEffect(() => {
     if (initialAcademy) {
@@ -101,8 +104,14 @@ export function AcademyLandingView({
     if (initialSiteConfig) setSiteConfig(initialSiteConfig);
     fetch("/api/academy/publish")
       .then((response) => response.ok ? response.json() as Promise<{ courses?: PublishedAcademyEntry[] }> : Promise.reject(new Error("Could not load Academy catalog.")))
-      .then((payload) => setPublishedCourses(payload.courses ?? []))
-      .catch(() => setPublishedCourses([]));
+      .then((payload) => {
+        setPublishedCourses(payload.courses ?? []);
+        setCatalogLoaded(true);
+      })
+      .catch(() => {
+        setPublishedCourses([]);
+        setCatalogLoaded(true);
+      });
   }, [initialAcademy, initialSiteConfig]);
 
   // I: Open Graph meta tags — injected dynamically for link preview support
@@ -119,10 +128,19 @@ export function AcademyLandingView({
     document.title = academy.seoMeta.title;
   }, [academy]);
 
+  if (catalogOnly && !catalogLoaded) {
+    return (
+      <div className="flex min-h-dvh items-center justify-center bg-slate-950">
+        <p className="text-base text-slate-400">Loading Academy catalog…</p>
+      </div>
+    );
+  }
+
+  if (catalogOnly && publishedCourses.length > 0) {
+    return <AcademyCatalog courses={publishedCourses} />;
+  }
+
   if (missing || !academy) {
-    if (publishedCourses.length > 0) {
-      return <AcademyCatalog courses={publishedCourses} />;
-    }
     return (
       <div className="flex min-h-dvh items-center justify-center bg-slate-950">
         <p className="text-slate-400 text-base">

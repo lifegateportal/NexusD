@@ -15,7 +15,6 @@ import { EbookPipeline } from "@/app/components/EbookPipeline";
 import { SermonAssistantPanel } from "@/app/components/SermonAssistantPanel";
 import type { EbookPipelineSnapshot } from "@/app/components/EbookPipeline";
 import {
-  EbookJobStateSchema,
   EbookTranscriptImportSchema,
   EbookTranscriptSourceSchema,
 } from "@/lib/schemas/ebook";
@@ -35,20 +34,15 @@ import type { LogEntry, ModelState, ModelHandle, PipelineStage } from "@/lib/typ
 import { SiteConfigSchema } from "@/lib/schemas/site-config";
 import type { SiteConfig } from "@/lib/schemas/site-config";
 import {
-  listProjectSummaries,
-  getProject,
-  fetchProjectFromCloud,
-  saveProject,
-  deleteProject,
-  generateProjectId,
-} from "@/lib/project-store";
-import {
-  listEbookProjectSummaries,
-  getEbookProject,
-  saveEbookProject,
-  deleteEbookProject,
-} from "@/lib/ebook-project-store";
-import type { ProjectSnapshot, ChatMessage } from "@/lib/project-store";
+  listAcademyProjectSummaries,
+  getAcademyProject,
+  fetchAcademyProjectFromCloud,
+  saveAcademyProject,
+  deleteAcademyProject,
+  generateAcademyProjectId,
+} from "@/lib/academy-project-store";
+import type { AcademyProject, AcademyProjectSummary } from "@/lib/academy-project-store";
+import type { ChatMessage } from "@/lib/project-store";
 import {
   loadProjectOrganization,
   loadLatestProjectOrganization,
@@ -93,7 +87,7 @@ export default function HomePage() {
   const [ebookPipelineKey, setEbookPipelineKey] = useState(0);
 
   // Project persistence
-  const [projects,        setProjects]        = useState<ProjectSnapshot[]>([]);
+  const [projects,        setProjects]        = useState<AcademyProjectSummary[]>([]);
   const [currentProjectId, setCurrentProjectId] = useState<string>("");
   const [chatHistory,     setChatHistory]     = useState<ChatMessage[]>([]);
   const [panelLoadKey,    setPanelLoadKey]    = useState<string>("");
@@ -101,13 +95,13 @@ export default function HomePage() {
   const [folderSyncError, setFolderSyncError] = useState<string | null>(null);
   const projectsHydratedRef = useRef(false);
 
-  // Load persisted state client-side only (avoids SSR hydration mismatch)
+  // Load Academy projects independently from the Ebook project store.
   useEffect(() => {
     try {
       setDeliveryInstructions(localStorage.getItem("nexus_delivery_instructions") ?? "");
       const raw = localStorage.getItem("nexus_site_config");
       if (raw) setSiteConfig(SiteConfigSchema.parse(JSON.parse(raw) as unknown));
-    } catch { /* ignore */ }
+    } catch { /* ignore malformed optional preferences */ }
     if (activeNav !== "projects" || projectsHydratedRef.current) return;
     projectsHydratedRef.current = true;
     void (async () => {
@@ -117,13 +111,10 @@ export default function HomePage() {
         ));
         try {
           const remoteOrganization = await fetchProjectOrganizationFromCloud();
-          if (
-            remoteOrganization &&
-            new Date(remoteOrganization.updatedAt).getTime() > new Date(organization.updatedAt).getTime()
-          ) {
+          if (remoteOrganization && Date.parse(remoteOrganization.updatedAt) > Date.parse(organization.updatedAt)) {
             await storeProjectOrganization(remoteOrganization);
             organization = remoteOrganization;
-          } else if (!remoteOrganization || new Date(organization.updatedAt).getTime() > new Date(remoteOrganization.updatedAt).getTime()) {
+          } else if (!remoteOrganization || Date.parse(organization.updatedAt) > Date.parse(remoteOrganization.updatedAt)) {
             organization = await syncProjectOrganizationToCloud(organization);
             await storeProjectOrganization(organization);
           }
@@ -133,190 +124,65 @@ export default function HomePage() {
         const cleanedFolders = removeSyntheticRecoveredFolders(organization.folders);
         if (cleanedFolders.length !== organization.folders.length) {
           organization = await saveProjectOrganization(cleanedFolders);
-          try {
-            organization = await syncProjectOrganizationToCloud(organization);
-            await storeProjectOrganization(organization);
-          } catch (error) {
-            setFolderSyncError(error instanceof Error ? error.message : "Could not synchronize cleaned folders.");
-          }
         }
         setFolders(organization.folders);
-
-        const main = await listProjectSummaries();
-        const mainIds = new Set(main.map((p) => p.id));
-        const ebookLocal = await listEbookProjectSummaries().catch(() => []);
-        const ebookOnly = ebookLocal
-          .filter((e) => !mainIds.has(e.id))
-          .map((e) => ({
-            id: e.id,
-            name: e.name,
-            createdAt: e.createdAt,
-            updatedAt: e.updatedAt,
-            academy: null,
-            siteConfig: SiteConfigSchema.parse({}),
-            deliveryInstructions: "",
-            chatHistory: [],
-            blueprint: null,
-            logicResult: null,
-            uiResult: null,
-            ebookManifest: null,
-            ebookJobState: e.jobState,
-            folderId: e.folderId,
-            publishedSlug: e.publishedSlug,
-            coverImageUrl: e.coverImageUrl,
-            authorImageUrl: e.authorImageUrl,
-          }));
-        const mergedLocal = [...main, ...ebookOnly];
-        const normalizedLocal = mergedLocal.map((project) => ({
+        const localProjects = await listAcademyProjectSummaries();
+        const normalizedLocal = localProjects.map((project) => ({
           ...project,
           folderId: normalizeProjectFolderId(project.folderId, organization.folders),
         }));
+        setProjects(normalizedLocal);
         for (const project of normalizedLocal) {
-          const storedProject = mergedLocal.find((existing) => existing.id === project.id);
-          if (storedProject?.folderId !== project.folderId) {
-            if (mainIds.has(project.id)) {
-              const fullProject = await getProject(project.id).catch(() => null);
-              if (fullProject) {
-                await saveProject({ ...fullProject, folderId: project.folderId }, { touchUpdatedAt: false }).catch(() => {});
-              }
-            } else {
-              const ebookProject = await getEbookProject(project.id).catch(() => null);
-              if (ebookProject) {
-                await saveEbookProject({
-                  ...ebookProject,
-                  folderId: UNFILED_FOLDER_ID,
-                }, { touchUpdatedAt: false }).catch(() => {});
-              }
-            }
+          const stored = localProjects.find((item) => item.id === project.id);
+          if (stored?.folderId !== project.folderId) {
+            const full = await getAcademyProject(project.id).catch(() => null);
+            if (full) await saveAcademyProject({ ...full, folderId: project.folderId }, { touchUpdatedAt: false }).catch(() => {});
           }
         }
-        setProjects(normalizedLocal);
-
-        // ── Background R2 bidirectional sync ──────────────────────────────
-        void (async () => {
-          try {
-            const r2res = await fetch("/api/projects?kind=projects&summary=1", {
-              cache: "no-store",
-              credentials: "same-origin",
-            });
-            if (!r2res.ok) return;
-            const {
-              projects: r2projects,
-              deletedProjectIds = [],
-            } = await r2res.json() as { projects: ProjectSnapshot[]; deletedProjectIds?: string[] };
-            const deletedIds = new Set(deletedProjectIds);
-            if (deletedIds.size > 0) {
-              for (const id of deletedIds) {
-                await deleteProject(id).catch(() => {});
-                await deleteEbookProject(id).catch(() => {});
-              }
-            }
-            const activeLocal = mergedLocal.filter((project) => !deletedIds.has(project.id));
-            if (deletedIds.size > 0) setProjects(activeLocal);
-            if (!Array.isArray(r2projects) || r2projects.length === 0) {
-              // R2 is empty — push all local projects up (initial upload)
-              for (const p of activeLocal) {
-                const fullProject = await getProject(p.id).catch(() => null)
-                  ?? await getEbookProject(p.id).then((ebookProject) => ebookProject ? {
-                    id: ebookProject.id,
-                    name: ebookProject.name,
-                    createdAt: ebookProject.createdAt,
-                    updatedAt: ebookProject.updatedAt,
-                    folderId: ebookProject.folderId,
-                    academy: null,
-                    siteConfig: SiteConfigSchema.parse({}),
-                    deliveryInstructions: "",
-                    chatHistory: [],
-                    blueprint: null,
-                    logicResult: null,
-                    uiResult: null,
-                    ebookManifest: null,
-                    ebookJobState: ebookProject.jobState,
-                    publishedSlug: ebookProject.publishedSlug,
-                    coverImageUrl: ebookProject.coverImageUrl,
-                    authorImageUrl: ebookProject.authorImageUrl,
-                  } satisfies ProjectSnapshot : null).catch(() => null);
-                if (!fullProject) continue;
-                await fetch("/api/projects", {
-                  method: "POST", headers: { "Content-Type": "application/json" },
-                  body: JSON.stringify({ project: fullProject }),
-                }).catch(() => {});
-              }
-              return;
-            }
-            const r2ById  = new Map(r2projects.map((p: ProjectSnapshot) => [p.id, p]));
-            const localById = new Map(activeLocal.map((p) => [p.id, p]));
-            const toPushR2: ProjectSnapshot[] = [];
-            // Push: local has newer or unknown project
-            for (const localP of activeLocal) {
-              const r2p = r2ById.get(localP.id);
-              if (!r2p || new Date(localP.updatedAt) > new Date((r2p as ProjectSnapshot).updatedAt)) {
-                const fullLocal = await getProject(localP.id).catch(() => null)
-                  ?? await getEbookProject(localP.id).then((ebookProject) => ebookProject ? {
-                    id: ebookProject.id,
-                    name: ebookProject.name,
-                    createdAt: ebookProject.createdAt,
-                    updatedAt: ebookProject.updatedAt,
-                    folderId: ebookProject.folderId,
-                    academy: null,
-                    siteConfig: SiteConfigSchema.parse({}),
-                    deliveryInstructions: "",
-                    chatHistory: [],
-                    blueprint: null,
-                    logicResult: null,
-                    uiResult: null,
-                    ebookManifest: null,
-                    ebookJobState: ebookProject.jobState,
-                    publishedSlug: ebookProject.publishedSlug,
-                    coverImageUrl: ebookProject.coverImageUrl,
-                    authorImageUrl: ebookProject.authorImageUrl,
-                  } satisfies ProjectSnapshot : null).catch(() => null);
-                if (fullLocal) toPushR2.push(fullLocal);
-              }
-            }
-            for (const p of toPushR2) {
-              await fetch("/api/projects", {
-                method: "POST", headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ project: p }),
-              }).catch(() => {});
-            }
-            const mergedById = new Map(activeLocal.map((project) => [project.id, project]));
-            for (const remoteProject of r2projects) {
-              const localProject = localById.get(remoteProject.id);
-              if (!localProject || new Date(remoteProject.updatedAt) >= new Date(localProject.updatedAt)) {
-                mergedById.set(remoteProject.id, {
-                  id: remoteProject.id,
-                  name: remoteProject.name,
-                  createdAt: remoteProject.createdAt,
-                  updatedAt: remoteProject.updatedAt,
-                  folderId: normalizeProjectFolderId(remoteProject.folderId, organization.folders),
-                  academy: null,
-                  siteConfig: SiteConfigSchema.parse({}),
-                  deliveryInstructions: "",
-                  chatHistory: [],
-                  blueprint: null,
-                  logicResult: null,
-                  uiResult: null,
-                  ebookManifest: null,
-                  ebookJobState: null,
-                  publishedSlug: remoteProject.publishedSlug,
-                  academyPublishedSlug: remoteProject.academyPublishedSlug,
-                  coverImageUrl: remoteProject.coverImageUrl,
-                  authorImageUrl: remoteProject.authorImageUrl,
-                  hasAcademy: remoteProject.hasAcademy,
-                  hasEbookContent: remoteProject.hasEbookContent,
-                  ebookChapterCount: remoteProject.ebookChapterCount,
-                  ebookTotalWordCount: remoteProject.ebookTotalWordCount,
-                  ebookStatus: remoteProject.ebookStatus,
-                });
-              }
-            }
-            setProjects(Array.from(mergedById.values()).sort(
-              (a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt),
-            ));
-          } catch { /* R2 sync is best-effort */ }
-        })();
-      } catch { /* ignore */ }
+        const response = await fetch("/api/academy/projects?summary=1", { cache: "no-store", credentials: "same-origin" });
+        if (!response.ok) return;
+        const payload = await response.json() as {
+          projects?: AcademyProjectSummary[];
+          deletedProjectIds?: string[];
+        };
+        for (const id of payload.deletedProjectIds ?? []) {
+          await deleteAcademyProject(id).catch(() => {});
+        }
+        const remoteProjects = (payload.projects ?? []).map((project) => ({
+          ...project,
+          folderId: normalizeProjectFolderId(project.folderId, organization.folders),
+        }));
+        const remoteById = new Map(remoteProjects.map((project) => [project.id, project]));
+        const localById = new Map(normalizedLocal.map((project) => [project.id, project]));
+        const merged = new Map(normalizedLocal
+          .filter((project) => !(payload.deletedProjectIds ?? []).includes(project.id))
+          .map((project) => [project.id, project]));
+        for (const remote of remoteProjects) {
+          const local = localById.get(remote.id);
+          if (!local || Date.parse(remote.updatedAt) >= Date.parse(local.updatedAt)) merged.set(remote.id, remote);
+        }
+        for (const project of merged.values()) {
+          const local = localById.get(project.id);
+          if (!local || Date.parse(project.updatedAt) > Date.parse(local.updatedAt)) {
+            const full = await fetchAcademyProjectFromCloud(project.id).catch(() => null);
+            if (full) await saveAcademyProject(full, { touchUpdatedAt: false }).catch(() => {});
+          }
+        }
+        for (const project of normalizedLocal) {
+          const remote = remoteById.get(project.id);
+          if (remote && Date.parse(remote.updatedAt) >= Date.parse(project.updatedAt)) continue;
+          const full = await getAcademyProject(project.id).catch(() => null);
+          if (!full) continue;
+          await fetch("/api/academy/projects", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ project: full }),
+          }).catch(() => {});
+        }
+        setProjects(Array.from(merged.values()).sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt)));
+      } catch (error) {
+        setFolderSyncError(error instanceof Error ? error.message : "Could not load Academy projects.");
+      }
     })();
   }, [activeNav]);
 
@@ -368,25 +234,21 @@ export default function HomePage() {
     setEbookManifest(manifest);
   }, []);
 
-  const EBOOK_JOB_KEY = "nexus_ebook_job_state";
-  const EBOOK_PENDING_MOUNT_KEY = "nexus_ebook_pending_mount";
-
   const handleSaveProject = useCallback(async (name: string, folderId?: string): Promise<boolean> => {
-    const id = currentProjectId || generateProjectId();
-    const existingProject = projects.find((p) => p.id === id);
-    const existingEbookProject = await getEbookProject(id).catch(() => null);
-    // Read the live ebook job state from localStorage (pipeline auto-saves there)
-    let ebookJobState = null;
-    try {
-      const raw = localStorage.getItem(EBOOK_JOB_KEY);
-      if (raw) ebookJobState = EbookJobStateSchema.parse(JSON.parse(raw) as unknown);
-    } catch { /* ignore — job state is optional */ }
-    const snapshot: ProjectSnapshot = {
+    if (!academyResult) {
+      addLog({ level: "error", message: "No Academy package is ready to save." });
+      return false;
+    }
+    const id = currentProjectId || generateAcademyProjectId();
+    const existingProject = id === currentProjectId
+      ? await getAcademyProject(id).catch(() => null)
+      : null;
+    const snapshot: AcademyProject = {
       id,
       name,
-      createdAt: currentProjectId ? (projects.find((p) => p.id === id)?.createdAt ?? new Date().toISOString()) : new Date().toISOString(),
+      createdAt: existingProject?.createdAt ?? new Date().toISOString(),
       updatedAt: new Date().toISOString(),
-      folderId: existingProject?.folderId ?? existingEbookProject?.folderId ?? folderId ?? UNFILED_FOLDER_ID,
+      folderId: existingProject?.folderId ?? folderId ?? UNFILED_FOLDER_ID,
       academy: academyResult,
       siteConfig,
       deliveryInstructions,
@@ -394,60 +256,15 @@ export default function HomePage() {
       blueprint: blueprint ?? null,
       logicResult: logicResult ?? null,
       uiResult: uiResult ?? null,
-      ebookManifest: ebookManifest ?? null,
-      ebookJobState: ebookJobState ?? undefined,
-      publishedSlug: existingProject?.publishedSlug ?? existingEbookProject?.publishedSlug,
       academyPublishedSlug: existingProject?.academyPublishedSlug,
-      coverImageUrl: existingProject?.coverImageUrl ?? existingEbookProject?.coverImageUrl,
-      authorImageUrl: existingProject?.authorImageUrl ?? existingEbookProject?.authorImageUrl,
     };
     try {
-      await saveProject(snapshot);
-      if (ebookJobState) {
-        await saveEbookProject({
-          id,
-          name,
-          createdAt: snapshot.createdAt,
-          updatedAt: snapshot.updatedAt,
-          folderId: snapshot.folderId,
-          bookTitle: ebookJobState.architecture?.bookTitle ?? name,
-          chapterCount: ebookJobState.chapters?.length ?? 0,
-          totalWordCount: (ebookJobState.chapters ?? []).reduce((sum, chapter) => sum + (chapter.totalWordCount ?? 0), 0),
-          status: ebookJobState.status,
-          jobState: ebookJobState,
-          publishedSlug: snapshot.publishedSlug,
-          coverImageUrl: snapshot.coverImageUrl,
-          authorImageUrl: snapshot.authorImageUrl,
-        }).catch(() => {});
-      }
+      await saveAcademyProject(snapshot);
       setCurrentProjectId(id);
-      const main = await listProjectSummaries();
-      const mainIds = new Set(main.map((p) => p.id));
-      const ebookOnly = (await listEbookProjectSummaries().catch(() => []))
-        .filter((e) => !mainIds.has(e.id))
-        .map((e) => ({
-          id: e.id,
-          name: e.name,
-          createdAt: e.createdAt,
-          updatedAt: e.updatedAt,
-          academy: null,
-          siteConfig: SiteConfigSchema.parse({}),
-          deliveryInstructions: "",
-          chatHistory: [],
-          blueprint: null,
-          logicResult: null,
-          uiResult: null,
-          ebookManifest: null,
-          ebookJobState: e.jobState,
-          folderId: e.folderId,
-          publishedSlug: e.publishedSlug,
-          coverImageUrl: e.coverImageUrl,
-          authorImageUrl: e.authorImageUrl,
-        }));
-      setProjects([...main, ...ebookOnly]);
-      addLog({ level: "success", message: `Project "${name}" saved.` });
+      setProjects(await listAcademyProjectSummaries());
+      addLog({ level: "success", message: `Academy project "${name}" saved.` });
       try {
-        const response = await fetch("/api/projects", {
+        const response = await fetch("/api/academy/projects", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ project: snapshot }),
@@ -459,71 +276,30 @@ export default function HomePage() {
       } catch (error) {
         addLog({
           level: "warn",
-          message: `Project "${name}" saved on this device, but cloud sync failed: ${error instanceof Error ? error.message : "unknown error"}`,
+          message: `Academy project "${name}" saved on this device, but Academy cloud sync failed: ${error instanceof Error ? error.message : "unknown error"}`,
         });
       }
       return true;
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Save failed";
-      addLog({ level: "error", message: `Could not save project: ${msg}` });
+      addLog({ level: "error", message: `Could not save Academy project: ${msg}` });
       return false;
     }
-  }, [currentProjectId, projects, academyResult, siteConfig, deliveryInstructions, chatHistory, blueprint, logicResult, uiResult, ebookManifest, addLog]);
+  }, [currentProjectId, academyResult, siteConfig, deliveryInstructions, chatHistory, blueprint, logicResult, uiResult, addLog]);
 
   const persistProjectFolderChanges = useCallback(async (changes: Record<string, string>) => {
     for (const project of projects) {
       const folderId = changes[project.id];
       if (!folderId) continue;
-      const fullProject = await getProject(project.id).catch(() => null);
-      if (fullProject) {
-        const updated = { ...fullProject, folderId };
-        await saveProject(updated, { touchUpdatedAt: false });
-        await fetch("/api/projects", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ project: updated }),
-        });
-        continue;
-      }
-      const remoteProject = await fetchProjectFromCloud(project.id).catch(() => null);
-      if (remoteProject) {
-        const updated = { ...remoteProject, folderId };
-        await saveProject(updated, { touchUpdatedAt: false });
-        await fetch("/api/projects", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ project: updated }),
-        });
-        continue;
-      }
-      const ebookProject = await getEbookProject(project.id).catch(() => null);
-      if (!ebookProject) continue;
-      const updatedEbook = { ...ebookProject, folderId };
-      await saveEbookProject(updatedEbook, { touchUpdatedAt: false });
-      await fetch("/api/projects", {
+      const fullProject = await getAcademyProject(project.id).catch(() => null)
+        ?? await fetchAcademyProjectFromCloud(project.id).catch(() => null);
+      if (!fullProject) continue;
+      const updated = { ...fullProject, folderId };
+      await saveAcademyProject(updated, { touchUpdatedAt: false });
+      await fetch("/api/academy/projects", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          project: {
-            id: updatedEbook.id,
-            name: updatedEbook.name,
-            createdAt: updatedEbook.createdAt,
-            updatedAt: updatedEbook.updatedAt,
-            folderId: updatedEbook.folderId,
-            academy: null,
-            siteConfig: {},
-            deliveryInstructions: "",
-            chatHistory: [],
-            blueprint: null,
-            logicResult: null,
-            uiResult: null,
-            ebookManifest: null,
-            ebookJobState: updatedEbook.jobState,
-            publishedSlug: updatedEbook.publishedSlug,
-            coverImageUrl: updatedEbook.coverImageUrl,
-            authorImageUrl: updatedEbook.authorImageUrl,
-          },
-        }),
+        body: JSON.stringify({ project: updated }),
       });
     }
     setProjects((current) => current.map((project) => (
@@ -614,157 +390,35 @@ export default function HomePage() {
   }, [addLog, folders, persistProjectFolderChanges]);
 
   const handleLoadProject = useCallback(async (id: string) => {
-    const summary = projects.find((proj) => proj.id === id);
+    const summary = projects.find((project) => project.id === id);
     if (!summary) return;
-    const p = await getProject(id).catch(() => null)
-      ?? await fetchProjectFromCloud(id).catch(() => null)
-      ?? await (async () => {
-      const ebookProject = await getEbookProject(id).catch(() => null);
-      if (!ebookProject) return null;
-      return {
-        id: ebookProject.id,
-        name: ebookProject.name,
-        createdAt: ebookProject.createdAt,
-        updatedAt: ebookProject.updatedAt,
-        folderId: ebookProject.folderId,
-        academy: null,
-        siteConfig: SiteConfigSchema.parse({}),
-        deliveryInstructions: "",
-        chatHistory: [],
-        blueprint: null,
-        logicResult: null,
-        uiResult: null,
-        ebookManifest: null,
-        ebookJobState: ebookProject.jobState,
-        publishedSlug: ebookProject.publishedSlug,
-        coverImageUrl: ebookProject.coverImageUrl,
-        authorImageUrl: ebookProject.authorImageUrl,
-      } satisfies ProjectSnapshot;
-      })();
-    if (!p) return;
-    const legacyJobState = (p as ProjectSnapshot & { jobState?: unknown }).jobState;
-    const rawEbookJobState = p.ebookJobState ?? legacyJobState;
-    const decodedEbookJobState = (() => {
-      if (!rawEbookJobState) return null;
-      let value: unknown = rawEbookJobState;
-      for (let i = 0; i < 3 && typeof value === "string"; i++) {
-        try {
-          value = JSON.parse(value) as unknown;
-        } catch {
-          return null;
-        }
-      }
-      return value;
-    })();
-    const parsedEbookJobState = decodedEbookJobState
-      ? EbookJobStateSchema.safeParse(decodedEbookJobState)
-      : null;
-    const synthesizedFromManifest = (() => {
-      if (!p.ebookManifest) return null;
-      const nowIso = new Date().toISOString();
-      return {
-        jobId: p.ebookManifest.jobId || p.id,
-        status: "complete",
-        audioFileNames: [],
-        transcripts: [],
-        masterTranscript: "",
-        filteredTranscript: "",
-        filterRemovedCount: 0,
-        voiceDNA: p.ebookManifest.voiceDNA ?? null,
-        contentMap: {
-          totalEstimatedWords: p.ebookManifest.totalWordCount,
-          overarchingThemes: [],
-          teachingArc: "",
-          coreThesis: "",
-          targetAudience: "",
-          uniqueVocabulary: [],
-          toneMap: "",
-          segments: [],
-          allQuotes: p.ebookManifest.allQuotes ?? [],
-        },
-        architecture: {
-          bookTitle: p.ebookManifest.bookTitle,
-          subtitle: p.ebookManifest.subtitle,
-          authorName: p.ebookManifest.authorName,
-          estimatedTotalWords: p.ebookManifest.totalWordCount,
-          chapters: [],
-          frontMatterNotes: "",
-          backMatterNotes: "",
-          seriesArc: [],
-          droppedSegments: [],
-        },
-        sectionAssignments: [],
-        sections: [],
-        chapters: p.ebookManifest.chapters ?? [],
-        frontMatter: p.ebookManifest.frontMatter,
-        backMatter: p.ebookManifest.backMatter ?? null,
-        exportUrls: null,
-        currentStage: "complete",
-        progress: {
-          total: p.ebookManifest.chapters?.length ?? 0,
-          completed: p.ebookManifest.chapters?.length ?? 0,
-        },
-        errorLog: [],
-        createdAt: p.createdAt ?? nowIso,
-        updatedAt: p.updatedAt ?? nowIso,
-      };
-    })();
-    const parsedManifestJobState = synthesizedFromManifest
-      ? EbookJobStateSchema.safeParse(synthesizedFromManifest)
-      : null;
-    const loadableEbookJobState = parsedEbookJobState?.success
-      ? parsedEbookJobState.data
-      : parsedManifestJobState?.success
-        ? parsedManifestJobState.data
-        : null;
-    setBlueprint(p.blueprint);
-    setLogicResult(p.logicResult);
-    setUiResult(p.uiResult);
-    setAcademyResult(p.academy);
-    setSiteConfig(SiteConfigSchema.parse(p.siteConfig ?? {}));
-    setDeliveryInstructions(p.deliveryInstructions ?? "");
-    setChatHistory(Array.isArray(p.chatHistory) ? p.chatHistory : []);
-    setPanelLoadKey(p.id);
-    setCurrentProjectId(p.id);
-    setEbookManifest(p.ebookManifest ?? null);
-    // Restore full ebook pipeline state so the pipeline can resume from where it left off
-    if (loadableEbookJobState) {
-      try {
-        localStorage.setItem(EBOOK_JOB_KEY, JSON.stringify(loadableEbookJobState));
-        localStorage.setItem(EBOOK_PENDING_MOUNT_KEY, JSON.stringify({
-          projectId: p.id,
-          projectName: p.name,
-          jobState: loadableEbookJobState,
-          ebookManifest: p.ebookManifest ?? null,
-          coverImageUrl: p.coverImageUrl ?? null,
-          authorImageUrl: p.authorImageUrl ?? null,
-          ts: Date.now(),
-        }));
-        setEbookPipelineKey((k) => k + 1); // remount pipeline to pick up restored state
-      } catch { /* ignore quota errors */ }
+    const project = await getAcademyProject(id).catch(() => null)
+      ?? await fetchAcademyProjectFromCloud(id).catch(() => null);
+    if (!project) {
+      addLog({ level: "error", message: `Academy project "${summary.name}" could not be loaded.` });
+      return;
     }
-    if (p.blueprint) setStage("done");
-    // Navigate to ebook tab if the project has a book; otherwise overview
-    if (loadableEbookJobState) {
-      router.push(`/ebook?tab=pipeline&load=${encodeURIComponent(p.id)}`);
-    } else if (p.ebookManifest) {
-      addLog({ level: "warn", message: `Project "${p.name}" has no resumable ebook job state.` });
-      router.push(`/ebook?tab=pipeline&load=${encodeURIComponent(p.id)}`);
-    } else {
-      setActiveNav("overview");
-    }
-    // Update the shared localStorage keys so preview pages also see the loaded data
-    if (p.academy) localStorage.setItem("nexus_academy_preview", JSON.stringify(p.academy));
-    localStorage.setItem("nexus_site_config", JSON.stringify(p.siteConfig));
-    localStorage.setItem("nexus_delivery_instructions", p.deliveryInstructions);
-    addLog({ level: "success", message: `Project "${p.name}" loaded.` });
-  }, [projects, addLog, router]);
+    setBlueprint(project.blueprint);
+    setLogicResult(project.logicResult);
+    setUiResult(project.uiResult);
+    setAcademyResult(project.academy);
+    setSiteConfig(SiteConfigSchema.parse(project.siteConfig));
+    setDeliveryInstructions(project.deliveryInstructions);
+    setChatHistory(project.chatHistory);
+    setPanelLoadKey(project.id);
+    setCurrentProjectId(project.id);
+    setStage(project.academy ? "done" : "idle");
+    setActiveNav("overview");
+    localStorage.setItem("nexus_academy_preview", JSON.stringify(project.academy));
+    localStorage.setItem("nexus_site_config", JSON.stringify(project.siteConfig));
+    localStorage.setItem("nexus_delivery_instructions", project.deliveryInstructions);
+    addLog({ level: "success", message: `Academy project "${project.name}" loaded.` });
+  }, [projects, addLog]);
 
-  const handleExportProject = useCallback(async (id: string): Promise<ProjectSnapshot | null> => {
-    const local = await getProject(id).catch(() => null);
-    if (local) return local;
-    return fetchProjectFromCloud(id).catch(() => null);
-  }, []);
+  const handleExportProject = useCallback(async (id: string): Promise<AcademyProject | null> => (
+    await getAcademyProject(id).catch(() => null)
+      ?? await fetchAcademyProjectFromCloud(id).catch(() => null)
+  ), []);
 
   useEffect(() => {
     if (activeNav === "ebook") {
@@ -773,35 +427,11 @@ export default function HomePage() {
   }, [activeNav, router]);
 
   const handleDeleteProject = useCallback(async (id: string) => {
-    await deleteProject(id);
-    await deleteEbookProject(id).catch(() => {});
-    const main = await listProjectSummaries();
-    const mainIds = new Set(main.map((p) => p.id));
-    const ebookOnly = (await listEbookProjectSummaries().catch(() => []))
-      .filter((e) => !mainIds.has(e.id))
-      .map((e) => ({
-        id: e.id,
-        name: e.name,
-        createdAt: e.createdAt,
-        updatedAt: e.updatedAt,
-        academy: null,
-        siteConfig: SiteConfigSchema.parse({}),
-        deliveryInstructions: "",
-        chatHistory: [],
-        blueprint: null,
-        logicResult: null,
-        uiResult: null,
-        ebookManifest: null,
-        ebookJobState: e.jobState,
-        folderId: e.folderId,
-        publishedSlug: e.publishedSlug,
-        coverImageUrl: e.coverImageUrl,
-        authorImageUrl: e.authorImageUrl,
-      }));
-    setProjects([...main, ...ebookOnly]);
+    await deleteAcademyProject(id);
+    setProjects(await listAcademyProjectSummaries());
     if (currentProjectId === id) setCurrentProjectId("");
     try {
-      const response = await fetch("/api/projects", {
+      const response = await fetch("/api/academy/projects", {
         method: "DELETE",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ id }),
@@ -813,265 +443,37 @@ export default function HomePage() {
     } catch (error) {
       addLog({
         level: "error",
-        message: `Project removed locally, but cloud deletion failed: ${error instanceof Error ? error.message : "try again before reloading."}`,
+        message: `Academy project removed locally, but Academy cloud deletion failed: ${error instanceof Error ? error.message : "try again before reloading."}`,
       });
     }
   }, [addLog, currentProjectId]);
 
-  const handleImportProject = useCallback(async (snapshot: ProjectSnapshot) => {
+  const handleImportProject = useCallback(async (snapshot: AcademyProject) => {
     const importedSnapshot = {
       ...snapshot,
       folderId: snapshot.folderId && folders.some((folder) => folder.id === snapshot.folderId)
         ? snapshot.folderId
         : UNFILED_FOLDER_ID,
     };
-    await saveProject(importedSnapshot);
-    if (importedSnapshot.ebookJobState) {
-      await saveEbookProject({
-        id: importedSnapshot.id,
-        name: importedSnapshot.name,
-        createdAt: importedSnapshot.createdAt,
-        updatedAt: importedSnapshot.updatedAt,
-        bookTitle: importedSnapshot.ebookJobState.architecture?.bookTitle ?? importedSnapshot.name,
-        chapterCount: importedSnapshot.ebookJobState.chapters?.length ?? 0,
-        totalWordCount: (importedSnapshot.ebookJobState.chapters ?? []).reduce((sum, chapter) => sum + (chapter.totalWordCount ?? 0), 0),
-        status: importedSnapshot.ebookJobState.status,
-        jobState: importedSnapshot.ebookJobState,
-        folderId: importedSnapshot.folderId,
-        publishedSlug: importedSnapshot.publishedSlug,
-        coverImageUrl: importedSnapshot.coverImageUrl,
-        authorImageUrl: importedSnapshot.authorImageUrl,
-      }).catch(() => {});
-    }
-    const main = await listProjectSummaries();
-    const mainIds = new Set(main.map((p) => p.id));
-    const ebookOnly = (await listEbookProjectSummaries().catch(() => []))
-      .filter((e) => !mainIds.has(e.id))
-      .map((e) => ({
-        id: e.id,
-        name: e.name,
-        createdAt: e.createdAt,
-        updatedAt: e.updatedAt,
-        academy: null,
-        siteConfig: SiteConfigSchema.parse({}),
-        deliveryInstructions: "",
-        chatHistory: [],
-        blueprint: null,
-        logicResult: null,
-        uiResult: null,
-        ebookManifest: null,
-        ebookJobState: e.jobState,
-        folderId: e.folderId,
-        publishedSlug: e.publishedSlug,
-        coverImageUrl: e.coverImageUrl,
-        authorImageUrl: e.authorImageUrl,
-      }));
-    setProjects([...main, ...ebookOnly]);
-    addLog({ level: "success", message: `Project "${importedSnapshot.name}" imported.` });
-    fetch("/api/projects", {
+    await saveAcademyProject(importedSnapshot);
+    setProjects(await listAcademyProjectSummaries());
+    addLog({ level: "success", message: `Academy project "${importedSnapshot.name}" imported.` });
+    const response = await fetch("/api/academy/projects", {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ project: importedSnapshot }),
-    }).catch(() => {});
+    });
+    if (!response.ok) {
+      addLog({ level: "warn", message: `Academy project "${importedSnapshot.name}" was imported locally, but cloud sync failed.` });
+    }
   }, [addLog, folders]);
 
-  const handlePublishProject = useCallback(async (snapshot: ProjectSnapshot): Promise<string | null> => {
-    const fullSnapshot = await getProject(snapshot.id).catch(() => null)
-      ?? await fetchProjectFromCloud(snapshot.id).catch(() => null);
+  const handlePublishAcademy = useCallback(async (snapshot: AcademyProjectSummary): Promise<string | null> => {
+    const fullSnapshot = await getAcademyProject(snapshot.id).catch(() => null)
+      ?? await fetchAcademyProjectFromCloud(snapshot.id).catch(() => null);
     if (!fullSnapshot) {
-      addLog({ level: "error", message: "The project content could not be loaded for publishing." });
-      return null;
-    }
-    const job = fullSnapshot.ebookJobState;
-    const manifest = fullSnapshot.ebookManifest;
-    if (!job?.architecture && !manifest) {
-      addLog({ level: "error", message: "No ebook content found — run the ebook pipeline first." });
-      return null;
-    }
-    // Always prefer job.chapters (fresher — includes premiseLine, latest edits) over manifest.chapters.
-    // Never filter by status: a chapter that finished writing but isn't "complete" would be silently dropped.
-    const jobChapters = job?.chapters?.length ? job.chapters : undefined;
-    const publishManifest = manifest
-      ? {
-          ...manifest,
-          chapters: jobChapters ?? manifest.chapters,
-          frontMatter: job?.frontMatter ?? manifest.frontMatter,
-        }
-      : {
-          jobId:         job!.jobId,
-          bookTitle:     job!.architecture!.bookTitle,
-          subtitle:      job!.architecture!.subtitle,
-          authorName:    job!.architecture!.authorName,
-          frontMatter:   job!.frontMatter,
-          chapters:      job!.chapters ?? [],
-          totalWordCount: (job!.chapters ?? []).reduce((s: number, c: { totalWordCount?: number }) => s + (c.totalWordCount ?? 0), 0),
-          allQuotes:     job!.contentMap?.allQuotes ?? [],
-          generatedAt:   job!.updatedAt ?? new Date().toISOString(),
-          selectedTemplate: "devotional",
-          printSpec:     { trimSize: "6x9", runningHeaders: true, folioStyle: "center", frontMatterNumbering: "arabic", sectionOrnament: "rule" },
-        };
-    const body = {
-      manifest: publishManifest,
-      coverAccent: "amber",
-      ...(fullSnapshot.coverImageUrl  ? { coverImageUrl:  fullSnapshot.coverImageUrl  } : {}),
-      ...(fullSnapshot.authorImageUrl ? { authorImageUrl: fullSnapshot.authorImageUrl } : {}),
-    };
-    try {
-      const res = await fetch("/api/ebook/publish", {
-        method:  "POST",
-        headers: { "Content-Type": "application/json" },
-        body:    JSON.stringify(body),
-      });
-      if (!res.ok) {
-        const err = await res.json() as { error?: string };
-        addLog({ level: "error", message: err.error ?? "Publish failed." });
-        return null;
-      }
-      const { slug } = await res.json() as { slug: string };
-      await saveProject({ ...fullSnapshot, publishedSlug: slug });
-      // Also update the ebook store so /ebook panel shows View in Library / Republish
-      const ep = await getEbookProject(snapshot.id).catch(() => null);
-      if (ep) await saveEbookProject({ ...ep, publishedSlug: slug }).catch(() => {});
-      // Reload merged project list
-      const freshMain = await listProjectSummaries();
-      const freshMainIds = new Set(freshMain.map((p) => p.id));
-      const freshEbook = (await listEbookProjectSummaries().catch(() => [])).filter((e) => !freshMainIds.has(e.id)).map((e) => ({
-        id: e.id, name: e.name, createdAt: e.createdAt, updatedAt: e.updatedAt,
-        academy: null, siteConfig: SiteConfigSchema.parse({}), deliveryInstructions: "",
-        chatHistory: [], blueprint: null, logicResult: null, uiResult: null,
-        ebookManifest: null, ebookJobState: e.jobState, publishedSlug: e.publishedSlug,
-        folderId: e.folderId,
-      }));
-      setProjects([...freshMain, ...freshEbook]);
-      addLog({ level: "success", message: `Published to /library/${slug}` });
-      // Sync updated publishedSlug to R2
-      fetch("/api/projects", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ project: { ...fullSnapshot, publishedSlug: slug } }),
-      }).catch(() => {});
-      return slug;
-    } catch (err) {
-      addLog({ level: "error", message: err instanceof Error ? err.message : "Publish failed." });
-      return null;
-    }
-  }, [addLog]);
-
-  const handleUpdateImages = useCallback(async (id: string, coverImageUrl?: string, authorImageUrl?: string) => {
-    const p = await getProject(id).catch(() => null)
-      ?? await fetchProjectFromCloud(id).catch(() => null);
-    if (!p) return;
-    const updated: ProjectSnapshot = {
-      ...p,
-      ...(coverImageUrl  !== undefined ? { coverImageUrl  } : {}),
-      ...(authorImageUrl !== undefined ? { authorImageUrl } : {}),
-    };
-    await saveProject(updated);
-    const ep = await getEbookProject(id).catch(() => null);
-    if (ep) {
-      await saveEbookProject({
-        ...ep,
-        ...(coverImageUrl !== undefined ? { coverImageUrl } : {}),
-        ...(authorImageUrl !== undefined ? { authorImageUrl } : {}),
-      }).catch(() => {});
-    }
-    const main = await listProjectSummaries();
-    const mainIds = new Set(main.map((p) => p.id));
-    const ebookOnly = (await listEbookProjectSummaries().catch(() => []))
-      .filter((e) => !mainIds.has(e.id))
-      .map((e) => ({
-        id: e.id,
-        name: e.name,
-        createdAt: e.createdAt,
-        updatedAt: e.updatedAt,
-        academy: null,
-        siteConfig: SiteConfigSchema.parse({}),
-        deliveryInstructions: "",
-        chatHistory: [],
-        blueprint: null,
-        logicResult: null,
-        uiResult: null,
-        ebookManifest: null,
-        ebookJobState: e.jobState,
-        folderId: e.folderId,
-        publishedSlug: e.publishedSlug,
-        coverImageUrl: e.coverImageUrl,
-        authorImageUrl: e.authorImageUrl,
-      }));
-    setProjects([...main, ...ebookOnly]);
-    fetch("/api/projects", {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ project: updated }),
-    }).catch(() => {});
-    // If already published, push the new images to the library immediately
-    if (updated.publishedSlug) {
-      handlePublishProject(updated).catch(() => {});
-    }
-  }, [handlePublishProject]);
-
-  const handleUnpublishProject = useCallback(async (snapshot: ProjectSnapshot): Promise<boolean> => {
-    const fullSnapshot = await getProject(snapshot.id).catch(() => null)
-      ?? await fetchProjectFromCloud(snapshot.id).catch(() => null);
-    if (!fullSnapshot?.publishedSlug) return false;
-    try {
-      const res = await fetch("/api/ebook/publish", {
-        method:  "DELETE",
-        headers: { "Content-Type": "application/json" },
-        body:    JSON.stringify({ slug: fullSnapshot.publishedSlug }),
-      });
-      if (!res.ok) {
-        const err = await res.json() as { error?: string };
-        addLog({ level: "error", message: err.error ?? "Unpublish failed." });
-        return false;
-      }
-      // Clear publishedSlug from both stores
-      await saveProject({ ...fullSnapshot, publishedSlug: undefined });
-      const ep = await getEbookProject(snapshot.id).catch(() => null);
-      if (ep) await saveEbookProject({ ...ep, publishedSlug: undefined }).catch(() => {});
-      // Refresh project list
-      const main = await listProjectSummaries();
-      const mainIds = new Set(main.map((p) => p.id));
-      const ebookOnly = (await listEbookProjectSummaries().catch(() => []))
-        .filter((e) => !mainIds.has(e.id))
-        .map((e) => ({
-          id: e.id,
-          name: e.name,
-          createdAt: e.createdAt,
-          updatedAt: e.updatedAt,
-          academy: null,
-          siteConfig: SiteConfigSchema.parse({}),
-          deliveryInstructions: "",
-          chatHistory: [],
-          blueprint: null,
-          logicResult: null,
-          uiResult: null,
-          ebookManifest: null,
-          ebookJobState: e.jobState,
-          folderId: e.folderId,
-          publishedSlug: e.publishedSlug,
-          coverImageUrl: e.coverImageUrl,
-          authorImageUrl: e.authorImageUrl,
-        }));
-      setProjects([...main, ...ebookOnly]);
-      addLog({ level: "success", message: `"${snapshot.name}" removed from library.` });
-      // Sync cleared publishedSlug to R2
-      fetch("/api/projects", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ project: { ...fullSnapshot, publishedSlug: undefined } }),
-      }).catch(() => {});
-      return true;
-    } catch (err) {
-      addLog({ level: "error", message: err instanceof Error ? err.message : "Unpublish failed." });
-      return false;
-    }
-  }, [addLog]);
-
-  const handlePublishAcademy = useCallback(async (snapshot: ProjectSnapshot): Promise<string | null> => {
-    const fullSnapshot = await getProject(snapshot.id).catch(() => null)
-      ?? await fetchProjectFromCloud(snapshot.id).catch(() => null);
-    if (!fullSnapshot?.academy) {
       addLog({ level: "error", message: "No Academy content found — run the Academy pipeline first." });
       return null;
     }
-    const academy = AcademyPackageSchema.parse(fullSnapshot.academy);
     try {
       const res = await fetch("/api/academy/publish", {
         method: "POST",
@@ -1079,7 +481,7 @@ export default function HomePage() {
         body: JSON.stringify({
           projectId: fullSnapshot.id,
           ...(fullSnapshot.academyPublishedSlug ? { existingSlug: fullSnapshot.academyPublishedSlug } : {}),
-          academy,
+          academy: AcademyPackageSchema.parse(fullSnapshot.academy),
           siteConfig: fullSnapshot.siteConfig,
         }),
       });
@@ -1090,16 +492,19 @@ export default function HomePage() {
       }
       const { slug } = await res.json() as { slug: string };
       const updated = { ...fullSnapshot, academyPublishedSlug: slug };
-      await saveProject(updated);
+      await saveAcademyProject(updated);
       setProjects((current) => current.map((project) => (
         project.id === updated.id ? { ...project, academyPublishedSlug: slug } : project
       )));
-      fetch("/api/projects", {
+      const syncResponse = await fetch("/api/academy/projects", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ project: updated }),
-      }).catch(() => {});
-      addLog({ level: "success", message: `Published Academy course to /academy/${slug}` });
+      });
+      if (!syncResponse.ok) {
+        addLog({ level: "warn", message: "Academy course published, but its project publication status could not sync to cloud." });
+      }
+      addLog({ level: "success", message: `Published Academy course to /academy/${slug}; it is now in the /academy catalog.` });
       return slug;
     } catch (err) {
       addLog({ level: "error", message: err instanceof Error ? err.message : "Academy publish failed." });
@@ -1107,9 +512,9 @@ export default function HomePage() {
     }
   }, [addLog]);
 
-  const handleUnpublishAcademy = useCallback(async (snapshot: ProjectSnapshot): Promise<boolean> => {
-    const fullSnapshot = await getProject(snapshot.id).catch(() => null)
-      ?? await fetchProjectFromCloud(snapshot.id).catch(() => null);
+  const handleUnpublishAcademy = useCallback(async (snapshot: AcademyProjectSummary): Promise<boolean> => {
+    const fullSnapshot = await getAcademyProject(snapshot.id).catch(() => null)
+      ?? await fetchAcademyProjectFromCloud(snapshot.id).catch(() => null);
     if (!fullSnapshot?.academyPublishedSlug) return false;
     try {
       const res = await fetch("/api/academy/publish", {
@@ -1123,15 +528,18 @@ export default function HomePage() {
         return false;
       }
       const updated = { ...fullSnapshot, academyPublishedSlug: undefined };
-      await saveProject(updated);
+      await saveAcademyProject(updated);
       setProjects((current) => current.map((project) => (
         project.id === updated.id ? { ...project, academyPublishedSlug: undefined } : project
       )));
-      fetch("/api/projects", {
+      const syncResponse = await fetch("/api/academy/projects", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ project: updated }),
-      }).catch(() => {});
+      });
+      if (!syncResponse.ok) {
+        addLog({ level: "warn", message: "Academy course removed from the catalog, but its project status could not sync to cloud." });
+      }
       addLog({ level: "success", message: `"${snapshot.name}" removed from Academy.` });
       return true;
     } catch (err) {
@@ -1448,7 +856,7 @@ export default function HomePage() {
                     projects={projects}
                     folders={folders}
                     suggestedName={blueprint?.title ?? academyResult?.academyName ?? ""}
-                    canSave={Boolean(blueprint || academyResult || ebookManifest || ebookSnapshot)}
+                    canSave={Boolean(blueprint || academyResult)}
                     onSave={handleSaveProject}
                     onLoad={handleLoadProject}
                     onExport={handleExportProject}
@@ -1459,11 +867,8 @@ export default function HomePage() {
                     onRenameFolder={handleRenameFolder}
                     onDeleteFolder={handleDeleteFolder}
                     folderSyncError={folderSyncError}
-                    onPublish={handlePublishProject}
-                    onUnpublish={handleUnpublishProject}
                     onPublishAcademy={handlePublishAcademy}
                     onUnpublishAcademy={handleUnpublishAcademy}
-                    onUpdateImages={handleUpdateImages}
                   />
                 ) : activeNav === "ebook" ? (
                   <div className="flex min-h-0 flex-1 flex-col overflow-y-auto rounded-2xl border border-cyan-500/20 glass">
@@ -1488,7 +893,6 @@ export default function HomePage() {
                       onPipelineSnapshotChange={setEbookSnapshot}
                       onTranscriptImportHandled={handleEbookTranscriptImportHandled}
                       onPipelineReset={handleEbookPipelineReset}
-                      onSaveProject={handleSaveProject}
                     />
                   </div>
                 ) : activeNav === "sermon" ? (
