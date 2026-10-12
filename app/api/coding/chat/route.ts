@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { streamText } from "ai";
+import { createDataStreamResponse, streamText } from "ai";
 import { z } from "zod";
 import { deepSeekChatModel, deepSeekReasonerModel } from "@/lib/ai-providers";
 import {
@@ -10,6 +10,10 @@ import {
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
+
+const MAX_CODING_CONTINUATIONS = 4;
+const CONTINUATION_TAIL_CHARACTERS = 16_000;
+const LONG_FORM_CODING_PATTERN = /\b(long[-\s]?form|complete|full(?:[-\s]stack)?|multi[-\s]file|entire application|production[-\s]ready|build|implement|create|generate|refactor|migrate)\b/i;
 
 function modeInstruction(mode: CodingMode): string {
   switch (mode) {
@@ -35,6 +39,25 @@ function formatHistory(request: CodingChatRequest): string {
   return request.history
     .map((message) => `${message.role.toUpperCase()}:\n${message.content}`)
     .join("\n\n");
+}
+
+function shouldContinueLongForm(input: CodingChatRequest): boolean {
+  return input.mode === "code" || LONG_FORM_CODING_PATTERN.test(input.query);
+}
+
+function buildContinuationPrompt(
+  initialPrompt: string,
+  fullText: string,
+): string {
+  return `Continue the same coding response from exactly where the previous generation ended because it reached its output limit.
+
+Do not restart, summarize, or repeat any content that was already emitted. Preserve the exact requested format. If the previous response ended inside a nexus-file block, continue that same block and close it when the file is complete. Continue producing every remaining file and verification step required by the original request.
+
+PREVIOUS RESPONSE TAIL:
+${fullText.slice(-CONTINUATION_TAIL_CHARACTERS)}
+
+ORIGINAL REQUEST AND FILE CONTEXT:
+${initialPrompt}`;
 }
 
 function buildSystemPrompt(input: CodingChatRequest): string {
@@ -105,22 +128,42 @@ export async function POST(request: NextRequest) {
       `USER REQUEST:\n${input.query}`,
     ].join("\n\n==========\n\n");
 
-    const result = streamText({
-      model,
-      temperature: input.agent === "deepseek-reasoner" ? 0.2 : 0.25,
-      maxTokens: input.agent === "deepseek-reasoner" ? 8_000 : 6_000,
-      maxRetries: 2,
-      abortSignal: request.signal,
-      system: buildSystemPrompt(input),
-      prompt,
-    });
-
-    return result.toDataStreamResponse({
+    const continueLongForm = shouldContinueLongForm(input);
+    const maxTokens = 8_000;
+    return createDataStreamResponse({
       headers: {
         "Cache-Control": "no-cache, no-transform",
         "X-Accel-Buffering": "no",
       },
-      getErrorMessage: describeCodingStreamError,
+      execute: async (dataStream) => {
+        let fullText = "";
+        for (let continuation = 0; continuation <= (continueLongForm ? MAX_CODING_CONTINUATIONS : 0); continuation += 1) {
+          let streamError: unknown = null;
+          const result = streamText({
+            model,
+            temperature: input.agent === "deepseek-reasoner" ? 0.2 : 0.25,
+            maxTokens,
+            maxRetries: 2,
+            abortSignal: request.signal,
+            system: buildSystemPrompt(input),
+            prompt: continuation === 0 ? prompt : buildContinuationPrompt(prompt, fullText),
+            onError: (error) => {
+              streamError = error;
+            },
+          });
+
+          for await (const chunk of result.textStream) {
+            fullText += chunk;
+            dataStream.write(`0:${JSON.stringify(chunk)}\n`);
+          }
+          if (streamError) throw streamError;
+
+          const finishReason = await result.finishReason;
+          if (finishReason !== "length" || continuation === MAX_CODING_CONTINUATIONS || !continueLongForm) break;
+        }
+        if (!fullText.trim()) throw new Error("Nexus Code returned an empty response.");
+      },
+      onError: describeCodingStreamError,
     });
   } catch (error) {
     return NextResponse.json(

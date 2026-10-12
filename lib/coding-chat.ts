@@ -16,7 +16,7 @@ export type CodingFile = z.infer<typeof CodingFileSchema>;
 
 export const CodingHistoryMessageSchema = z.object({
   role: z.enum(["user", "assistant"]),
-  content: z.string().max(20_000),
+  content: z.string().max(120_000),
 }).strict();
 
 export const CodingChatRequestSchema = z.object({
