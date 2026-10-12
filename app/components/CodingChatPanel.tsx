@@ -164,6 +164,7 @@ export function CodingChatPanel() {
   const [workspaceParentRevisionId, setWorkspaceParentRevisionId] = useState<string | null>(null);
   const [workspaceStatus, setWorkspaceStatus] = useState("Loading workspace");
   const [input, setInput] = useState("");
+  const [attachedFileNames, setAttachedFileNames] = useState<string[]>([]);
   const [mode, setMode] = useState<CodingMode>("ask");
   const [agent, setAgent] = useState<CodingAgent>("deepseek-chat");
   const [loading, setLoading] = useState(false);
@@ -173,6 +174,7 @@ export function CodingChatPanel() {
   const [codingSurface, setCodingSurface] = useState<CodingSurface>("assistant");
   const [showFiles, setShowFiles] = useState(false);
   const [showPreview, setShowPreview] = useState(false);
+  const [previewExpanded, setPreviewExpanded] = useState(false);
   const [previewUrlDraft, setPreviewUrlDraft] = useState("");
   const [previewUrl, setPreviewUrl] = useState("");
   const [voiceModeEnabled, setVoiceModeEnabled] = useState(false);
@@ -635,6 +637,7 @@ export function CodingChatPanel() {
     setLoading(false);
     setStatus("Ready");
     setError(null);
+    setAttachedFileNames([]);
     setMessages([{ ...INITIAL_MESSAGE, createdAt: new Date().toISOString() }]);
   }, []);
 
@@ -733,7 +736,7 @@ export function CodingChatPanel() {
     return () => window.clearTimeout(timer);
   }, [files, queueWorkspaceSave, workspaceId]);
 
-  const addFiles = useCallback(async (selected: FileList | null) => {
+  const addFiles = useCallback(async (selected: FileList | null, attachToChat = false) => {
     if (!selected) return;
     const incoming = Array.from(selected);
     if (files.length + incoming.length > MAX_FILES) {
@@ -754,6 +757,12 @@ export function CodingChatPanel() {
       });
     }
     if (nextFiles.length > 0) {
+      if (attachToChat) {
+        setAttachedFileNames((current) => Array.from(new Set([
+          ...current,
+          ...nextFiles.map((file) => file.name),
+        ])));
+      }
       workspaceChangeReasonRef.current = "Imported source files";
       workspaceChangeSourceRef.current = "import";
       setFiles((current) => {
@@ -850,6 +859,25 @@ export function CodingChatPanel() {
     }
   }, [previewUrlDraft, selectedFileCanPreview]);
 
+  const downloadPreviewHtml = useCallback(() => {
+    if (!selectedFile || !selectedFileCanPreview || previewUrl) {
+      setError("Download is available when a local HTML file is shown in the preview.");
+      return;
+    }
+    const fileName = selectedFile.name.split("/").pop() || "preview.html";
+    const downloadName = /\.(?:html?|xhtml?)$/i.test(fileName) ? fileName : `${fileName}.html`;
+    const objectUrl = URL.createObjectURL(new Blob([selectedFile.content], {
+      type: "text/html;charset=utf-8",
+    }));
+    const anchor = document.createElement("a");
+    anchor.href = objectUrl;
+    anchor.download = downloadName;
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    window.setTimeout(() => URL.revokeObjectURL(objectUrl), 0);
+  }, [previewUrl, selectedFile, selectedFileCanPreview]);
+
   const toggleWorkspacePanel = useCallback((panel: "files" | "preview") => {
     const isMobile = window.matchMedia("(max-width: 1023px)").matches;
     if (panel === "files") {
@@ -881,7 +909,7 @@ export function CodingChatPanel() {
       role: "user",
       content: query,
       createdAt: new Date().toISOString(),
-      fileNames: files.map((file) => file.name),
+      fileNames: attachedFileNames,
     };
     const assistantId = `assistant-${Date.now()}`;
     const assistantMessage: CodingStoredMessage = {
@@ -987,7 +1015,7 @@ export function CodingChatPanel() {
       abortRef.current = null;
       setLoading(false);
     }
-  }, [agent, files, input, loading, messages, mode, speakAssistantResponse, syncGeneratedFiles, workspaceId]);
+  }, [agent, attachedFileNames, files, input, loading, messages, mode, speakAssistantResponse, syncGeneratedFiles, workspaceId]);
 
   const stop = useCallback(() => {
     abortRef.current?.abort();
@@ -1093,15 +1121,12 @@ export function CodingChatPanel() {
               multiple
               className="hidden"
               onChange={(event) => {
-                void addFiles(event.target.files);
+                void addFiles(event.target.files, false);
                 event.target.value = "";
               }}
             />
-            <button type="button" onClick={() => folderInputRef.current?.click()} className="min-h-12 flex-1 rounded-xl bg-cyan-400 px-3 text-xs font-bold text-slate-950">
+            <button type="button" onClick={() => folderInputRef.current?.click()} className="min-h-12 w-full rounded-xl bg-cyan-400 px-3 text-xs font-bold text-slate-950">
               Open folder
-            </button>
-            <button type="button" onClick={() => fileInputRef.current?.click()} className="min-h-12 min-w-12 rounded-xl border border-slate-700 text-lg text-slate-300" aria-label="Add files">
-              +
             </button>
           </div>
           <div className="min-h-0 flex-1 overflow-y-auto p-2" style={{ WebkitOverflowScrolling: "touch" }}>
@@ -1211,7 +1236,7 @@ export function CodingChatPanel() {
             accept=".c,.cpp,.css,.go,.html,.java,.js,.json,.jsx,.md,.mjs,.py,.rb,.rs,.sql,.ts,.tsx,.txt,.yaml,.yml"
             className="hidden"
             onChange={(event) => {
-              void addFiles(event.target.files);
+              void addFiles(event.target.files, true);
               event.target.value = "";
             }}
           />
@@ -1229,11 +1254,11 @@ export function CodingChatPanel() {
             placeholder="Describe the feature, bug, or code you want Nexus to work on…"
             className="min-h-24 w-full resize-none border-0 bg-transparent px-2 py-2 text-base leading-6 text-slate-100 placeholder:text-slate-600 focus:outline-none disabled:opacity-50"
           />
-          {files.length > 0 && (
+          {attachedFileNames.length > 0 && (
             <div className="flex items-center gap-2 overflow-x-auto border-t border-slate-800 px-2 pt-2 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-              {files.map((file) => (
-                <button key={file.name} type="button" onClick={() => setFiles((current) => current.filter((item) => item.name !== file.name))} className="min-h-12 max-w-48 shrink-0 truncate rounded-xl border border-cyan-500/25 bg-cyan-500/10 px-3 text-xs text-cyan-200">
-                  {file.name} ×
+              {attachedFileNames.map((fileName) => (
+                <button key={fileName} type="button" onClick={() => setAttachedFileNames((current) => current.filter((name) => name !== fileName))} className="min-h-12 max-w-48 shrink-0 truncate rounded-xl border border-cyan-500/25 bg-cyan-500/10 px-3 text-xs text-cyan-200">
+                  {fileName} ×
                 </button>
               ))}
             </div>
@@ -1295,15 +1320,27 @@ export function CodingChatPanel() {
       </div>
         </div>
 
-        <aside className={`${showPreview ? "flex" : "hidden"} w-full shrink-0 flex-col border-t border-cyan-500/20 bg-slate-950/80 lg:w-[min(34vw,28rem)] lg:border-l lg:border-t-0`} aria-label="Application preview">
+        <aside className={previewExpanded
+          ? `${showPreview ? "flex" : "hidden"} fixed inset-0 z-50 h-dvh w-full flex-col border border-cyan-500/30 bg-slate-950`
+          : `${showPreview ? "flex" : "hidden"} w-full shrink-0 flex-col border-t border-cyan-500/20 bg-slate-950/80 lg:w-[min(34vw,28rem)] lg:border-l lg:border-t-0`} aria-label="Application preview">
           <div className="flex min-h-14 shrink-0 items-center justify-between border-b border-slate-800 px-3">
             <div>
               <p className="text-[10px] font-bold uppercase tracking-widest text-violet-300">Preview</p>
               <p className="mt-1 text-xs font-semibold text-slate-200">View your app</p>
             </div>
-            <button type="button" onClick={() => setShowPreview(false)} className="min-h-12 min-w-12 rounded-xl text-xs text-slate-500" aria-label="Close app preview">
-              ×
-            </button>
+            <div className="flex items-center gap-1">
+              <button
+                type="button"
+                onClick={() => setPreviewExpanded((current) => !current)}
+                className="min-h-12 min-w-12 rounded-xl border border-slate-700 px-2 text-xs font-semibold text-slate-300"
+                aria-label={previewExpanded ? "Exit full-screen preview" : "Expand preview to full screen"}
+              >
+                {previewExpanded ? "Exit" : "Expand"}
+              </button>
+              <button type="button" onClick={() => { setShowPreview(false); setPreviewExpanded(false); }} className="min-h-12 min-w-12 rounded-xl text-xs text-slate-500" aria-label="Close app preview">
+                ×
+              </button>
+            </div>
           </div>
           <div className="shrink-0 space-y-2 border-b border-slate-800 p-3">
             <div className="flex gap-2">
@@ -1326,16 +1363,23 @@ export function CodingChatPanel() {
             </div>
             <div className="flex items-center justify-between gap-2">
               <span className="text-[10px] text-slate-600">Responsive preview</span>
-              {previewUrl && (
-                <button type="button" onClick={() => window.open(previewUrl, "_blank", "noopener,noreferrer")} className="min-h-12 rounded-xl border border-slate-700 px-3 text-xs font-semibold text-slate-300">
-                  New tab
-                </button>
-              )}
+              <div className="flex items-center gap-2">
+                {selectedFileCanPreview && !previewUrl && (
+                  <button type="button" onClick={downloadPreviewHtml} className="min-h-12 rounded-xl border border-cyan-500/30 px-3 text-xs font-semibold text-cyan-200">
+                    Download HTML
+                  </button>
+                )}
+                {previewUrl && (
+                  <button type="button" onClick={() => window.open(previewUrl, "_blank", "noopener,noreferrer")} className="min-h-12 rounded-xl border border-slate-700 px-3 text-xs font-semibold text-slate-300">
+                    New tab
+                  </button>
+                )}
+              </div>
             </div>
           </div>
           <div className="min-h-0 flex-1 overflow-auto p-3" style={{ WebkitOverflowScrolling: "touch" }}>
             {previewUrl || selectedFileCanPreview ? (
-              <div className="mx-auto w-full overflow-hidden rounded-2xl border border-slate-700 bg-white shadow-2xl">
+              <div className={`mx-auto flex min-h-0 w-full overflow-hidden rounded-2xl border border-slate-700 bg-white shadow-2xl ${previewExpanded ? "h-full flex-1 flex-col" : ""}`}>
                 <div className="flex h-8 items-center gap-1 border-b border-slate-300 bg-slate-100 px-3">
                   <span className="h-2 w-2 rounded-full bg-rose-400" />
                   <span className="h-2 w-2 rounded-full bg-amber-400" />
@@ -1348,7 +1392,9 @@ export function CodingChatPanel() {
                   srcDoc={previewUrl ? undefined : selectedFile?.content}
                   title="Nexus Code application preview"
                   sandbox="allow-forms allow-modals allow-popups allow-presentation allow-scripts"
-                  className="block h-[60dvh] min-h-[360px] max-h-[720px] w-full bg-white"
+                  className={previewExpanded
+                    ? "block min-h-0 flex-1 w-full bg-white"
+                    : "block h-[60dvh] min-h-[360px] max-h-[720px] w-full bg-white"}
                 />
               </div>
             ) : (
