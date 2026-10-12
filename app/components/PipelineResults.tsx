@@ -13,6 +13,7 @@ type Props = {
   ui: UiManifestResult | null;
   academy: AcademyPackage | null;
   externalTab?: TabId;
+  onSaveProject?: (name: string) => void | boolean | Promise<void | boolean>;
 };
 
 const ASSET_COLORS: Record<string, string> = {
@@ -30,8 +31,11 @@ const ENTITY_COLORS: Record<string, string> = {
   action:   "border-emerald-500/30 bg-emerald-500/10 text-emerald-300"
 };
 
-export function PipelineResults({ blueprint, logic, ui, academy, externalTab }: Props) {
+export function PipelineResults({ blueprint, logic, ui, academy, externalTab, onSaveProject }: Props) {
   const [activeTab, setActiveTab] = useState<TabId>("blueprint");
+  const [showSaveBar, setShowSaveBar] = useState(false);
+  const [saveName, setSaveName] = useState("");
+  const [savedConfirm, setSavedConfirm] = useState(false);
 
   // Sync tab when the nav sidebar selects a different agent view
   useEffect(() => {
@@ -44,6 +48,14 @@ export function PipelineResults({ blueprint, logic, ui, academy, externalTab }: 
     { id: "ui",        label: "UI Spec",    ready: ui !== null       },
     { id: "academy",   label: "Academy",    ready: academy !== null  }
   ];
+
+  async function saveAcademyProject() {
+    if (!academy || !onSaveProject || !saveName.trim()) return;
+    const saved = await onSaveProject(saveName.trim());
+    if (saved === false) return;
+    setSavedConfirm(true);
+    setShowSaveBar(false);
+  }
 
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden rounded-2xl border border-cyan-500/15 glass shadow-panel">
@@ -351,6 +363,47 @@ export function PipelineResults({ blueprint, logic, ui, academy, externalTab }: 
             </div>
 
             {/* Launch button */}
+            {onSaveProject && (
+              <div className="space-y-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSaveName(academy.academyName);
+                    setShowSaveBar((current) => !current);
+                    setSavedConfirm(false);
+                  }}
+                  className="flex min-h-12 w-full items-center justify-center gap-2 rounded-xl border border-cyan-500/40 bg-cyan-500/10 text-sm font-semibold text-cyan-300 transition hover:bg-cyan-500/20"
+                >
+                  {savedConfirm ? "✓ Academy project saved" : "Save Academy Project"}
+                </button>
+                {showSaveBar && (
+                  <div className="flex flex-col gap-2 rounded-xl border border-cyan-500/25 bg-slate-900/80 p-3 sm:flex-row">
+                    <input
+                      autoFocus
+                      value={saveName}
+                      onChange={(event) => {
+                        setSaveName(event.target.value);
+                        setSavedConfirm(false);
+                      }}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter") void saveAcademyProject();
+                        if (event.key === "Escape") setShowSaveBar(false);
+                      }}
+                      placeholder="Academy project name…"
+                      className="min-h-12 min-w-0 flex-1 rounded-xl border border-slate-600 bg-slate-800 px-4 text-base text-slate-100 placeholder:text-slate-500 focus:border-cyan-500 focus:outline-none"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => void saveAcademyProject()}
+                      disabled={!saveName.trim()}
+                      className="min-h-12 rounded-xl bg-cyan-600 px-5 text-sm font-semibold text-white disabled:opacity-40"
+                    >
+                      Save
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
             <button
               type="button"
               onClick={() => {

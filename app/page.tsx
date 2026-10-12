@@ -371,7 +371,7 @@ export default function HomePage() {
   const EBOOK_JOB_KEY = "nexus_ebook_job_state";
   const EBOOK_PENDING_MOUNT_KEY = "nexus_ebook_pending_mount";
 
-  const handleSaveProject = useCallback(async (name: string, folderId?: string) => {
+  const handleSaveProject = useCallback(async (name: string, folderId?: string): Promise<boolean> => {
     const id = currentProjectId || generateProjectId();
     const existingProject = projects.find((p) => p.id === id);
     const existingEbookProject = await getEbookProject(id).catch(() => null);
@@ -446,14 +446,27 @@ export default function HomePage() {
         }));
       setProjects([...main, ...ebookOnly]);
       addLog({ level: "success", message: `Project "${name}" saved.` });
-      // Sync to R2 (fire-and-forget)
-      fetch("/api/projects", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ project: snapshot }),
-      }).catch(() => {});
+      try {
+        const response = await fetch("/api/projects", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ project: snapshot }),
+        });
+        if (!response.ok) {
+          const payload = await response.json().catch(() => null) as { error?: string; detail?: string } | null;
+          throw new Error(payload?.detail ?? payload?.error ?? `HTTP ${response.status}`);
+        }
+      } catch (error) {
+        addLog({
+          level: "warn",
+          message: `Project "${name}" saved on this device, but cloud sync failed: ${error instanceof Error ? error.message : "unknown error"}`,
+        });
+      }
+      return true;
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Save failed";
       addLog({ level: "error", message: `Could not save project: ${msg}` });
+      return false;
     }
   }, [currentProjectId, projects, academyResult, siteConfig, deliveryInstructions, chatHistory, blueprint, logicResult, uiResult, ebookManifest, addLog]);
 
@@ -1272,6 +1285,7 @@ export default function HomePage() {
   }, [deliveryInstructions, addLog, handleStageChange]);
 
   const handleBlueprint = useCallback(async (ingestResult: IngestResult, sourceText = "") => {
+    setCurrentProjectId("");
     setLogicResult(null);
     setUiResult(null);
     setAcademyResult(null);
@@ -1433,8 +1447,8 @@ export default function HomePage() {
                   <ProjectsPanel
                     projects={projects}
                     folders={folders}
-                    suggestedName={blueprint?.title ?? ""}
-                    canSave={!!blueprint}
+                    suggestedName={blueprint?.title ?? academyResult?.academyName ?? ""}
+                    canSave={Boolean(blueprint || academyResult || ebookManifest || ebookSnapshot)}
                     onSave={handleSaveProject}
                     onLoad={handleLoadProject}
                     onExport={handleExportProject}
@@ -1538,6 +1552,7 @@ export default function HomePage() {
                     ui={uiResult}
                     academy={academyResult}
                     externalTab={focusedTab}
+                    onSaveProject={handleSaveProject}
                   />
                 ) : (
                   <div className="flex h-full min-h-[300px] items-center justify-center rounded-2xl border border-cyan-500/15 glass">
@@ -1566,6 +1581,7 @@ export default function HomePage() {
                       logic={logicResult}
                       ui={uiResult}
                       academy={academyResult}
+                      onSaveProject={handleSaveProject}
                     />
                     {stage === "error" && (
                       <button
