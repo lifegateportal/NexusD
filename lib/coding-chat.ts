@@ -1,4 +1,9 @@
 import { z } from "zod";
+import {
+  CodingRevisionIdSchema,
+  CodingWorkspaceFileSchema,
+  CodingWorkspaceIdSchema,
+} from "@/lib/coding-workspace";
 
 export const CodingModeSchema = z.enum(["ask", "plan", "code"]);
 export type CodingMode = z.infer<typeof CodingModeSchema>;
@@ -6,11 +11,7 @@ export type CodingMode = z.infer<typeof CodingModeSchema>;
 export const CodingAgentSchema = z.enum(["deepseek-chat", "deepseek-reasoner"]);
 export type CodingAgent = z.infer<typeof CodingAgentSchema>;
 
-export const CodingFileSchema = z.object({
-  name: z.string().trim().min(1).max(240),
-  content: z.string().max(500_000),
-  language: z.string().trim().max(40).optional(),
-}).strict();
+export const CodingFileSchema = CodingWorkspaceFileSchema;
 
 export type CodingFile = z.infer<typeof CodingFileSchema>;
 
@@ -23,6 +24,8 @@ export const CodingChatRequestSchema = z.object({
   query: z.string().trim().min(1).max(20_000),
   mode: CodingModeSchema.default("ask"),
   agent: CodingAgentSchema.default("deepseek-chat"),
+  workspaceId: CodingWorkspaceIdSchema.optional(),
+  revisionId: CodingRevisionIdSchema.optional(),
   history: z.array(CodingHistoryMessageSchema).max(20).default([]),
   files: z.array(CodingFileSchema).max(200).default([]),
 }).superRefine((value, context) => {

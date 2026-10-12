@@ -7,6 +7,11 @@ import {
   type CodingChatRequest,
   type CodingMode,
 } from "@/lib/coding-chat";
+import {
+  CodingAgentEventSchema,
+  extractCodingFiles,
+  type CodingAgentEvent,
+} from "@/lib/coding-workspace";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
@@ -137,31 +142,81 @@ export async function POST(request: NextRequest) {
       },
       execute: async (dataStream) => {
         let fullText = "";
-        for (let continuation = 0; continuation <= (continueLongForm ? MAX_CODING_CONTINUATIONS : 0); continuation += 1) {
-          let streamError: unknown = null;
-          const result = streamText({
-            model,
-            temperature: input.agent === "deepseek-reasoner" ? 0.2 : 0.25,
-            maxTokens,
-            maxRetries: 2,
-            abortSignal: request.signal,
-            system: buildSystemPrompt(input),
-            prompt: continuation === 0 ? prompt : buildContinuationPrompt(prompt, fullText),
-            onError: (error) => {
-              streamError = error;
-            },
+        const runId = `run-${crypto.randomUUID()}`;
+        const writeEvent = (event: CodingAgentEvent) => {
+          if (!input.workspaceId) return;
+          dataStream.write(`2:${JSON.stringify(CodingAgentEventSchema.parse(event))}\n`);
+        };
+        const runCreatedAt = new Date().toISOString();
+        if (input.workspaceId) {
+          writeEvent({
+            type: "run.started",
+            runId,
+            workspaceId: input.workspaceId,
+            createdAt: runCreatedAt,
+            mode: input.mode,
+            agent: input.agent,
           });
-
-          for await (const chunk of result.textStream) {
-            fullText += chunk;
-            dataStream.write(`0:${JSON.stringify(chunk)}\n`);
-          }
-          if (streamError) throw streamError;
-
-          const finishReason = await result.finishReason;
-          if (finishReason !== "length" || continuation === MAX_CODING_CONTINUATIONS || !continueLongForm) break;
         }
-        if (!fullText.trim()) throw new Error("Nexus Code returned an empty response.");
+        try {
+          for (let continuation = 0; continuation <= (continueLongForm ? MAX_CODING_CONTINUATIONS : 0); continuation += 1) {
+            let streamError: unknown = null;
+            const result = streamText({
+              model,
+              temperature: input.agent === "deepseek-reasoner" ? 0.2 : 0.25,
+              maxTokens,
+              maxRetries: 2,
+              abortSignal: request.signal,
+              system: buildSystemPrompt(input),
+              prompt: continuation === 0 ? prompt : buildContinuationPrompt(prompt, fullText),
+              onError: (error) => {
+                streamError = error;
+              },
+            });
+
+            for await (const chunk of result.textStream) {
+              fullText += chunk;
+              dataStream.write(`0:${JSON.stringify(chunk)}\n`);
+            }
+            if (streamError) throw streamError;
+
+            const finishReason = await result.finishReason;
+            if (finishReason !== "length" || continuation === MAX_CODING_CONTINUATIONS || !continueLongForm) break;
+          }
+          if (!fullText.trim()) throw new Error("Nexus Code returned an empty response.");
+          if (input.workspaceId) {
+            const generatedFiles = extractCodingFiles(fullText);
+            if (generatedFiles.length > 0) {
+              writeEvent({
+                type: "files.proposed",
+                runId,
+                workspaceId: input.workspaceId,
+                createdAt: new Date().toISOString(),
+                files: generatedFiles,
+                reason: input.query.slice(0, 400),
+              });
+            }
+            writeEvent({
+              type: "run.completed",
+              runId,
+              workspaceId: input.workspaceId,
+              createdAt: new Date().toISOString(),
+              revisionId: null,
+              outputCharacters: fullText.length,
+            });
+          }
+        } catch (error) {
+          if (input.workspaceId) {
+            writeEvent({
+              type: "run.failed",
+              runId,
+              workspaceId: input.workspaceId,
+              createdAt: new Date().toISOString(),
+              message: describeCodingStreamError(error),
+            });
+          }
+          throw error;
+        }
       },
       onError: describeCodingStreamError,
     });

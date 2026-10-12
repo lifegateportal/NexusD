@@ -5,7 +5,6 @@ import { pickVoice } from "@/lib/audio-player-context";
 import {
   CodingAgentSchema,
   CodingChatArchiveSchema,
-  CodingFileSchema,
   CodingModeSchema,
   CODING_MODE_LABELS,
   type CodingAgent,
@@ -14,16 +13,24 @@ import {
   type CodingStoredMessage,
 } from "@/lib/coding-chat";
 import {
-  buildNexusGreetingResponse,
-  buildNexusSpokenResponse,
-  cleanNexusVoiceText,
-  createNexusVoiceRecognition,
-  extractNexusWakeCommand,
-  getNexusRecognitionText,
-  isNexusGreeting,
-  splitNexusVoiceText,
-  type NexusVoiceRecognition,
-} from "@/lib/nexuslm-voice";
+  buildCodingGreetingResponse,
+  buildCodingSpokenResponse,
+  cleanCodingVoiceText,
+  createCodingVoiceRecognition,
+  extractCodingWakeCommand,
+  getCodingRecognitionText,
+  isCodingGreeting,
+  splitCodingVoiceText,
+  type CodingVoiceRecognition,
+} from "@/lib/coding-voice";
+import {
+  CodingAgentEventSchema,
+  CodingWorkspaceSchema,
+  CodingWorkspaceSnapshotSchema,
+  codingLanguageFromName,
+  extractCodingFiles,
+  type CodingAgentEvent,
+} from "@/lib/coding-workspace";
 
 const STORAGE_KEY = "nexus-coding-chat";
 const VOICE_STORAGE_KEY = "nexus-coding-voice-mode";
@@ -63,59 +70,9 @@ const INITIAL_MESSAGE: CodingStoredMessage = {
   fileNames: [],
 };
 
-function languageFromName(name: string): string | undefined {
-  const extension = name.split(".").pop()?.toLowerCase();
-  if (!extension) return undefined;
-  const languages: Record<string, string> = {
-    css: "css",
-    go: "go",
-    html: "html",
-    java: "java",
-    js: "javascript",
-    json: "json",
-    jsx: "jsx",
-    md: "markdown",
-    mjs: "javascript",
-    py: "python",
-    rb: "ruby",
-    rs: "rust",
-    sql: "sql",
-    ts: "typescript",
-    tsx: "tsx",
-    yaml: "yaml",
-    yml: "yaml",
-  };
-  return languages[extension];
-}
-
-function normalizeCodingPath(rawPath: string): string | null {
-  const segments = rawPath
-    .trim()
-    .replaceAll("\\", "/")
-    .split("/")
-    .filter((segment) => segment && segment !== "." && segment !== "..");
-  const normalized = segments.join("/");
-  return normalized && normalized.length <= 240 ? normalized : null;
-}
-
-function extractGeneratedFiles(content: string): CodingFile[] {
-  const pattern = /```nexus-file\s+path=(?:"([^"]+)"|'([^']+)'|([^\s]+))\s*\n([\s\S]*?)(?:```|$)/gi;
-  const generated: CodingFile[] = [];
-  let match: RegExpExecArray | null;
-  while ((match = pattern.exec(content)) !== null) {
-    const name = normalizeCodingPath(match[1] ?? match[2] ?? match[3] ?? "");
-    if (!name) continue;
-    const parsed = CodingFileSchema.safeParse({
-      name,
-      content: match[4],
-      language: languageFromName(name),
-    });
-    if (parsed.success) generated.push(parsed.data);
-  }
-  return generated;
-}
-
-type CodingStreamPart = { type: "text" | "error"; value: string };
+type CodingStreamPart =
+  | { type: "text" | "error"; value: string }
+  | { type: "event"; value: CodingAgentEvent };
 
 function parseCodingStreamLine(line: string): CodingStreamPart | null {
   const trimmed = line.trim();
@@ -123,6 +80,17 @@ function parseCodingStreamLine(line: string): CodingStreamPart | null {
   const separator = trimmed.indexOf(":");
   if (separator < 1) throw new Error("Nexus Code returned an invalid stream.");
   const code = trimmed.slice(0, separator);
+  if (code === "2") {
+    let parsedEvent: unknown;
+    try {
+      parsedEvent = JSON.parse(trimmed.slice(separator + 1)) as unknown;
+    } catch {
+      throw new Error("Nexus Code returned malformed agent event data.");
+    }
+    const event = CodingAgentEventSchema.safeParse(parsedEvent);
+    if (!event.success) throw new Error("Nexus Code returned an invalid agent event.");
+    return { type: "event", value: event.data };
+  }
   if (code !== "0" && code !== "3") return null;
   let parsed: unknown;
   try {
@@ -190,6 +158,11 @@ function renderAssistantContent(content: string) {
 export function CodingChatPanel() {
   const [messages, setMessages] = useState<CodingStoredMessage[]>([INITIAL_MESSAGE]);
   const [files, setFiles] = useState<CodingFile[]>([]);
+  const [workspaceId, setWorkspaceId] = useState<string | null>(null);
+  const [workspaceName, setWorkspaceName] = useState("Nexus Code Workspace");
+  const [workspaceRevisionId, setWorkspaceRevisionId] = useState<string | null>(null);
+  const [workspaceParentRevisionId, setWorkspaceParentRevisionId] = useState<string | null>(null);
+  const [workspaceStatus, setWorkspaceStatus] = useState("Loading workspace");
   const [input, setInput] = useState("");
   const [mode, setMode] = useState<CodingMode>("ask");
   const [agent, setAgent] = useState<CodingAgent>("deepseek-chat");
@@ -210,7 +183,7 @@ export function CodingChatPanel() {
   const folderInputRef = useRef<HTMLInputElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const voiceModeRef = useRef(false);
-  const voiceRecognitionRef = useRef<NexusVoiceRecognition | null>(null);
+  const voiceRecognitionRef = useRef<CodingVoiceRecognition | null>(null);
   const voiceSessionRef = useRef(0);
   const voiceRestartTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const voiceResumeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -218,6 +191,12 @@ export function CodingChatPanel() {
   const voiceInstructionRef = useRef("");
   const speechGenerationRef = useRef(0);
   const speechUnlockedRef = useRef(false);
+  const workspaceReadyRef = useRef(false);
+  const workspaceRevisionRef = useRef<string | null>(null);
+  const workspaceSyncedFilesRef = useRef("");
+  const workspaceChangeReasonRef = useRef("Manual workspace edit");
+  const workspaceChangeSourceRef = useRef<"user" | "agent" | "import">("user");
+  const workspaceSaveQueueRef = useRef(Promise.resolve());
   const fileTree = useMemo(() => buildCodingTree(files), [files]);
   const selectedFile = useMemo(
     () => files.find((file) => file.name === selectedFileName) ?? null,
@@ -245,6 +224,69 @@ export function CodingChatPanel() {
     } catch {
       setError("Saved coding conversation could not be loaded.");
     }
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    const loadWorkspace = async () => {
+      setWorkspaceStatus("Loading workspace");
+      try {
+        const listResponse = await fetch("/api/coding/workspaces", {
+          cache: "no-store",
+          credentials: "same-origin",
+        });
+        if (!listResponse.ok) {
+          const payload = await listResponse.json().catch(() => null) as { error?: unknown } | null;
+          throw new Error(typeof payload?.error === "string" ? payload.error : "Coding workspaces could not be loaded.");
+        }
+        const listPayload = await listResponse.json() as { workspaces?: unknown };
+        const parsedList = CodingWorkspaceSchema.array().safeParse(listPayload.workspaces);
+        if (!parsedList.success) throw new Error("Coding workspace list was invalid.");
+        const latest = parsedList.data[0];
+        let response: Response;
+        if (latest) {
+          response = await fetch(`/api/coding/workspaces/${encodeURIComponent(latest.id)}`, {
+            cache: "no-store",
+            credentials: "same-origin",
+          });
+        } else {
+          response = await fetch("/api/coding/workspaces", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            credentials: "same-origin",
+            body: JSON.stringify({ name: "Nexus Code Workspace", files: [] }),
+          });
+        }
+        const payload = await response.json().catch(() => null) as unknown;
+        if (!response.ok) {
+          const errorPayload = payload as { error?: unknown } | null;
+          throw new Error(typeof errorPayload?.error === "string" ? errorPayload.error : "Coding workspace could not be opened.");
+        }
+        const parsed = CodingWorkspaceSnapshotSchema.safeParse(payload);
+        if (!parsed.success) throw new Error("Coding workspace data was invalid.");
+        if (!active) return;
+        workspaceReadyRef.current = false;
+        workspaceRevisionRef.current = parsed.data.workspace.currentRevisionId;
+        workspaceSyncedFilesRef.current = JSON.stringify(parsed.data.revision.files);
+        setWorkspaceId(parsed.data.workspace.id);
+        setWorkspaceName(parsed.data.workspace.name);
+        setWorkspaceRevisionId(parsed.data.workspace.currentRevisionId);
+        setWorkspaceParentRevisionId(parsed.data.revision.parentRevisionId);
+        setFiles(parsed.data.revision.files);
+        workspaceReadyRef.current = true;
+        setWorkspaceStatus("Saved");
+      } catch (workspaceError) {
+        if (!active) return;
+        workspaceReadyRef.current = false;
+        setWorkspaceStatus("Needs attention");
+        setError(workspaceError instanceof Error ? workspaceError.message : "Coding workspace could not be loaded.");
+      }
+    };
+    void loadWorkspace();
+    return () => {
+      active = false;
+      workspaceReadyRef.current = false;
+    };
   }, []);
 
   const clearVoiceRestartTimer = useCallback(() => {
@@ -347,8 +389,8 @@ export function CodingChatPanel() {
       scheduleWakeRecognition();
       return;
     }
-    const spokenResponse = buildNexusSpokenResponse(content, voiceInstructionRef.current);
-    const chunks = splitNexusVoiceText(spokenResponse);
+    const spokenResponse = buildCodingSpokenResponse(content, voiceInstructionRef.current);
+    const chunks = splitCodingVoiceText(spokenResponse);
     if (chunks.length === 0) {
       setVoiceStatus("waiting");
       scheduleWakeRecognition();
@@ -377,7 +419,7 @@ export function CodingChatPanel() {
     };
     voiceResumeTimerRef.current = setTimeout(
       () => finishVoiceSpeech(generation),
-      Math.min(120_000, Math.max(4_000, cleanNexusVoiceText(content).length * 65 + 2_000)),
+      Math.min(120_000, Math.max(4_000, cleanCodingVoiceText(content).length * 65 + 2_000)),
     );
     speakNext();
   }, [finishVoiceSpeech, scheduleWakeRecognition, stopVoiceOutput]);
@@ -386,7 +428,7 @@ export function CodingChatPanel() {
     if (!voiceModeRef.current) return;
     clearVoiceRestartTimer();
     stopVoiceRecognition();
-    const recognition = createNexusVoiceRecognition();
+    const recognition = createCodingVoiceRecognition();
     if (!recognition) {
       failVoiceMode("Voice mode is not supported in this browser. Try Safari or Chrome with microphone access enabled.");
       return;
@@ -397,9 +439,9 @@ export function CodingChatPanel() {
     recognition.lang = "en-US";
     recognition.onresult = (event) => {
       if (session !== voiceSessionRef.current || !voiceModeRef.current) return;
-      const { isFinal, transcript } = getNexusRecognitionText(event);
+      const { isFinal, transcript } = getCodingRecognitionText(event);
       if (!isFinal) return;
-      const command = extractNexusWakeCommand(transcript);
+      const command = extractCodingWakeCommand(transcript);
       if (command === null) return;
       if (command) submitVoiceCommand(command);
       else startVoiceCommandCapture();
@@ -429,7 +471,7 @@ export function CodingChatPanel() {
     if (!voiceModeRef.current) return;
     clearVoiceRestartTimer();
     stopVoiceRecognition();
-    const recognition = createNexusVoiceRecognition();
+    const recognition = createCodingVoiceRecognition();
     if (!recognition) {
       failVoiceMode("Voice command capture is not supported in this browser.");
       return;
@@ -443,7 +485,7 @@ export function CodingChatPanel() {
     recognition.lang = "en-US";
     recognition.onresult = (event) => {
       if (session !== voiceSessionRef.current || !voiceModeRef.current) return;
-      const { transcript } = getNexusRecognitionText(event);
+      const { transcript } = getCodingRecognitionText(event);
       if (!transcript) return;
       voiceCommandRef.current = transcript.slice(0, 12_000);
       setInput(voiceCommandRef.current);
@@ -507,8 +549,8 @@ export function CodingChatPanel() {
       setInput("");
       return;
     }
-    if (isNexusGreeting(normalized)) {
-      const greeting = buildNexusGreetingResponse(normalized);
+    if (isCodingGreeting(normalized)) {
+      const greeting = buildCodingGreetingResponse(normalized);
       setMessages((current) => [...current, {
         id: `assistant-${Date.now()}`,
         role: "assistant",
@@ -558,7 +600,7 @@ export function CodingChatPanel() {
       stopVoiceMode();
       return;
     }
-    if (!createNexusVoiceRecognition()) {
+    if (!createCodingVoiceRecognition()) {
       setVoiceStatus("error");
       setVoiceError("Voice mode is not supported in this browser. Try Safari or Chrome with microphone access enabled.");
       return;
@@ -619,6 +661,78 @@ export function CodingChatPanel() {
     clearVoiceResumeTimer();
   }, [clearVoiceRestartTimer, clearVoiceResumeTimer, stopVoiceOutput, stopVoiceRecognition]);
 
+  const queueWorkspaceSave = useCallback((
+    nextFiles: CodingFile[],
+    reason: string,
+    source: "user" | "agent" | "import",
+  ) => {
+    if (!workspaceId || !workspaceReadyRef.current) return;
+    const operation = async () => {
+      const baseRevisionId = workspaceRevisionRef.current;
+      if (!baseRevisionId) return;
+      setWorkspaceStatus("Saving");
+      try {
+        const response = await fetch(`/api/coding/workspaces/${encodeURIComponent(workspaceId)}/revisions`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          credentials: "same-origin",
+          body: JSON.stringify({
+            baseRevisionId,
+            files: nextFiles,
+            reason,
+            source,
+          }),
+        });
+        const payload = await response.json().catch(() => null) as unknown;
+        if (response.status === 409) {
+          const conflict = payload as { current?: unknown; error?: unknown } | null;
+          const parsedCurrent = CodingWorkspaceSnapshotSchema.safeParse(conflict?.current);
+          if (parsedCurrent.success) {
+            workspaceRevisionRef.current = parsedCurrent.data.workspace.currentRevisionId;
+            workspaceSyncedFilesRef.current = JSON.stringify(parsedCurrent.data.revision.files);
+            setWorkspaceRevisionId(parsedCurrent.data.workspace.currentRevisionId);
+            setWorkspaceParentRevisionId(parsedCurrent.data.revision.parentRevisionId);
+            setFiles(parsedCurrent.data.revision.files);
+          }
+          throw new Error(typeof conflict?.error === "string"
+            ? conflict.error
+            : "The coding workspace changed before your edit was saved.");
+        }
+        if (!response.ok) {
+          const failure = payload as { error?: unknown } | null;
+          throw new Error(typeof failure?.error === "string" ? failure.error : "Coding workspace could not be saved.");
+        }
+        const parsed = CodingWorkspaceSnapshotSchema.safeParse(payload);
+        if (!parsed.success) throw new Error("Coding workspace save response was invalid.");
+        workspaceRevisionRef.current = parsed.data.workspace.currentRevisionId;
+        workspaceSyncedFilesRef.current = JSON.stringify(parsed.data.revision.files);
+        setWorkspaceRevisionId(parsed.data.workspace.currentRevisionId);
+        setWorkspaceParentRevisionId(parsed.data.revision.parentRevisionId);
+        setWorkspaceStatus("Saved");
+      } catch (saveError) {
+        setWorkspaceStatus("Needs attention");
+        setError(saveError instanceof Error ? saveError.message : "Coding workspace could not be saved.");
+      }
+    };
+    workspaceSaveQueueRef.current = workspaceSaveQueueRef.current
+      .catch(() => undefined)
+      .then(operation);
+  }, [workspaceId]);
+
+  useEffect(() => {
+    if (!workspaceId || !workspaceReadyRef.current) return;
+    const signature = JSON.stringify(files);
+    if (signature === workspaceSyncedFilesRef.current) return;
+    const timer = window.setTimeout(() => {
+      queueWorkspaceSave(
+        files,
+        workspaceChangeReasonRef.current,
+        workspaceChangeSourceRef.current,
+      );
+    }, 800);
+    return () => window.clearTimeout(timer);
+  }, [files, queueWorkspaceSave, workspaceId]);
+
   const addFiles = useCallback(async (selected: FileList | null) => {
     if (!selected) return;
     const incoming = Array.from(selected);
@@ -636,10 +750,12 @@ export function CodingChatPanel() {
       nextFiles.push({
         name: fileName,
         content: await file.text(),
-        language: languageFromName(fileName),
+        language: codingLanguageFromName(fileName),
       });
     }
     if (nextFiles.length > 0) {
+      workspaceChangeReasonRef.current = "Imported source files";
+      workspaceChangeSourceRef.current = "import";
       setFiles((current) => {
         const merged = new Map(current.map((file) => [file.name, file]));
         for (const file of nextFiles) merged.set(file.name, file);
@@ -652,14 +768,18 @@ export function CodingChatPanel() {
 
   const updateSelectedFile = useCallback((content: string) => {
     if (!selectedFileName) return;
+    workspaceChangeReasonRef.current = `Edited ${selectedFileName}`;
+    workspaceChangeSourceRef.current = "user";
     setFiles((current) => current.map((file) => (
       file.name === selectedFileName ? { ...file, content } : file
     )));
   }, [selectedFileName]);
 
   const syncGeneratedFiles = useCallback((content: string) => {
-    const generatedFiles = extractGeneratedFiles(content);
+    const generatedFiles = extractCodingFiles(content);
     if (generatedFiles.length === 0) return;
+    workspaceChangeReasonRef.current = "Nexus Code generated files";
+    workspaceChangeSourceRef.current = "agent";
     setFiles((current) => {
       const merged = new Map(current.map((file) => [file.name, file]));
       let changed = false;
@@ -673,6 +793,37 @@ export function CodingChatPanel() {
       return changed ? Array.from(merged.values()).slice(0, MAX_FILES) : current;
     });
   }, []);
+
+  const undoWorkspace = useCallback(async () => {
+    if (!workspaceId || !workspaceParentRevisionId || loading) return;
+    setWorkspaceStatus("Reverting");
+    setError(null);
+    try {
+      const response = await fetch(`/api/coding/workspaces/${encodeURIComponent(workspaceId)}/revert`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "same-origin",
+        body: JSON.stringify({ revisionId: workspaceParentRevisionId }),
+      });
+      const payload = await response.json().catch(() => null) as unknown;
+      if (!response.ok) {
+        const failure = payload as { error?: unknown } | null;
+        throw new Error(typeof failure?.error === "string" ? failure.error : "Workspace undo failed.");
+      }
+      const parsed = CodingWorkspaceSnapshotSchema.safeParse(payload);
+      if (!parsed.success) throw new Error("Workspace undo response was invalid.");
+      workspaceRevisionRef.current = parsed.data.workspace.currentRevisionId;
+      workspaceSyncedFilesRef.current = JSON.stringify(parsed.data.revision.files);
+      workspaceChangeSourceRef.current = "user";
+      setWorkspaceRevisionId(parsed.data.workspace.currentRevisionId);
+      setWorkspaceParentRevisionId(parsed.data.revision.parentRevisionId);
+      setFiles(parsed.data.revision.files);
+      setWorkspaceStatus("Saved");
+    } catch (undoError) {
+      setWorkspaceStatus("Needs attention");
+      setError(undoError instanceof Error ? undoError.message : "Workspace undo failed.");
+    }
+  }, [loading, workspaceId, workspaceParentRevisionId]);
 
   const openPreview = useCallback(() => {
     const candidate = previewUrlDraft.trim();
@@ -720,6 +871,8 @@ export function CodingChatPanel() {
     const query = (requestedQuery ?? input).trim();
     if (!query || loading) return;
     voiceInstructionRef.current = query;
+    workspaceChangeReasonRef.current = `Nexus Code: ${query.slice(0, 360)}`;
+    workspaceChangeSourceRef.current = "agent";
     setLoading(true);
     setStatus("Nexus Code is working");
     setError(null);
@@ -751,7 +904,16 @@ export function CodingChatPanel() {
       const response = await fetch("/api/coding/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ query, mode, agent, history: requestHistory, files }),
+        credentials: "same-origin",
+        body: JSON.stringify({
+          query,
+          mode,
+          agent,
+          workspaceId: workspaceId ?? undefined,
+          revisionId: workspaceRevisionRef.current ?? undefined,
+          history: requestHistory,
+          files,
+        }),
         signal: controller.signal,
       });
       if (!response.ok) {
@@ -768,6 +930,20 @@ export function CodingChatPanel() {
         if (!part) return;
         if (part.type === "error") {
           streamError = part.value;
+          return;
+        }
+        if (part.type === "event") {
+          const event = part.value;
+          if (event.type === "files.proposed") {
+            workspaceChangeReasonRef.current = event.reason;
+            workspaceChangeSourceRef.current = "agent";
+            setFiles((current) => {
+              const merged = new Map(current.map((file) => [file.name, file]));
+              for (const file of event.files) merged.set(file.name, file);
+              return Array.from(merged.values()).slice(0, MAX_FILES);
+            });
+          }
+          if (event.type === "run.failed") setError(event.message);
           return;
         }
         content += part.value;
@@ -811,7 +987,7 @@ export function CodingChatPanel() {
       abortRef.current = null;
       setLoading(false);
     }
-  }, [agent, files, input, loading, messages, mode, speakAssistantResponse, syncGeneratedFiles]);
+  }, [agent, files, input, loading, messages, mode, speakAssistantResponse, syncGeneratedFiles, workspaceId]);
 
   const stop = useCallback(() => {
     abortRef.current?.abort();
@@ -856,18 +1032,30 @@ export function CodingChatPanel() {
           <div className="min-w-0">
             <p className="text-[10px] font-bold uppercase tracking-[0.2em] text-cyan-400">Dedicated coding pipeline</p>
             <h1 className="mt-1 truncate text-base font-bold text-slate-100 sm:text-lg">Nexus Code</h1>
+            <p className="mt-1 truncate text-xs text-slate-300">{workspaceName}</p>
             <p className="mt-1 text-xs text-slate-500">DeepSeek Chat default · R1 available for difficult reasoning</p>
           </div>
           <div className="flex shrink-0 items-center gap-2">
             <div className={`rounded-full border px-2.5 py-1 text-[10px] font-semibold ${loading ? "border-amber-400/40 text-amber-300" : "border-emerald-400/30 text-emerald-300"}`}>
               {status}
             </div>
+            <button
+              type="button"
+              onClick={() => void undoWorkspace()}
+              disabled={!workspaceParentRevisionId || loading || !workspaceRevisionId}
+              className="min-h-12 rounded-xl border border-slate-700 px-2 text-xs font-semibold text-slate-400 disabled:opacity-40"
+            >
+              Undo
+            </button>
             <button type="button" onClick={clearConversation} className="min-h-12 rounded-xl px-2 text-xs font-semibold text-slate-500 hover:bg-slate-800 hover:text-slate-200">
               Clear
             </button>
           </div>
         </div>
         <div className="mt-2 flex flex-wrap gap-2">
+          <div className="flex min-h-12 items-center rounded-xl border border-slate-800 px-3 text-[10px] font-semibold text-slate-500" aria-live="polite">
+            {workspaceStatus}
+          </div>
           <button
             type="button"
             onClick={() => toggleWorkspacePanel("files")}

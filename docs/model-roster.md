@@ -106,3 +106,11 @@ pipelines. It uses only the explicit DeepSeek models:
 The coding workspace defaults to `deepseek-chat`. Selecting R1 is an explicit
 per-conversation choice and does not change the model policy of any other
 workspace.
+
+Coding workspaces keep their source tree in an isolated revision store under
+the `coding-workspaces/` object prefix. Nexus Code applies generated file
+changes automatically to a new revision so the trust-the-LLM workflow remains
+fast, while every revision can be reverted from the coding workspace. Generated
+code is never executed inside the Next.js web process. Execution requires the
+optional isolated runner configured with `CODING_RUNNER_URL` and
+`CODING_RUNNER_TOKEN`.
