@@ -51,7 +51,7 @@ export function TerminalLog({ entries, isStreaming = false }: TerminalLogProps) 
       </header>
 
       <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-3">
-        <ul className="space-y-1.5">
+        <ul className="space-y-2">
           {entries.map((entry) => {
             const cfg = LEVEL_CFG[entry.level];
             // Slice UTC ISO string to "HH:MM:SS" — timezone-stable, no locale divergence.
@@ -61,28 +61,30 @@ export function TerminalLog({ entries, isStreaming = false }: TerminalLogProps) 
             return (
               <li
                 key={entry.id}
-                className="animate-fade-up flex items-start gap-2.5 rounded-xl border border-slate-700/50 bg-slate-900/70 px-3 py-2.5"
+                className="animate-fade-up min-w-0 rounded-xl border border-slate-700/50 bg-slate-900/70 px-3 py-2.5"
               >
-                <span
-                  className={`mt-px inline-flex flex-shrink-0 items-center rounded-md border px-1.5 py-0.5 text-[10px] font-bold tracking-widest ${cfg.tagCls}`}
-                >
-                  {cfg.tag}
-                </span>
-                <span className={`flex-1 text-mono ${cfg.msgCls}`}>
+                <div className="flex min-w-0 items-center justify-between gap-2">
+                  <span
+                    className={`inline-flex flex-shrink-0 items-center rounded-md border px-1.5 py-0.5 text-[10px] font-bold tracking-widest ${cfg.tagCls}`}
+                  >
+                    {cfg.tag}
+                  </span>
+                  <time suppressHydrationWarning className="flex-shrink-0 text-[10px] tabular-nums text-slate-600">
+                    {time}
+                  </time>
+                </div>
+                <p className={`mt-1.5 min-w-0 break-words font-mono text-xs leading-relaxed ${cfg.msgCls}`}>
                   {entry.message}
-                </span>
-                <span suppressHydrationWarning className="flex-shrink-0 text-[11px] tabular-nums text-slate-600">
-                  {time}
-                </span>
+                </p>
               </li>
             );
           })}
           {isStreaming && (
-            <li className="flex items-center gap-2.5 rounded-xl border border-violet-500/30 bg-violet-500/5 px-3 py-2.5">
+            <li className="flex min-w-0 items-start gap-2.5 rounded-xl border border-violet-500/30 bg-violet-500/5 px-3 py-2.5">
               <span className="inline-flex flex-shrink-0 items-center rounded-md border border-violet-400/30 bg-violet-400/10 px-1.5 py-0.5 text-[10px] font-bold tracking-widest text-violet-400">
                 STRM
               </span>
-              <span className="text-mono text-slate-400">
+              <span className="min-w-0 break-words font-mono text-xs leading-relaxed text-slate-400">
                 Processing<span className="animate-pulse">...</span>
               </span>
             </li>

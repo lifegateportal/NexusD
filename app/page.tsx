@@ -871,7 +871,7 @@ export default function HomePage() {
             : isBookView
               ? "flex flex-1 flex-col gap-3 overflow-y-auto overscroll-contain p-3 pb-3 lg:min-h-0 lg:overflow-hidden lg:pb-3"
               : showActivityPanel
-                ? "mx-2 mb-2 flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto overscroll-contain rounded-2xl border border-cyan-500/10 bg-shell-950/20 p-3 pb-24 shadow-panel lg:mx-3 lg:mb-3 lg:grid lg:grid-cols-5 lg:overflow-hidden lg:pb-3"
+                ? "mx-2 mb-2 flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto overscroll-contain rounded-2xl border border-cyan-500/10 bg-shell-950/20 p-3 pb-24 shadow-panel lg:mx-3 lg:mb-3 lg:grid lg:grid-cols-[240px_minmax(0,1fr)] lg:overflow-hidden lg:pb-3"
                 : "mx-2 mb-2 flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto overscroll-contain rounded-2xl border border-cyan-500/10 bg-shell-950/20 p-3 pb-24 shadow-panel lg:mx-3 lg:mb-3 lg:overflow-hidden lg:pb-3"
         }>
 
@@ -896,7 +896,7 @@ export default function HomePage() {
                   : isBookView
                     ? "flex min-h-[65dvh] flex-col animate-fade-up lg:flex-1 lg:min-h-0"
                     : showActivityPanel
-                      ? "min-h-[65dvh] min-w-0 animate-fade-up lg:h-full lg:col-span-4 lg:min-h-0"
+                      ? "min-h-[65dvh] min-w-0 animate-fade-up lg:h-full lg:col-span-1 lg:min-h-0"
                       : isProjectsView
                         ? "mx-auto flex min-h-0 w-full max-w-6xl flex-1 flex-col animate-fade-up"
                         : "mx-auto flex w-full max-w-4xl flex-col animate-fade-up"}
@@ -1030,7 +1030,7 @@ export default function HomePage() {
 
               {/* Workspace — source first, then results and recovery actions */}
               <div className={showActivityPanel
-                ? "flex min-h-0 flex-col gap-3 overflow-y-auto lg:col-span-4 lg:pr-1"
+                ? "flex min-h-0 flex-col gap-3 overflow-y-auto lg:col-span-1 lg:pr-1"
                 : "mx-auto flex w-full max-w-4xl flex-col gap-3"}
               >
                 {showAcademyOverviewHeading && (
