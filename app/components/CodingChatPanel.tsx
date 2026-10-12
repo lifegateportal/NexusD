@@ -37,6 +37,7 @@ type CodingTreeNode = {
 };
 
 type PreviewDevice = "mobile" | "desktop";
+type CodingSurface = "assistant" | "editor";
 
 type CodingVoiceStatus = "off" | "waiting" | "capturing" | "thinking" | "speaking" | "error";
 
@@ -150,6 +151,7 @@ export function CodingChatPanel() {
   const [status, setStatus] = useState("Ready");
   const [error, setError] = useState<string | null>(null);
   const [selectedFileName, setSelectedFileName] = useState<string | null>(null);
+  const [codingSurface, setCodingSurface] = useState<CodingSurface>("assistant");
   const [showFiles, setShowFiles] = useState(false);
   const [showPreview, setShowPreview] = useState(false);
   const [previewUrlDraft, setPreviewUrlDraft] = useState("");
@@ -539,7 +541,7 @@ export function CodingChatPanel() {
     } catch {
       setError("Coding conversation could not be saved locally.");
     }
-  }, [loading, messages]);
+  }, [codingSurface, loading, messages]);
 
   const clearConversation = useCallback(() => {
     abortRef.current?.abort();
@@ -720,7 +722,9 @@ export function CodingChatPanel() {
         type="button"
         onClick={() => {
           setSelectedFileName(node.path);
-          setShowFiles(true);
+          setCodingSurface("editor");
+          setShowFiles(false);
+          setShowPreview(false);
         }}
         className={`flex min-h-12 w-full items-center gap-2 rounded-lg px-2 text-left text-xs ${selectedFileName === node.path ? "bg-cyan-500/15 text-cyan-200" : "text-slate-400 hover:bg-slate-800/70 hover:text-slate-200"}`}
         style={{ paddingLeft: `${8 + depth * 14}px` }}
@@ -815,58 +819,93 @@ export function CodingChatPanel() {
               </div>
             )}
           </div>
-          {selectedFile && (
-            <div className="flex min-h-0 max-h-[42dvh] shrink-0 flex-col border-t border-slate-800">
-              <div className="flex min-h-12 items-center justify-between gap-2 px-3">
-                <span className="truncate text-[10px] font-bold uppercase tracking-widest text-slate-500">{selectedFile.name}</span>
-                <span className="shrink-0 text-[10px] text-slate-600">{selectedFile.language ?? "text"}</span>
-              </div>
-              <textarea
-                value={selectedFile.content}
-                onChange={(event) => updateSelectedFile(event.target.value)}
-                aria-label={`Edit ${selectedFile.name}`}
-                className="min-h-32 flex-1 resize-y border-0 border-t border-slate-800 bg-slate-950 px-3 py-3 font-mono text-base leading-5 text-slate-300 focus:outline-none"
-              />
-              {selectedFileCanPreview && (
-                <button type="button" onClick={() => { setPreviewUrl(""); setShowPreview(true); }} className="m-2 min-h-12 rounded-xl border border-violet-400/30 bg-violet-500/10 px-3 text-xs font-semibold text-violet-200">
-                  Preview this HTML
-                </button>
-              )}
-            </div>
-          )}
         </aside>
 
         <div className={`${showFiles || showPreview ? "hidden lg:flex" : "flex"} min-h-0 min-w-0 flex-1 flex-col overflow-hidden`}>
-          <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto px-3 py-4 sm:px-5 lg:px-8" style={{ WebkitOverflowScrolling: "touch" }}>
-          <div className={`mx-auto flex min-h-full w-full max-w-5xl flex-col gap-4 ${messages.length === 1 ? "justify-center" : "justify-end"}`}>
-          {messages.map((message) => (
-            <article
-              key={message.id}
-              className={message.role === "user"
-                ? "max-w-[92%] self-end rounded-2xl border border-cyan-500/30 bg-cyan-500/10 px-4 py-3 text-sm leading-6 text-cyan-50"
-                : message.role === "system"
-                  ? "rounded-2xl border border-cyan-500/20 bg-cyan-950/20 px-4 py-3 text-sm leading-6 text-slate-300"
-                  : "rounded-2xl border border-slate-800 bg-slate-900/60 px-4 py-4 text-sm leading-6 text-slate-200"}
-            >
-              <div className="mb-2 flex items-center justify-between gap-3 text-[10px] font-bold uppercase tracking-widest text-slate-500">
-                <span>{message.role === "user" ? "You" : message.role === "system" ? "Pipeline" : "Nexus Code"}</span>
-                {message.fileNames.length > 0 && <span className="truncate text-cyan-400">{message.fileNames.join(", ")}</span>}
-              </div>
-              {message.role === "assistant" ? renderAssistantContent(message.content || "Thinking…") : (
-                <p className="whitespace-pre-wrap">{message.content}</p>
+          <div className="flex min-h-12 shrink-0 items-center justify-between gap-2 border-b border-slate-800 px-3">
+            <div className="flex min-w-0 items-center gap-1 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+              <button
+                type="button"
+                onClick={() => setCodingSurface("assistant")}
+                className={`min-h-12 shrink-0 rounded-lg px-3 text-xs font-semibold ${codingSurface === "assistant" ? "bg-cyan-500/15 text-cyan-200" : "text-slate-500"}`}
+              >
+                Assistant
+              </button>
+              {selectedFile && (
+                <button
+                  type="button"
+                  onClick={() => setCodingSurface("editor")}
+                  className={`min-h-12 max-w-52 shrink-0 truncate rounded-lg px-3 text-xs font-semibold ${codingSurface === "editor" ? "bg-violet-500/15 text-violet-200" : "text-slate-500"}`}
+                >
+                  {selectedFile.name}
+                </button>
               )}
-            </article>
-          ))}
-          {loading && (
-            <div className="flex items-center gap-2 text-xs text-slate-500" aria-live="polite">
-              <span className="h-2 w-2 animate-pulse rounded-full bg-cyan-400" />
-              DeepSeek is generating a coding response…
+            </div>
+            {codingSurface === "editor" && selectedFileCanPreview && (
+              <button
+                type="button"
+                onClick={() => { setPreviewUrl(""); setShowPreview(true); }}
+                className="min-h-12 shrink-0 rounded-lg px-3 text-xs font-semibold text-violet-200"
+              >
+                Preview
+              </button>
+            )}
+          </div>
+
+          {codingSurface === "assistant" ? (
+            <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto px-3 py-4 sm:px-5 lg:px-8" style={{ WebkitOverflowScrolling: "touch" }}>
+              <div className={`mx-auto flex min-h-full w-full max-w-5xl flex-col gap-4 ${messages.length === 1 ? "justify-center" : "justify-end"}`}>
+                {messages.map((message) => (
+                  <article
+                    key={message.id}
+                    className={message.role === "user"
+                      ? "max-w-[92%] self-end rounded-2xl border border-cyan-500/30 bg-cyan-500/10 px-4 py-3 text-sm leading-6 text-cyan-50"
+                      : message.role === "system"
+                        ? "rounded-2xl border border-cyan-500/20 bg-cyan-950/20 px-4 py-3 text-sm leading-6 text-slate-300"
+                        : "rounded-2xl border border-slate-800 bg-slate-900/60 px-4 py-4 text-sm leading-6 text-slate-200"}
+                  >
+                    <div className="mb-2 flex items-center justify-between gap-3 text-[10px] font-bold uppercase tracking-widest text-slate-500">
+                      <span>{message.role === "user" ? "You" : message.role === "system" ? "Pipeline" : "Nexus Code"}</span>
+                      {message.fileNames.length > 0 && <span className="truncate text-cyan-400">{message.fileNames.join(", ")}</span>}
+                    </div>
+                    {message.role === "assistant" ? renderAssistantContent(message.content || "Thinking…") : (
+                      <p className="whitespace-pre-wrap">{message.content}</p>
+                    )}
+                  </article>
+                ))}
+                {loading && (
+                  <div className="flex items-center gap-2 text-xs text-slate-500" aria-live="polite">
+                    <span className="h-2 w-2 animate-pulse rounded-full bg-cyan-400" />
+                    DeepSeek is generating a coding response…
+                  </div>
+                )}
+              </div>
+            </div>
+          ) : (
+            <div className="flex min-h-0 flex-1 flex-col overflow-hidden bg-slate-950/60">
+              {selectedFile ? (
+                <>
+                  <div className="flex min-h-12 shrink-0 items-center justify-between gap-3 border-b border-slate-800 px-4">
+                    <span className="truncate font-mono text-xs text-slate-400">{selectedFile.name}</span>
+                    <span className="shrink-0 text-[10px] font-semibold uppercase tracking-widest text-slate-600">{selectedFile.language ?? "text"}</span>
+                  </div>
+                  <textarea
+                    value={selectedFile.content}
+                    onChange={(event) => updateSelectedFile(event.target.value)}
+                    aria-label={`Edit ${selectedFile.name}`}
+                    spellCheck={false}
+                    className="min-h-0 flex-1 resize-none bg-transparent px-4 py-4 font-mono text-base leading-6 text-slate-300 focus:outline-none"
+                  />
+                </>
+              ) : (
+                <div className="flex min-h-[320px] flex-1 items-center justify-center px-6 text-center">
+                  <p className="max-w-sm text-sm leading-6 text-slate-500">Choose a file from the project explorer to open it in the editor.</p>
+                </div>
+              )}
             </div>
           )}
-      </div>
-        </div>
 
-      <div className="shrink-0 border-t border-cyan-500/20 bg-slate-950/95 p-3 sm:p-4" style={{ paddingBottom: "max(env(safe-area-inset-bottom), 0.75rem)" }}>
+          <div className="shrink-0 border-t border-cyan-500/20 bg-slate-950/95 p-3 sm:p-4" style={{ paddingBottom: "max(env(safe-area-inset-bottom), 0.75rem)" }}>
         {(error || voiceError) && (
           <p role="alert" className="mb-3 rounded-xl border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-xs text-rose-200">
             {error || voiceError}
