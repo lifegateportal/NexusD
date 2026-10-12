@@ -30,6 +30,8 @@ import {
   codingLanguageFromName,
   extractCodingFiles,
   type CodingAgentEvent,
+  type CodingWorkspace,
+  type CodingWorkspaceSnapshot,
 } from "@/lib/coding-workspace";
 
 const STORAGE_KEY = "nexus-coding-chat";
@@ -158,6 +160,7 @@ function renderAssistantContent(content: string) {
 export function CodingChatPanel() {
   const [messages, setMessages] = useState<CodingStoredMessage[]>([INITIAL_MESSAGE]);
   const [files, setFiles] = useState<CodingFile[]>([]);
+  const [workspaces, setWorkspaces] = useState<CodingWorkspace[]>([]);
   const [workspaceId, setWorkspaceId] = useState<string | null>(null);
   const [workspaceName, setWorkspaceName] = useState("Nexus Code Workspace");
   const [workspaceRevisionId, setWorkspaceRevisionId] = useState<string | null>(null);
@@ -194,6 +197,7 @@ export function CodingChatPanel() {
   const speechGenerationRef = useRef(0);
   const speechUnlockedRef = useRef(false);
   const workspaceReadyRef = useRef(false);
+  const workspaceIdRef = useRef<string | null>(null);
   const workspaceRevisionRef = useRef<string | null>(null);
   const workspaceSyncedFilesRef = useRef("");
   const workspaceChangeReasonRef = useRef("Manual workspace edit");
@@ -215,6 +219,21 @@ export function CodingChatPanel() {
 
   useEffect(() => {
     folderInputRef.current?.setAttribute("webkitdirectory", "");
+  }, []);
+
+  const applyWorkspaceSnapshot = useCallback((snapshot: CodingWorkspaceSnapshot) => {
+    workspaceReadyRef.current = false;
+    workspaceIdRef.current = snapshot.workspace.id;
+    workspaceRevisionRef.current = snapshot.workspace.currentRevisionId;
+    workspaceSyncedFilesRef.current = JSON.stringify(snapshot.revision.files);
+    setWorkspaceId(snapshot.workspace.id);
+    setWorkspaceName(snapshot.workspace.name);
+    setWorkspaceRevisionId(snapshot.workspace.currentRevisionId);
+    setWorkspaceParentRevisionId(snapshot.revision.parentRevisionId);
+    setSelectedFileName(snapshot.revision.files[0]?.name ?? null);
+    setFiles(snapshot.revision.files);
+    workspaceReadyRef.current = true;
+    setWorkspaceStatus("Saved");
   }, []);
 
   useEffect(() => {
@@ -244,6 +263,7 @@ export function CodingChatPanel() {
         const listPayload = await listResponse.json() as { workspaces?: unknown };
         const parsedList = CodingWorkspaceSchema.array().safeParse(listPayload.workspaces);
         if (!parsedList.success) throw new Error("Coding workspace list was invalid.");
+        setWorkspaces(parsedList.data);
         const latest = parsedList.data[0];
         let response: Response;
         if (latest) {
@@ -267,16 +287,8 @@ export function CodingChatPanel() {
         const parsed = CodingWorkspaceSnapshotSchema.safeParse(payload);
         if (!parsed.success) throw new Error("Coding workspace data was invalid.");
         if (!active) return;
-        workspaceReadyRef.current = false;
-        workspaceRevisionRef.current = parsed.data.workspace.currentRevisionId;
-        workspaceSyncedFilesRef.current = JSON.stringify(parsed.data.revision.files);
-        setWorkspaceId(parsed.data.workspace.id);
-        setWorkspaceName(parsed.data.workspace.name);
-        setWorkspaceRevisionId(parsed.data.workspace.currentRevisionId);
-        setWorkspaceParentRevisionId(parsed.data.revision.parentRevisionId);
-        setFiles(parsed.data.revision.files);
-        workspaceReadyRef.current = true;
-        setWorkspaceStatus("Saved");
+        if (!latest) setWorkspaces((current) => [parsed.data.workspace, ...current]);
+        applyWorkspaceSnapshot(parsed.data);
       } catch (workspaceError) {
         if (!active) return;
         workspaceReadyRef.current = false;
@@ -289,7 +301,85 @@ export function CodingChatPanel() {
       active = false;
       workspaceReadyRef.current = false;
     };
+  }, [applyWorkspaceSnapshot]);
+
+  const resetProjectConversation = useCallback(() => {
+    abortRef.current?.abort();
+    setLoading(false);
+    setInput("");
+    setAttachedFileNames([]);
+    setMessages([{ ...INITIAL_MESSAGE, createdAt: new Date().toISOString() }]);
+    setCodingSurface("assistant");
+    setShowFiles(false);
+    setShowPreview(false);
+    setPreviewExpanded(false);
+    setPreviewUrl("");
+    setPreviewUrlDraft("");
+    setSelectedFileName(null);
   }, []);
+
+  const openWorkspace = useCallback(async (nextWorkspaceId: string) => {
+    if (!nextWorkspaceId || nextWorkspaceId === workspaceId || loading) return;
+    await workspaceSaveQueueRef.current.catch(() => undefined);
+    workspaceReadyRef.current = false;
+    setWorkspaceStatus("Loading workspace");
+    setError(null);
+    try {
+      const response = await fetch(`/api/coding/workspaces/${encodeURIComponent(nextWorkspaceId)}`, {
+        cache: "no-store",
+        credentials: "same-origin",
+      });
+      const payload = await response.json().catch(() => null) as unknown;
+      if (!response.ok) {
+        const failure = payload as { error?: unknown } | null;
+        throw new Error(typeof failure?.error === "string" ? failure.error : "Coding workspace could not be opened.");
+      }
+      const parsed = CodingWorkspaceSnapshotSchema.safeParse(payload);
+      if (!parsed.success) throw new Error("Coding workspace data was invalid.");
+      setWorkspaces((current) => current.map((workspace) => (
+        workspace.id === parsed.data.workspace.id ? parsed.data.workspace : workspace
+      )));
+      applyWorkspaceSnapshot(parsed.data);
+      resetProjectConversation();
+    } catch (workspaceError) {
+      workspaceReadyRef.current = false;
+      setWorkspaceStatus("Needs attention");
+      setError(workspaceError instanceof Error ? workspaceError.message : "Coding workspace could not be opened.");
+    }
+  }, [applyWorkspaceSnapshot, loading, resetProjectConversation, workspaceId]);
+
+  const createWorkspace = useCallback(async () => {
+    if (loading) return;
+    const name = window.prompt("Name your new Nexus Code project", "Untitled Code Project")?.trim();
+    if (!name) return;
+    await workspaceSaveQueueRef.current.catch(() => undefined);
+    workspaceReadyRef.current = false;
+    setWorkspaceStatus("Creating project");
+    setError(null);
+    try {
+      const response = await fetch("/api/coding/workspaces", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "same-origin",
+        body: JSON.stringify({ name, files: [] }),
+      });
+      const payload = await response.json().catch(() => null) as unknown;
+      if (!response.ok) {
+        const failure = payload as { error?: unknown } | null;
+        throw new Error(typeof failure?.error === "string" ? failure.error : "New coding project could not be created.");
+      }
+      const parsed = CodingWorkspaceSnapshotSchema.safeParse(payload);
+      if (!parsed.success) throw new Error("New coding project data was invalid.");
+      setWorkspaces((current) => [parsed.data.workspace, ...current.filter((workspace) => workspace.id !== parsed.data.workspace.id)]);
+      applyWorkspaceSnapshot(parsed.data);
+      resetProjectConversation();
+      setStatus("Ready");
+    } catch (workspaceError) {
+      workspaceReadyRef.current = false;
+      setWorkspaceStatus("Needs attention");
+      setError(workspaceError instanceof Error ? workspaceError.message : "New coding project could not be created.");
+    }
+  }, [applyWorkspaceSnapshot, loading, resetProjectConversation]);
 
   const clearVoiceRestartTimer = useCallback(() => {
     if (!voiceRestartTimerRef.current) return;
@@ -670,12 +760,14 @@ export function CodingChatPanel() {
     source: "user" | "agent" | "import",
   ) => {
     if (!workspaceId || !workspaceReadyRef.current) return;
+    const targetWorkspaceId = workspaceId;
+    const baseRevisionId = workspaceRevisionRef.current;
+    if (!baseRevisionId) return;
     const operation = async () => {
-      const baseRevisionId = workspaceRevisionRef.current;
-      if (!baseRevisionId) return;
+      if (workspaceIdRef.current !== targetWorkspaceId) return;
       setWorkspaceStatus("Saving");
       try {
-        const response = await fetch(`/api/coding/workspaces/${encodeURIComponent(workspaceId)}/revisions`, {
+        const response = await fetch(`/api/coding/workspaces/${encodeURIComponent(targetWorkspaceId)}/revisions`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           credentials: "same-origin",
@@ -690,7 +782,7 @@ export function CodingChatPanel() {
         if (response.status === 409) {
           const conflict = payload as { current?: unknown; error?: unknown } | null;
           const parsedCurrent = CodingWorkspaceSnapshotSchema.safeParse(conflict?.current);
-          if (parsedCurrent.success) {
+          if (parsedCurrent.success && workspaceIdRef.current === targetWorkspaceId) {
             workspaceRevisionRef.current = parsedCurrent.data.workspace.currentRevisionId;
             workspaceSyncedFilesRef.current = JSON.stringify(parsedCurrent.data.revision.files);
             setWorkspaceRevisionId(parsedCurrent.data.workspace.currentRevisionId);
@@ -707,12 +799,17 @@ export function CodingChatPanel() {
         }
         const parsed = CodingWorkspaceSnapshotSchema.safeParse(payload);
         if (!parsed.success) throw new Error("Coding workspace save response was invalid.");
+        if (workspaceIdRef.current !== targetWorkspaceId) return;
         workspaceRevisionRef.current = parsed.data.workspace.currentRevisionId;
         workspaceSyncedFilesRef.current = JSON.stringify(parsed.data.revision.files);
         setWorkspaceRevisionId(parsed.data.workspace.currentRevisionId);
         setWorkspaceParentRevisionId(parsed.data.revision.parentRevisionId);
+        setWorkspaces((current) => current.map((workspace) => (
+          workspace.id === parsed.data.workspace.id ? parsed.data.workspace : workspace
+        )));
         setWorkspaceStatus("Saved");
       } catch (saveError) {
+        if (workspaceIdRef.current !== targetWorkspaceId) return;
         setWorkspaceStatus("Needs attention");
         setError(saveError instanceof Error ? saveError.message : "Coding workspace could not be saved.");
       }
@@ -1060,7 +1157,28 @@ export function CodingChatPanel() {
           <div className="min-w-0">
             <p className="text-[10px] font-bold uppercase tracking-[0.2em] text-cyan-400">Dedicated coding pipeline</p>
             <h1 className="mt-1 truncate text-base font-bold text-slate-100 sm:text-lg">Nexus Code</h1>
-            <p className="mt-1 truncate text-xs text-slate-300">{workspaceName}</p>
+            <div className="mt-2 flex max-w-full items-center gap-2">
+              <select
+                value={workspaceId ?? ""}
+                onChange={(event) => void openWorkspace(event.target.value)}
+                disabled={loading || workspaces.length === 0}
+                aria-label="Select coding project"
+                className="min-h-12 min-w-0 max-w-[min(60vw,22rem)] flex-1 rounded-xl border border-slate-700 bg-slate-900 px-3 text-base text-slate-200 focus:border-cyan-400/60 focus:outline-none disabled:opacity-60"
+              >
+                {!workspaceId && <option value="">{workspaceName}</option>}
+                {workspaces.map((workspace) => (
+                  <option key={workspace.id} value={workspace.id}>{workspace.name}</option>
+                ))}
+              </select>
+              <button
+                type="button"
+                onClick={() => void createWorkspace()}
+                disabled={loading || !workspaceId}
+                className="min-h-12 shrink-0 rounded-xl border border-cyan-400/40 px-3 text-xs font-semibold text-cyan-200 disabled:opacity-40"
+              >
+                New project
+              </button>
+            </div>
             <p className="mt-1 text-xs text-slate-500">DeepSeek Chat default · R1 available for difficult reasoning</p>
           </div>
           <div className="flex shrink-0 items-center gap-2">
