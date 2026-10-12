@@ -24,14 +24,14 @@ export const CodingChatRequestSchema = z.object({
   mode: CodingModeSchema.default("ask"),
   agent: CodingAgentSchema.default("deepseek-chat"),
   history: z.array(CodingHistoryMessageSchema).max(20).default([]),
-  files: z.array(CodingFileSchema).max(12).default([]),
+  files: z.array(CodingFileSchema).max(200).default([]),
 }).superRefine((value, context) => {
   const totalCharacters = value.files.reduce((sum, file) => sum + file.content.length, 0);
-  if (totalCharacters > 2_000_000) {
+  if (totalCharacters > 4_000_000) {
     context.addIssue({
       code: z.ZodIssueCode.custom,
       path: ["files"],
-      message: "Attached code is too large. Keep the total under 2 million characters.",
+      message: "Attached code is too large. Keep the total under 4 million characters.",
     });
   }
 });

@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { pickVoice } from "@/lib/audio-player-context";
 import {
   CodingAgentSchema,
@@ -27,7 +27,16 @@ import {
 const STORAGE_KEY = "nexus-coding-chat";
 const VOICE_STORAGE_KEY = "nexus-coding-voice-mode";
 const MAX_FILE_SIZE = 500_000;
-const MAX_FILES = 12;
+const MAX_FILES = 200;
+
+type CodingTreeNode = {
+  name: string;
+  path: string;
+  kind: "folder" | "file";
+  children: CodingTreeNode[];
+};
+
+type PreviewDevice = "mobile" | "desktop";
 
 type CodingVoiceStatus = "off" | "waiting" | "capturing" | "thinking" | "speaking" | "error";
 
@@ -78,6 +87,35 @@ function languageFromName(name: string): string | undefined {
   return languages[extension];
 }
 
+function buildCodingTree(files: CodingFile[]): CodingTreeNode[] {
+  const root: CodingTreeNode[] = [];
+  for (const file of files) {
+    const segments = file.name.replaceAll("\\", "/").split("/").filter(Boolean);
+    let level = root;
+    let path = "";
+    segments.forEach((segment, index) => {
+      path = path ? `${path}/${segment}` : segment;
+      const kind = index === segments.length - 1 ? "file" : "folder";
+      let node = level.find((item) => item.name === segment && item.kind === kind);
+      if (!node) {
+        node = { name: segment, path, kind, children: [] };
+        level.push(node);
+      }
+      level = node.children;
+    });
+  }
+
+  const sortNodes = (nodes: CodingTreeNode[]): CodingTreeNode[] => nodes
+    .sort((left, right) => (
+      left.kind === right.kind
+        ? left.name.localeCompare(right.name)
+        : left.kind === "folder" ? -1 : 1
+    ))
+    .map((node) => ({ ...node, children: sortNodes(node.children) }));
+
+  return sortNodes(root);
+}
+
 function renderAssistantContent(content: string) {
   const parts = content.split(/```([^\n]*)\n([\s\S]*?)```/g);
   const rendered: React.ReactNode[] = [];
@@ -111,11 +149,18 @@ export function CodingChatPanel() {
   const [loading, setLoading] = useState(false);
   const [status, setStatus] = useState("Ready");
   const [error, setError] = useState<string | null>(null);
+  const [selectedFileName, setSelectedFileName] = useState<string | null>(null);
+  const [showFiles, setShowFiles] = useState(false);
+  const [showPreview, setShowPreview] = useState(false);
+  const [previewUrlDraft, setPreviewUrlDraft] = useState("");
+  const [previewUrl, setPreviewUrl] = useState("");
+  const [previewDevice, setPreviewDevice] = useState<PreviewDevice>("desktop");
   const [voiceModeEnabled, setVoiceModeEnabled] = useState(false);
   const [voiceStatus, setVoiceStatus] = useState<CodingVoiceStatus>("off");
   const [voiceError, setVoiceError] = useState<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const folderInputRef = useRef<HTMLInputElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const voiceModeRef = useRef(false);
   const voiceRecognitionRef = useRef<NexusVoiceRecognition | null>(null);
@@ -126,6 +171,23 @@ export function CodingChatPanel() {
   const voiceInstructionRef = useRef("");
   const speechGenerationRef = useRef(0);
   const speechUnlockedRef = useRef(false);
+  const fileTree = useMemo(() => buildCodingTree(files), [files]);
+  const selectedFile = useMemo(
+    () => files.find((file) => file.name === selectedFileName) ?? null,
+    [files, selectedFileName],
+  );
+  const selectedFileIsHtml = selectedFile?.language === "html"
+    || /\.(?:html?|xhtml)$/i.test(selectedFile?.name ?? "");
+  const selectedFileCanPreview = Boolean(selectedFile && selectedFileIsHtml);
+
+  useEffect(() => {
+    if (selectedFileName && files.some((file) => file.name === selectedFileName)) return;
+    setSelectedFileName(files[0]?.name ?? null);
+  }, [files, selectedFileName]);
+
+  useEffect(() => {
+    folderInputRef.current?.setAttribute("webkitdirectory", "");
+  }, []);
 
   useEffect(() => {
     try {
@@ -514,24 +576,64 @@ export function CodingChatPanel() {
     if (!selected) return;
     const incoming = Array.from(selected);
     if (files.length + incoming.length > MAX_FILES) {
-      setError(`Attach no more than ${MAX_FILES} source files.`);
+      setError(`This workspace supports no more than ${MAX_FILES} source files.`);
       return;
     }
     const nextFiles: CodingFile[] = [];
     for (const file of incoming) {
       if (file.size > MAX_FILE_SIZE) {
-        setError(`${file.name} is too large. Keep each file under 500 KB.`);
+        setError(`${file.name} is too large. Keep each source file under 500 KB.`);
         continue;
       }
+      const fileName = file.webkitRelativePath || file.name;
       nextFiles.push({
-        name: file.name,
+        name: fileName,
         content: await file.text(),
-        language: languageFromName(file.name),
+        language: languageFromName(fileName),
       });
     }
-    setFiles((current) => [...current, ...nextFiles]);
-    if (nextFiles.length > 0) setError(null);
+    if (nextFiles.length > 0) {
+      setFiles((current) => {
+        const merged = new Map(current.map((file) => [file.name, file]));
+        for (const file of nextFiles) merged.set(file.name, file);
+        return Array.from(merged.values()).slice(0, MAX_FILES);
+      });
+      setSelectedFileName(nextFiles[0].name);
+      setError(null);
+    }
   }, [files.length]);
+
+  const updateSelectedFile = useCallback((content: string) => {
+    if (!selectedFileName) return;
+    setFiles((current) => current.map((file) => (
+      file.name === selectedFileName ? { ...file, content } : file
+    )));
+  }, [selectedFileName]);
+
+  const openPreview = useCallback(() => {
+    const candidate = previewUrlDraft.trim();
+    if (!candidate) {
+      if (selectedFileCanPreview) {
+        setPreviewUrl("");
+        setShowPreview(true);
+        setError(null);
+      } else {
+        setError("Enter a running app URL or select an HTML file to preview.");
+      }
+      return;
+    }
+    try {
+      const url = new URL(candidate);
+      if (url.protocol !== "http:" && url.protocol !== "https:") {
+        throw new Error("Only HTTP and HTTPS preview URLs are supported.");
+      }
+      setPreviewUrl(url.toString());
+      setShowPreview(true);
+      setError(null);
+    } catch (previewError) {
+      setError(previewError instanceof Error ? previewError.message : "Enter a valid app preview URL.");
+    }
+  }, [previewUrlDraft, selectedFileCanPreview]);
 
   const send = useCallback(async (requestedQuery?: string) => {
     const query = (requestedQuery ?? input).trim();
@@ -611,6 +713,36 @@ export function CodingChatPanel() {
     abortRef.current?.abort();
   }, []);
 
+  const renderTreeNodes = (nodes: CodingTreeNode[], depth = 0): React.ReactNode[] => nodes.flatMap((node) => {
+    const row = node.kind === "file" ? (
+      <button
+        key={node.path}
+        type="button"
+        onClick={() => {
+          setSelectedFileName(node.path);
+          setShowFiles(true);
+        }}
+        className={`flex min-h-12 w-full items-center gap-2 rounded-lg px-2 text-left text-xs ${selectedFileName === node.path ? "bg-cyan-500/15 text-cyan-200" : "text-slate-400 hover:bg-slate-800/70 hover:text-slate-200"}`}
+        style={{ paddingLeft: `${8 + depth * 14}px` }}
+      >
+        <span className="shrink-0 font-mono text-[10px] text-cyan-400">{node.name.includes(".") ? "{" : "·"}</span>
+        <span className="min-w-0 truncate">{node.name}</span>
+      </button>
+    ) : (
+      <div key={node.path}>
+        <div
+          className="flex min-h-10 items-center gap-2 px-2 text-[10px] font-bold uppercase tracking-widest text-slate-500"
+          style={{ paddingLeft: `${8 + depth * 14}px` }}
+        >
+          <span className="text-amber-300">▾</span>
+          <span className="truncate">{node.name}</span>
+        </div>
+        {renderTreeNodes(node.children, depth + 1)}
+      </div>
+    );
+    return [row];
+  });
+
   return (
     <section className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl border border-cyan-500/20 bg-slate-950/70 shadow-panel" aria-label="Nexus Code workspace">
       <header className="shrink-0 border-b border-cyan-500/20 bg-slate-950/80 px-3 py-3 backdrop-blur sm:px-4">
@@ -629,9 +761,82 @@ export function CodingChatPanel() {
             </button>
           </div>
         </div>
+        <div className="mt-2 flex gap-2 lg:hidden">
+          <button
+            type="button"
+            onClick={() => setShowFiles((current) => !current)}
+            className={`min-h-12 rounded-xl border px-3 text-xs font-semibold ${showFiles ? "border-cyan-400/50 bg-cyan-500/15 text-cyan-200" : "border-slate-700 text-slate-400"}`}
+          >
+            Files {files.length > 0 ? `(${files.length})` : ""}
+          </button>
+          <button
+            type="button"
+            onClick={() => setShowPreview((current) => !current)}
+            className={`min-h-12 rounded-xl border px-3 text-xs font-semibold ${showPreview ? "border-violet-400/50 bg-violet-500/15 text-violet-200" : "border-slate-700 text-slate-400"}`}
+          >
+            Preview
+          </button>
+        </div>
       </header>
 
-      <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto px-3 py-4 sm:px-5 lg:px-8" style={{ WebkitOverflowScrolling: "touch" }}>
+      <div className="flex min-h-0 flex-1 flex-col lg:flex-row">
+        <aside className={`${showFiles ? "flex" : "hidden"} w-full shrink-0 flex-col border-b border-cyan-500/20 bg-slate-950/80 lg:flex lg:w-64 lg:border-b-0 lg:border-r`} aria-label="Project file tree">
+          <div className="flex min-h-14 shrink-0 items-center justify-between border-b border-slate-800 px-3">
+            <div>
+              <p className="text-[10px] font-bold uppercase tracking-widest text-cyan-400">Workspace</p>
+              <p className="mt-1 text-xs font-semibold text-slate-200">Project files</p>
+            </div>
+            <button type="button" onClick={() => setShowFiles(false)} className="min-h-12 min-w-12 rounded-xl text-xs text-slate-500 lg:hidden" aria-label="Close file tree">
+              ×
+            </button>
+          </div>
+          <div className="flex shrink-0 gap-2 border-b border-slate-800 p-3">
+            <input
+              ref={folderInputRef}
+              type="file"
+              multiple
+              className="hidden"
+              onChange={(event) => {
+                void addFiles(event.target.files);
+                event.target.value = "";
+              }}
+            />
+            <button type="button" onClick={() => folderInputRef.current?.click()} className="min-h-12 flex-1 rounded-xl bg-cyan-400 px-3 text-xs font-bold text-slate-950">
+              Open folder
+            </button>
+            <button type="button" onClick={() => fileInputRef.current?.click()} className="min-h-12 min-w-12 rounded-xl border border-slate-700 text-lg text-slate-300" aria-label="Add files">
+              +
+            </button>
+          </div>
+          <div className="min-h-0 flex-1 overflow-y-auto p-2" style={{ WebkitOverflowScrolling: "touch" }}>
+            {fileTree.length > 0 ? renderTreeNodes(fileTree) : (
+              <div className="rounded-xl border border-dashed border-slate-700 p-4 text-xs leading-5 text-slate-500">
+                Open your project folder or attach source files to build the file tree.
+              </div>
+            )}
+          </div>
+          {selectedFile && (
+            <div className="flex min-h-0 max-h-[42dvh] shrink-0 flex-col border-t border-slate-800">
+              <div className="flex min-h-12 items-center justify-between gap-2 px-3">
+                <span className="truncate text-[10px] font-bold uppercase tracking-widest text-slate-500">{selectedFile.name}</span>
+                <span className="shrink-0 text-[10px] text-slate-600">{selectedFile.language ?? "text"}</span>
+              </div>
+              <textarea
+                value={selectedFile.content}
+                onChange={(event) => updateSelectedFile(event.target.value)}
+                aria-label={`Edit ${selectedFile.name}`}
+                className="min-h-32 flex-1 resize-y border-0 border-t border-slate-800 bg-slate-950 px-3 py-3 font-mono text-base leading-5 text-slate-300 focus:outline-none"
+              />
+              {selectedFileCanPreview && (
+                <button type="button" onClick={() => { setPreviewUrl(""); setShowPreview(true); }} className="m-2 min-h-12 rounded-xl border border-violet-400/30 bg-violet-500/10 px-3 text-xs font-semibold text-violet-200">
+                  Preview this HTML
+                </button>
+              )}
+            </div>
+          )}
+        </aside>
+
+        <div ref={scrollRef} className={`${showFiles || showPreview ? "hidden lg:flex" : "flex"} min-h-0 min-w-0 flex-1 flex-col overflow-y-auto px-3 py-4 sm:px-5 lg:px-8`} style={{ WebkitOverflowScrolling: "touch" }}>
         <div className="mx-auto flex max-w-5xl flex-col gap-4">
           {messages.map((message) => (
             <article
@@ -658,7 +863,6 @@ export function CodingChatPanel() {
             </div>
           )}
         </div>
-      </div>
 
       <div className="shrink-0 bg-slate-950/90 p-3 sm:p-4" style={{ paddingBottom: "max(env(safe-area-inset-bottom), 0.75rem)" }}>
         {(error || voiceError) && (
@@ -755,6 +959,80 @@ export function CodingChatPanel() {
           </div>
         </div>
         <p className="mt-2 text-[10px] text-slate-600">Ctrl/⌘ + Enter to send · attached files are used as coding context</p>
+      </div>
+        </div>
+
+        <aside className={`${showPreview ? "flex" : "hidden"} w-full shrink-0 flex-col border-t border-cyan-500/20 bg-slate-950/80 lg:flex lg:w-[min(34vw,28rem)] lg:border-l lg:border-t-0`} aria-label="Application preview">
+          <div className="flex min-h-14 shrink-0 items-center justify-between border-b border-slate-800 px-3">
+            <div>
+              <p className="text-[10px] font-bold uppercase tracking-widest text-violet-300">Preview</p>
+              <p className="mt-1 text-xs font-semibold text-slate-200">View your app</p>
+            </div>
+            <button type="button" onClick={() => setShowPreview(false)} className="min-h-12 min-w-12 rounded-xl text-xs text-slate-500 lg:hidden" aria-label="Close app preview">
+              ×
+            </button>
+          </div>
+          <div className="shrink-0 space-y-2 border-b border-slate-800 p-3">
+            <div className="flex gap-2">
+              <input
+                value={previewUrlDraft}
+                onChange={(event) => setPreviewUrlDraft(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") {
+                    event.preventDefault();
+                    openPreview();
+                  }
+                }}
+                placeholder="https://your-app-preview..."
+                aria-label="Running app preview URL"
+                className="min-w-0 flex-1 rounded-xl border border-slate-700 bg-slate-900 px-3 py-3 text-base text-slate-200 placeholder:text-slate-600 focus:border-violet-400/60 focus:outline-none"
+              />
+              <button type="button" onClick={openPreview} className="min-h-12 min-w-12 rounded-xl bg-violet-400 px-3 text-xs font-bold text-slate-950" aria-label="Open app preview">
+                Open
+              </button>
+            </div>
+            <div className="flex items-center gap-2">
+              <button type="button" onClick={() => setPreviewDevice("mobile")} className={`min-h-12 flex-1 rounded-xl border text-xs font-semibold ${previewDevice === "mobile" ? "border-violet-400/50 bg-violet-500/15 text-violet-200" : "border-slate-700 text-slate-500"}`}>
+                Mobile
+              </button>
+              <button type="button" onClick={() => setPreviewDevice("desktop")} className={`min-h-12 flex-1 rounded-xl border text-xs font-semibold ${previewDevice === "desktop" ? "border-violet-400/50 bg-violet-500/15 text-violet-200" : "border-slate-700 text-slate-500"}`}>
+                Desktop
+              </button>
+              {previewUrl && (
+                <button type="button" onClick={() => window.open(previewUrl, "_blank", "noopener,noreferrer")} className="min-h-12 rounded-xl border border-slate-700 px-3 text-xs font-semibold text-slate-300">
+                  New tab
+                </button>
+              )}
+            </div>
+          </div>
+          <div className="min-h-0 flex-1 overflow-auto p-3" style={{ WebkitOverflowScrolling: "touch" }}>
+            {previewUrl || selectedFileCanPreview ? (
+              <div className={`mx-auto overflow-hidden rounded-2xl border border-slate-700 bg-white shadow-2xl ${previewDevice === "mobile" ? "max-w-[390px]" : "w-full"}`}>
+                <div className="flex h-8 items-center gap-1 border-b border-slate-300 bg-slate-100 px-3">
+                  <span className="h-2 w-2 rounded-full bg-rose-400" />
+                  <span className="h-2 w-2 rounded-full bg-amber-400" />
+                  <span className="h-2 w-2 rounded-full bg-emerald-400" />
+                  <span className="ml-2 min-w-0 flex-1 truncate text-[9px] text-slate-500">{previewUrl || selectedFile?.name}</span>
+                </div>
+                <iframe
+                  key={`${previewUrl}:${selectedFileName}:${selectedFile?.content.length ?? 0}`}
+                  src={previewUrl || undefined}
+                  srcDoc={previewUrl ? undefined : selectedFile?.content}
+                  title="Nexus Code application preview"
+                  sandbox="allow-forms allow-modals allow-popups allow-presentation allow-scripts"
+                  className={`block h-[55dvh] min-h-[360px] w-full bg-white ${previewDevice === "mobile" ? "min-w-[360px]" : ""}`}
+                />
+              </div>
+            ) : (
+              <div className="flex min-h-[320px] flex-col items-center justify-center rounded-2xl border border-dashed border-slate-700 px-5 text-center">
+                <p className="text-sm font-semibold text-slate-300">No app preview loaded</p>
+                <p className="mt-2 max-w-xs text-xs leading-5 text-slate-500">
+                  Select an HTML file for a local preview, or paste the URL of your running app above.
+                </p>
+              </div>
+            )}
+          </div>
+        </aside>
       </div>
     </section>
   );
