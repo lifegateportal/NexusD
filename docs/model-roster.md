@@ -114,3 +114,9 @@ fast, while every revision can be reverted from the coding workspace. Generated
 code is never executed inside the Next.js web process. Execution requires the
 optional isolated runner configured with `CODING_RUNNER_URL` and
 `CODING_RUNNER_TOKEN`.
+
+The runner implementation lives in [`coding-runner/`](../coding-runner/). It
+accepts a revision, starts an ephemeral Docker sandbox with network disabled by
+default, and returns a queued run for polling. Keep the runner on a dedicated
+host or VM because access to `/var/run/docker.sock` is equivalent to host
+administrative access.

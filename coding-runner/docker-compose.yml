@@ -1,0 +1,30 @@
+services:
+  coding-runner-sandbox:
+    build:
+      context: ./sandbox
+      dockerfile: Dockerfile
+    image: nexus-coding-sandbox:local
+
+  coding-runner:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    depends_on:
+      - coding-runner-sandbox
+    environment:
+      PORT: "8090"
+      CODING_RUNNER_TOKEN: ${CODING_RUNNER_TOKEN:?Set CODING_RUNNER_TOKEN before starting the runner}
+      CODING_RUNNER_IMAGE: nexus-coding-sandbox:local
+      CODING_RUNNER_WORK_ROOT: /var/lib/nexus-runner
+      CODING_RUNNER_HOST_WORK_ROOT: ${CODING_RUNNER_HOST_WORK_ROOT:?Set CODING_RUNNER_HOST_WORK_ROOT to an absolute host path}
+      CODING_RUNNER_TIMEOUT_MS: ${CODING_RUNNER_TIMEOUT_MS:-120000}
+      CODING_RUNNER_MAX_CONCURRENT: ${CODING_RUNNER_MAX_CONCURRENT:-2}
+    ports:
+      - "127.0.0.1:8090:8090"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ${CODING_RUNNER_HOST_WORK_ROOT:?Set CODING_RUNNER_HOST_WORK_ROOT to an absolute host path}:/var/lib/nexus-runner
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m
+    user: "0:0"
+    restart: unless-stopped
