@@ -8,8 +8,10 @@ import {
   type CodingMode,
 } from "@/lib/coding-chat";
 import {
+  applyCodingPatches,
   CodingAgentEventSchema,
   extractCodingFiles,
+  extractCodingPatches,
   type CodingAgentEvent,
 } from "@/lib/coding-workspace";
 
@@ -94,6 +96,15 @@ file contents
 \`\`\`
 - Keep the file path relative, use forward slashes, and place explanations outside these blocks.
 - The Nexus Code client uses these blocks to build and update its browser-local project tree while the response streams.
+- For a targeted edit to an existing file, prefer an exact search/replace patch instead of rewriting the whole file:
+\`\`\`nexus-patch path="src/example.ts"
+\u003c\u003c\u003c\u003c\u003c\u003c\u003c SEARCH
+exact existing text
+${"=".repeat(7)}
+replacement text
+\u003e\u003e\u003e\u003e\u003e\u003e\u003e REPLACE
+\`\`\`
+- Patch search text must match exactly once. Use a nexus-file block for new files or when a complete replacement is safer.
 - Do not emit nexus-file blocks for a pure explanation or plan unless the user explicitly requests implementation files.`;
 }
 
@@ -186,13 +197,19 @@ export async function POST(request: NextRequest) {
           if (!fullText.trim()) throw new Error("Nexus Code returned an empty response.");
           if (input.workspaceId) {
             const generatedFiles = extractCodingFiles(fullText);
-            if (generatedFiles.length > 0) {
+            const generatedPatches = extractCodingPatches(fullText);
+            const patchedFiles = generatedPatches.length > 0
+              ? applyCodingPatches(input.files, generatedPatches)
+              : [];
+            const proposedFiles = new Map(patchedFiles.map((file) => [file.name, file]));
+            for (const file of generatedFiles) proposedFiles.set(file.name, file);
+            if (proposedFiles.size > 0) {
               writeEvent({
                 type: "files.proposed",
                 runId,
                 workspaceId: input.workspaceId,
                 createdAt: new Date().toISOString(),
-                files: generatedFiles,
+                files: Array.from(proposedFiles.values()).slice(0, 200),
                 reason: input.query.slice(0, 400),
               });
             }

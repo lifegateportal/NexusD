@@ -1231,7 +1231,6 @@ export function CodingChatPanel() {
                 Delete
               </button>
             </div>
-            <p className="mt-1 text-xs text-slate-500">DeepSeek Chat default · R1 available for difficult reasoning</p>
           </div>
           <div className="flex shrink-0 items-center gap-2">
             <div className={`rounded-full border px-2.5 py-1 text-[10px] font-semibold ${loading ? "border-amber-400/40 text-amber-300" : "border-emerald-400/30 text-emerald-300"}`}>

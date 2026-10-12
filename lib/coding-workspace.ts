@@ -34,6 +34,23 @@ export const CodingWorkspaceFileSchema = z.object({
 
 export type CodingWorkspaceFile = z.infer<typeof CodingWorkspaceFileSchema>;
 
+export const CodingFilePatchSchema = z.object({
+  name: z.string().trim().min(1).max(240),
+  search: z.string().min(1).max(500_000),
+  replace: z.string().max(500_000),
+}).strict().superRefine((patch, context) => {
+  const normalized = normalizeCodingFilePath(patch.name);
+  if (!normalized || normalized !== patch.name) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["name"],
+      message: "Coding patch paths must be relative and normalized.",
+    });
+  }
+});
+
+export type CodingFilePatch = z.infer<typeof CodingFilePatchSchema>;
+
 export function codingLanguageFromName(name: string): string | undefined {
   const extension = name.split(".").pop()?.toLowerCase();
   if (!extension) return undefined;
@@ -84,6 +101,51 @@ export function extractCodingFiles(content: string): CodingWorkspaceFile[] {
     if (parsed.success) generated.push(parsed.data);
   }
   return generated;
+}
+
+export function extractCodingPatches(content: string): CodingFilePatch[] {
+  const pattern = /```nexus-patch\s+path=(?:"([^"]+)"|'([^']+)'|([^\s]+))\s*\n([\s\S]*?)```/gi;
+  const patchSections = new RegExp(
+    `${"<".repeat(7)} SEARCH\n([\\s\\S]*?)\n${"=".repeat(7)}\n([\\s\\S]*?)\n${">".repeat(7)} REPLACE\\s*$`,
+  );
+  const patches: CodingFilePatch[] = [];
+  let match: RegExpExecArray | null;
+  while ((match = pattern.exec(content)) !== null) {
+    const name = normalizeCodingFilePath(match[1] ?? match[2] ?? match[3] ?? "");
+    const body = match[4] ?? "";
+    const sections = body.match(patchSections);
+    if (!name || !sections) continue;
+    const parsed = CodingFilePatchSchema.safeParse({
+      name,
+      search: sections[1],
+      replace: sections[2],
+    });
+    if (parsed.success) patches.push(parsed.data);
+  }
+  return patches;
+}
+
+export function applyCodingPatches(
+  files: CodingWorkspaceFile[],
+  patches: CodingFilePatch[],
+): CodingWorkspaceFile[] {
+  const updated = new Map(files.map((file) => [file.name, file]));
+  for (const patch of patches) {
+    const file = updated.get(patch.name);
+    if (!file) throw new Error(`Cannot apply patch: ${patch.name} is not in the workspace.`);
+    const firstIndex = file.content.indexOf(patch.search);
+    if (firstIndex < 0) {
+      throw new Error(`Cannot apply patch: search text was not found in ${patch.name}.`);
+    }
+    if (file.content.indexOf(patch.search, firstIndex + patch.search.length) >= 0) {
+      throw new Error(`Cannot apply patch: search text is ambiguous in ${patch.name}.`);
+    }
+    updated.set(patch.name, {
+      ...file,
+      content: `${file.content.slice(0, firstIndex)}${patch.replace}${file.content.slice(firstIndex + patch.search.length)}`,
+    });
+  }
+  return Array.from(updated.values());
 }
 
 export const CodingWorkspaceSchema = z.object({
