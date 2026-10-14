@@ -44,8 +44,9 @@ export async function POST(req: NextRequest) {
         };
         const phase1Source = buildPhase1Source(input.rawTranscript);
         const hasVideoSource = input.assets.some((asset) => asset.type.toLowerCase() === "video");
+        const requestedLessonTypes = input.buildBrief?.allowedLessonTypes ?? ["video", "reading", "quiz", "exercise"];
         const lessonTypeInstruction = hasVideoSource
-          ? "Use video only when it genuinely improves the lesson; reading, quiz, and exercise are also available."
+          ? `Use only these requested lesson types: ${requestedLessonTypes.join(", ")}.`
           : "This course has no video source. Use only reading, quiz, or exercise lessons. Never create a video lesson or imply that a video exists.";
         const phase1SourceSection = phase1Source
           ? `\n\nSOURCE MATERIAL:\n${phase1Source}`
@@ -53,6 +54,12 @@ export async function POST(req: NextRequest) {
 
         const deliverySection = input.deliveryInstructions
           ? `\n\nDELIVERY INSTRUCTIONS:\n${input.deliveryInstructions}`
+          : "";
+        const buildBriefSection = input.buildBrief
+          ? `\n\nCOURSE BUILD BRIEF:\n${JSON.stringify(input.buildBrief)}`
+          : "";
+        const coursePlanSection = input.coursePlan
+          ? `\n\nAPPROVED COURSE OUTLINE — preserve these module and lesson titles, types, and durations exactly:\n${JSON.stringify(input.coursePlan)}`
           : "";
 
         const basePrompt = JSON.stringify({
@@ -63,6 +70,8 @@ export async function POST(req: NextRequest) {
           executionPlan: input.executionPlan,
           entities: input.entities,
           visualDirection: input.visualDirection,
+          buildBrief: input.buildBrief,
+          coursePlan: input.coursePlan,
         });
 
         // ── Scale: calibrate module/theme count to source length ─────────────
@@ -70,13 +79,21 @@ export async function POST(req: NextRequest) {
         // Text files scale similarly by content density.
         const transcriptChars = (input.rawTranscript ?? "").length;
         const estMinutes      = Math.max(1, Math.round(transcriptChars / 800));
-        const scale = estMinutes < 5
+        const generatedScale = estMinutes < 5
           ? { minThemes: 1, maxThemes: 2, minMods: 1, maxMods: 1, maxIdx: 1 }
           : estMinutes < 15
           ? { minThemes: 2, maxThemes: 2, minMods: 2, maxMods: 2, maxIdx: 1 }
           : estMinutes < 40
           ? { minThemes: 3, maxThemes: 3, minMods: 3, maxMods: 3, maxIdx: 2 }
           : { minThemes: 3, maxThemes: 4, minMods: 3, maxMods: 4, maxIdx: 3 };
+        const scale = input.coursePlan
+          ? {
+              ...generatedScale,
+              minMods: input.coursePlan.modules.length,
+              maxMods: input.coursePlan.modules.length,
+              maxIdx: Math.max(0, input.coursePlan.modules.length - 1),
+            }
+          : generatedScale;
 
         const themeCountLabel = scale.minThemes === scale.maxThemes
           ? `exactly ${scale.minThemes}`
@@ -163,6 +180,7 @@ OUTPUT ALL ACADEMY FIELDS. Keep the output focused enough to validate reliably.
 FOR THE CURRICULUM: produce ${modCountLabel} module${scale.maxMods === 1 ? "" : "s"} within the schema limits. Give each module 2–3 useful lesson outlines. Lesson outline = title + type + durationMinutes only.
 DO NOT write notes, quiz, keyTakeaways, or actionItems in this phase.
 ${lessonTypeInstruction}
+${input.coursePlan ? "The approved course outline is authoritative. Copy its module and lesson structure exactly; do not add, remove, rename, or reorder anything." : ""}
 
 Use the content map as useful research, not as a rigid script. Let the source, the delivery preferences, and your judgment determine the best curriculum flow. Avoid needless repetition, but allow concepts to connect across modules when that improves teaching.
 
@@ -194,14 +212,40 @@ EDITORIAL JUDGMENT:
 - Make the academy coherent, engaging, and useful rather than mechanically mirroring the source.
 - Use the delivery preferences as first-class direction for voice, audience, emphasis, and presentation.
 - Add reasonable framing and learner-facing language when it improves the result, but do not invent specific source claims, quotations, statistics, or attributions.`,
-          prompt: basePrompt + contentMapSection + phase1SourceSection + deliverySection,
+          prompt: basePrompt + contentMapSection + phase1SourceSection + deliverySection + buildBriefSection + coursePlanSection,
         });
+        const approvedCurriculum = input.coursePlan
+          ? input.coursePlan.modules.map((module) => ({
+              moduleTitle: module.moduleTitle,
+              moduleDescription: module.moduleDescription,
+              lessonOutlines: module.lessons.map((lesson) => ({
+                title: lesson.title,
+                type: lesson.type,
+                durationMinutes: lesson.durationMinutes,
+              })),
+            }))
+          : null;
         const shell = {
           ...generatedShell,
-          curriculum: generatedShell.curriculum.map((module) => ({
+          academyName: input.coursePlan?.courseTitle ?? generatedShell.academyName,
+          targetAudience: input.buildBrief?.audience || generatedShell.targetAudience,
+          difficultyLevel: input.buildBrief?.difficultyLevel ?? generatedShell.difficultyLevel,
+          totalEstimatedHours: approvedCurriculum
+            ? Math.round(
+                approvedCurriculum
+                  .flatMap((module) => module.lessonOutlines)
+                  .reduce((sum, lesson) => sum + lesson.durationMinutes, 0)
+                / 60
+                * 10,
+              ) / 10
+            : generatedShell.totalEstimatedHours,
+          certificateTitle: input.buildBrief?.includeCertificate
+            ? (generatedShell.certificateTitle || `Certificate in ${input.coursePlan?.courseTitle ?? generatedShell.academyName}`)
+            : generatedShell.certificateTitle,
+          curriculum: (approvedCurriculum ?? generatedShell.curriculum).map((module) => ({
             ...module,
             lessonOutlines: module.lessonOutlines.map((lesson) => (
-              !hasVideoSource && lesson.type === "video"
+              (!hasVideoSource || !requestedLessonTypes.includes(lesson.type)) && lesson.type === "video"
                 ? { ...lesson, type: "reading" as const }
                 : lesson
             )),
@@ -289,6 +333,8 @@ Use the source, the module outline, and the delivery preferences as direction. M
               "",
               phase1Source ? `SOURCE MATERIAL:\n${phase1Source}` : "",
               deliverySection,
+              buildBriefSection,
+              coursePlanSection,
               learnerVoiceRule,
             ].filter(Boolean).join("\n"),
           });

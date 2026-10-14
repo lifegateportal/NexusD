@@ -2,22 +2,24 @@
 
 import type { PipelineStage } from "@/lib/types";
 
-export type AcademyStepId = "overview" | "build" | "produce" | "deploy";
+export type AcademyStepId = "overview" | "brief" | "outline" | "review" | "deploy";
 
 type Props = {
   activeStep: AcademyStepId | null;
   pipelineStage: PipelineStage;
   hasBlueprint: boolean;
-  hasLogic: boolean;
-  hasUi: boolean;
+  hasBuildBrief: boolean;
+  hasCoursePlan: boolean;
   hasAcademy: boolean;
+  hasPublishedCourse?: boolean;
   onSelect: (step: AcademyStepId) => void;
 };
 
 const STEPS: Array<{ id: AcademyStepId; label: string; description: string }> = [
   { id: "overview", label: "Source", description: "Add material" },
-  { id: "build", label: "Build", description: "Plan and generate" },
-  { id: "produce", label: "Review", description: "Check the course" },
+  { id: "brief", label: "Define", description: "Choose the build" },
+  { id: "outline", label: "Outline", description: "Shape the course" },
+  { id: "review", label: "Review", description: "Edit the content" },
   { id: "deploy", label: "Deploy", description: "Publish to Academy" },
 ];
 
@@ -32,22 +34,25 @@ export function AcademyPipelineStepper({
   activeStep,
   pipelineStage,
   hasBlueprint,
-  hasLogic,
-  hasUi,
+  hasBuildBrief,
+  hasCoursePlan,
   hasAcademy,
+  hasPublishedCourse = false,
   onSelect,
 }: Props) {
   const readyByStep: Record<AcademyStepId, boolean> = {
     overview: true,
-    build: hasBlueprint,
-    produce: hasAcademy,
+    brief: hasBlueprint,
+    outline: hasBuildBrief,
+    review: hasCoursePlan,
     deploy: hasAcademy,
   };
   const completedByStep: Record<AcademyStepId, boolean> = {
     overview: hasBlueprint,
-    build: hasLogic && hasUi,
-    produce: hasAcademy && pipelineStage === "done",
-    deploy: false,
+    brief: hasBuildBrief,
+    outline: hasCoursePlan,
+    review: hasAcademy && pipelineStage === "done",
+    deploy: hasPublishedCourse,
   };
 
   return (

@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { AcademyBuildBriefSchema, AcademyOutlineSchema } from "@/lib/schemas/academy-build";
 
 export const ProduceInputSchema = z.object({
   title: z.string(),
@@ -37,6 +38,8 @@ export const ProduceInputSchema = z.object({
   visualDirection: z.string(),
   rawTranscript: z.string().optional(),
   deliveryInstructions: z.string().optional(),
+  buildBrief: AcademyBuildBriefSchema.optional(),
+  coursePlan: AcademyOutlineSchema.optional(),
 });
 
 export const AcademyPackageSchema = z.object({

@@ -8,6 +8,9 @@ import { TerminalLog } from "@/app/components/TerminalLog";
 import { MediaUpload } from "@/app/components/MediaUpload";
 import { AcademyPipelineStepper, type AcademyStepId } from "@/app/components/AcademyPipelineStepper";
 import { PipelineResults } from "@/app/components/PipelineResults";
+import { AcademyBuildBrief } from "@/app/components/AcademyBuildBrief";
+import { AcademyOutlineEditor } from "@/app/components/AcademyOutlineEditor";
+import { AcademyCourseEditor } from "@/app/components/AcademyCourseEditor";
 import { AssistantPanel } from "@/app/components/AssistantPanel";
 import { ProjectsPanel } from "@/app/components/ProjectsPanel";
 import { EbookPipeline } from "@/app/components/EbookPipeline";
@@ -25,6 +28,15 @@ import type {
 import { LogicTransformResultSchema } from "@/lib/schemas/blueprint";
 import { UiManifestResultSchema } from "@/lib/schemas/ui-manifest";
 import { AcademyPackageSchema } from "@/lib/schemas/academy";
+import {
+  AcademyBuildBriefSchema,
+  AcademyOutlineSchema,
+  defaultAcademyBuildBrief,
+  isAcademyBuildBriefConfigured,
+  recommendAcademyBuildBrief,
+  type AcademyBuildBrief as AcademyBuildBriefData,
+  type AcademyOutline,
+} from "@/lib/schemas/academy-build";
 import type { LogicTransformResult } from "@/lib/schemas/blueprint";
 import type { UiManifestResult } from "@/lib/schemas/ui-manifest";
 import type { AcademyPackage } from "@/lib/schemas/academy";
@@ -68,6 +80,13 @@ export default function HomePage() {
   const [logicResult, setLogicResult] = useState<LogicTransformResult | null>(null);
   const [uiResult,    setUiResult]    = useState<UiManifestResult | null>(null);
   const [academyResult, setAcademyResult] = useState<AcademyPackage | null>(null);
+  const [buildBrief, setBuildBrief] = useState<AcademyBuildBriefData>(() => defaultAcademyBuildBrief(false));
+  const [coursePlan, setCoursePlan] = useState<AcademyOutline | null>(null);
+  const [planError, setPlanError] = useState<string | null>(null);
+  const [isPlanning, setIsPlanning] = useState(false);
+  const [isBuilding, setIsBuilding] = useState(false);
+  const [editorSaving, setEditorSaving] = useState(false);
+  const [editorError, setEditorError] = useState<string | null>(null);
   const [rawTranscript, setRawTranscript] = useState<string>("");
   const [deliveryInstructions, setDeliveryInstructions] = useState<string>("");
   const [assistantOpen, setAssistantOpen] = useState(false);
@@ -215,11 +234,66 @@ export default function HomePage() {
     }
   }, []);
 
-  const handleAssistantUpdate = useCallback((updated: AcademyPackage, summary: string) => {
+  const persistAcademyUpdate = useCallback(async (updated: AcademyPackage, summary: string) => {
     setAcademyResult(updated);
     localStorage.setItem("nexus_academy_preview", JSON.stringify(updated));
     addLog({ level: "success", message: `Director: ${summary}`, model: "deepseek" });
-  }, [addLog]);
+    if (!currentProjectId) return;
+
+    try {
+      const existing = await getAcademyProject(currentProjectId).catch(() => null)
+        ?? await fetchAcademyProjectFromCloud(currentProjectId).catch(() => null);
+      if (!existing) {
+        addLog({ level: "warn", message: "Academy updated in this workspace, but the saved project could not be found." });
+        return;
+      }
+      const updatedProject: AcademyProject = {
+        ...existing,
+        academy: updated,
+        buildBrief,
+        coursePlan,
+        siteConfig,
+        deliveryInstructions,
+        chatHistory,
+        blueprint,
+        logicResult,
+        uiResult,
+        academyDraftVersion: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      };
+      await saveAcademyProject(updatedProject);
+      const response = await fetch("/api/academy/projects", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ project: updatedProject }),
+      });
+      if (!response.ok) {
+        const payload = await response.json().catch(() => null) as { error?: string } | null;
+        throw new Error(payload?.error ?? `HTTP ${response.status}`);
+      }
+      setProjects(await listAcademyProjectSummaries());
+    } catch (error) {
+      addLog({
+        level: "warn",
+        message: `Academy updated locally, but project persistence failed: ${error instanceof Error ? error.message : "unknown error"}`,
+      });
+    }
+  }, [
+    addLog,
+    blueprint,
+    buildBrief,
+    chatHistory,
+    coursePlan,
+    currentProjectId,
+    deliveryInstructions,
+    logicResult,
+    siteConfig,
+    uiResult,
+  ]);
+
+  const handleAssistantUpdate = useCallback((updated: AcademyPackage, summary: string) => {
+    void persistAcademyUpdate(updated, summary);
+  }, [persistAcademyUpdate]);
 
   const handleSiteUpdate = useCallback((config: SiteConfig, summary: string) => {
     setSiteConfig(config);
@@ -232,8 +306,13 @@ export default function HomePage() {
     setEbookManifest(manifest);
   }, []);
 
-  const handleSaveProject = useCallback(async (name: string, folderId?: string): Promise<boolean> => {
-    if (!academyResult) {
+  const handleSaveProject = useCallback(async (
+    name: string,
+    folderId?: string,
+    academyOverride?: AcademyPackage,
+  ): Promise<boolean> => {
+    const academyToSave = academyOverride ?? academyResult;
+    if (!academyToSave) {
       addLog({ level: "error", message: "No Academy package is ready to save." });
       return false;
     }
@@ -247,7 +326,9 @@ export default function HomePage() {
       createdAt: existingProject?.createdAt ?? new Date().toISOString(),
       updatedAt: new Date().toISOString(),
       folderId: existingProject?.folderId ?? folderId ?? UNFILED_FOLDER_ID,
-      academy: academyResult,
+      academy: academyToSave,
+      buildBrief,
+      coursePlan,
       siteConfig,
       deliveryInstructions,
       chatHistory,
@@ -255,6 +336,8 @@ export default function HomePage() {
       logicResult: logicResult ?? null,
       uiResult: uiResult ?? null,
       academyPublishedSlug: existingProject?.academyPublishedSlug,
+      academyDraftVersion: new Date().toISOString(),
+      academyPublishedVersion: existingProject?.academyPublishedVersion,
     };
     try {
       await saveAcademyProject(snapshot);
@@ -283,7 +366,7 @@ export default function HomePage() {
       addLog({ level: "error", message: `Could not save Academy project: ${msg}` });
       return false;
     }
-  }, [currentProjectId, academyResult, siteConfig, deliveryInstructions, chatHistory, blueprint, logicResult, uiResult, addLog]);
+  }, [academyResult, blueprint, buildBrief, chatHistory, coursePlan, currentProjectId, deliveryInstructions, logicResult, siteConfig, uiResult, addLog]);
 
   const persistProjectFolderChanges = useCallback(async (changes: Record<string, string>) => {
     for (const project of projects) {
@@ -400,14 +483,20 @@ export default function HomePage() {
     setLogicResult(project.logicResult);
     setUiResult(project.uiResult);
     setAcademyResult(project.academy);
+    setBuildBrief(AcademyBuildBriefSchema.parse(project.buildBrief));
+    setCoursePlan(project.coursePlan ? AcademyOutlineSchema.parse(project.coursePlan) : null);
+    setPlanError(null);
+    setEditorError(null);
     setSiteConfig(SiteConfigSchema.parse(project.siteConfig));
     setDeliveryInstructions(project.deliveryInstructions);
     setChatHistory(project.chatHistory);
     setPanelLoadKey(project.id);
     setCurrentProjectId(project.id);
     setStage(project.academy ? "done" : "idle");
-    setActiveNav("overview");
+    setActiveNav(project.academy ? "review" : project.coursePlan ? "outline" : project.blueprint ? "brief" : "overview");
     localStorage.setItem("nexus_academy_preview", JSON.stringify(project.academy));
+    localStorage.setItem("nexus_academy_build_brief", JSON.stringify(project.buildBrief));
+    localStorage.setItem("nexus_academy_course_plan", JSON.stringify(project.coursePlan));
     localStorage.setItem("nexus_site_config", JSON.stringify(project.siteConfig));
     localStorage.setItem("nexus_delivery_instructions", project.deliveryInstructions);
     addLog({ level: "success", message: `Academy project "${project.name}" loaded.` });
@@ -489,10 +578,22 @@ export default function HomePage() {
         return null;
       }
       const { slug } = await res.json() as { slug: string };
-      const updated = { ...fullSnapshot, academyPublishedSlug: slug };
+      const updated = {
+        ...fullSnapshot,
+        academyPublishedSlug: slug,
+        academyDraftVersion: fullSnapshot.academyDraftVersion ?? fullSnapshot.updatedAt,
+        academyPublishedVersion: fullSnapshot.academyDraftVersion ?? fullSnapshot.updatedAt,
+      };
       await saveAcademyProject(updated);
       setProjects((current) => current.map((project) => (
-        project.id === updated.id ? { ...project, academyPublishedSlug: slug } : project
+        project.id === updated.id
+          ? {
+              ...project,
+              academyPublishedSlug: slug,
+              academyDraftVersion: updated.academyDraftVersion,
+              academyPublishedVersion: updated.academyPublishedVersion,
+            }
+          : project
       )));
       const syncResponse = await fetch("/api/academy/projects", {
         method: "POST",
@@ -525,10 +626,12 @@ export default function HomePage() {
         addLog({ level: "error", message: err.error ?? "Academy unpublish failed." });
         return false;
       }
-      const updated = { ...fullSnapshot, academyPublishedSlug: undefined };
+      const updated = { ...fullSnapshot, academyPublishedSlug: undefined, academyPublishedVersion: undefined };
       await saveAcademyProject(updated);
       setProjects((current) => current.map((project) => (
-        project.id === updated.id ? { ...project, academyPublishedSlug: undefined } : project
+        project.id === updated.id
+          ? { ...project, academyPublishedSlug: undefined, academyPublishedVersion: undefined }
+          : project
       )));
       const syncResponse = await fetch("/api/academy/projects", {
         method: "POST",
@@ -560,6 +663,8 @@ export default function HomePage() {
     sourceText: string,
     existingLogic: LogicTransformResult | null,
     existingUi: UiManifestResult | null,
+    approvedBrief: AcademyBuildBriefData,
+    approvedPlan: AcademyOutline | null,
   ) => {
     try {
       let logicData = existingLogic;
@@ -647,6 +752,8 @@ export default function HomePage() {
           visualDirection: uiData.visualDirection,
           rawTranscript: sourceText,
           deliveryInstructions,
+          buildBrief: approvedBrief,
+          coursePlan: approvedPlan,
         })
       });
 
@@ -676,7 +783,7 @@ export default function HomePage() {
       const academyData = AcademyPackageSchema.parse(academyRaw);
       setAcademyResult(academyData);
       localStorage.setItem("nexus_academy_preview", JSON.stringify(academyData));
-      setActiveNav("produce");
+      setActiveNav("review");
       addLog({
         level: "success",
         message: `Academy package ready — ${academyData.curriculum.length} module${academyData.curriculum.length !== 1 ? "s" : ""}, ${academyData.pricing.length} pricing tiers`,
@@ -691,35 +798,114 @@ export default function HomePage() {
   }, [deliveryInstructions, addLog, handleStageChange]);
 
   const handleBlueprint = useCallback(async (ingestResult: IngestResult, sourceText = "") => {
+    const hasVideoSource = ingestResult.assets.some((asset) => asset.type.toLowerCase().includes("video"));
+    const nextBrief = AcademyBuildBriefSchema.parse({
+      ...defaultAcademyBuildBrief(hasVideoSource),
+      notes: deliveryInstructions.trim(),
+    });
     setCurrentProjectId("");
     setLogicResult(null);
     setUiResult(null);
     setAcademyResult(null);
+    setBuildBrief(nextBrief);
+    setCoursePlan(null);
+    setPlanError(null);
+    setEditorError(null);
     setBlueprint(ingestResult);
     setRawTranscript(sourceText);
-    setActiveNav("analyse");
+    setActiveNav("brief");
+    setStage("idle");
+    localStorage.setItem("nexus_academy_build_brief", JSON.stringify(nextBrief));
 
     addLog({
       level: "success",
       message: `Blueprint ready — ${ingestResult.workflow.length} step${ingestResult.workflow.length !== 1 ? "s" : ""}, ${ingestResult.assets.length} asset${ingestResult.assets.length !== 1 ? "s" : ""}`,
     });
+    addLog({ level: "info", message: "Define the course before any downstream generation begins." });
+  }, [addLog, deliveryInstructions]);
 
-    if (ingestResult.assets.length === 0 || ingestResult.workflow.length === 0) {
-      addLog({ level: "warn", message: "Blueprint has no assets or workflow — skipping logic + design stages" });
-      handleStageChange("done");
+  const handleGenerateOutline = useCallback(async (nextBrief: AcademyBuildBriefData) => {
+    if (!blueprint) return;
+    const parsedBrief = AcademyBuildBriefSchema.safeParse(nextBrief);
+    if (!parsedBrief.success || !isAcademyBuildBriefConfigured(parsedBrief.data)) {
+      setPlanError("Add an audience, learning outcome, and at least one lesson type before generating the outline.");
       return;
     }
 
-    await runDownstream(ingestResult, sourceText, null, null);
-  }, [addLog, handleStageChange, runDownstream]);
+    setBuildBrief(parsedBrief.data);
+    setPlanError(null);
+    setIsPlanning(true);
+    setStage("reasoning");
+    addLog({ level: "info", message: "Generating an editable course outline from the approved build brief…", model: "deepseek" });
+    try {
+      const response = await fetch("/api/academy/plan", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          blueprint,
+          sourceText: rawTranscript,
+          buildBrief: parsedBrief.data,
+        }),
+      });
+      const payload = await response.json().catch(() => null) as unknown;
+      if (!response.ok) {
+        const error = payload as { error?: string; detail?: string } | null;
+        throw new Error(error?.detail ?? error?.error ?? `Outline stage: HTTP ${response.status}`);
+      }
+      const parsedOutline = AcademyOutlineSchema.safeParse(
+        (payload && typeof payload === "object" && "outline" in payload)
+          ? (payload as { outline?: unknown }).outline
+          : payload,
+      );
+      if (!parsedOutline.success) {
+        throw new Error("The outline service returned an invalid course plan.");
+      }
+      setCoursePlan(parsedOutline.data);
+      setActiveNav("outline");
+      setStage("idle");
+      localStorage.setItem("nexus_academy_build_brief", JSON.stringify(parsedBrief.data));
+      localStorage.setItem("nexus_academy_course_plan", JSON.stringify(parsedOutline.data));
+      addLog({
+        level: "success",
+        message: `Editable outline ready — ${parsedOutline.data.modules.length} module${parsedOutline.data.modules.length !== 1 ? "s" : ""} to review`,
+        model: "deepseek",
+      });
+    } catch (error) {
+      setPlanError(error instanceof Error ? error.message : "Could not generate the course outline.");
+      setStage("error");
+      addLog({ level: "error", message: error instanceof Error ? error.message : "Could not generate the course outline." });
+    } finally {
+      setIsPlanning(false);
+    }
+  }, [addLog, blueprint, rawTranscript]);
+
+  const handleApproveOutline = useCallback(async (nextPlan: AcademyOutline) => {
+    if (!blueprint) return;
+    const parsedPlan = AcademyOutlineSchema.safeParse(nextPlan);
+    if (!parsedPlan.success) {
+      setPlanError("Save a valid course outline before building the course.");
+      return;
+    }
+    setCoursePlan(parsedPlan.data);
+    localStorage.setItem("nexus_academy_course_plan", JSON.stringify(parsedPlan.data));
+    setPlanError(null);
+    setIsBuilding(true);
+    setActiveNav("review");
+    await runDownstream(blueprint, rawTranscript, null, null, buildBrief, parsedPlan.data);
+    setIsBuilding(false);
+  }, [blueprint, buildBrief, rawTranscript, runDownstream]);
 
   // Resume from the first incomplete stage using whatever is already in state
   const handleResume = useCallback(async () => {
     if (!blueprint) return;
+    if (!coursePlan) {
+      setActiveNav("brief");
+      return;
+    }
     const resumeStage = !logicResult ? 2 : !uiResult ? 3 : 4;
     addLog({ level: "info", message: `Resuming pipeline from Stage ${resumeStage}…` });
-    await runDownstream(blueprint, rawTranscript, logicResult, uiResult);
-  }, [blueprint, rawTranscript, logicResult, uiResult, runDownstream, addLog]);
+    await runDownstream(blueprint, rawTranscript, logicResult, uiResult, buildBrief, coursePlan);
+  }, [blueprint, buildBrief, coursePlan, rawTranscript, logicResult, uiResult, runDownstream, addLog]);
 
   // Map Academy stepper stages to the result view they drive.
   const STAGE_VIEW_BY_NAV: Record<string, "blueprint" | "logic" | "ui" | "academy" | null> = {
@@ -728,6 +914,9 @@ export default function HomePage() {
     architect: "logic",
     design:    "ui",
     produce:   "academy",
+    brief:     null,
+    outline:   null,
+    review:    null,
     deploy:    null,
     projects:  null,
     ebook:     null,
@@ -743,10 +932,12 @@ export default function HomePage() {
   const showAcademyOverviewHeading = isAcademyWorkspace && activeNav === "overview";
   const activeAcademyStep: AcademyStepId | null = activeNav === "overview"
     ? "overview"
-    : activeNav === "analyse" || activeNav === "architect" || activeNav === "design"
-      ? "build"
-      : activeNav === "produce"
-        ? "produce"
+    : activeNav === "brief" || activeNav === "analyse"
+      ? "brief"
+      : activeNav === "outline" || activeNav === "architect" || activeNav === "design"
+        ? "outline"
+        : activeNav === "review" || activeNav === "produce"
+          ? "review"
         : activeNav === "deploy"
           ? "deploy"
           : null;
@@ -756,12 +947,20 @@ export default function HomePage() {
       setActiveNav("overview");
       return;
     }
-    if (step === "build") {
-      setActiveNav(!logicResult ? "analyse" : !uiResult ? "architect" : "design");
+    if (step === "brief") {
+      setActiveNav("brief");
+      return;
+    }
+    if (step === "outline") {
+      setActiveNav(coursePlan ? "outline" : "brief");
+      return;
+    }
+    if (step === "review") {
+      setActiveNav(academyResult ? "review" : coursePlan ? "outline" : "brief");
       return;
     }
     setActiveNav(step);
-  }, [logicResult, uiResult]);
+  }, [academyResult, coursePlan]);
 
   const handleSermonTranscriptSelectionChange = useCallback((sources: EbookTranscriptSource[]) => {
     const parsed = EbookTranscriptSourceSchema.array().safeParse(sources);
@@ -854,9 +1053,14 @@ export default function HomePage() {
             activeStep={activeAcademyStep}
             pipelineStage={stage}
             hasBlueprint={blueprint !== null}
-            hasLogic={logicResult !== null}
-            hasUi={uiResult !== null}
+            hasBuildBrief={isAcademyBuildBriefConfigured(buildBrief)}
+            hasCoursePlan={coursePlan !== null}
             hasAcademy={academyResult !== null}
+            hasPublishedCourse={Boolean(currentProjectId && projects.some((project) => (
+              project.id === currentProjectId
+              && project.academyPublishedSlug
+              && (!project.academyPublishedVersion || project.academyPublishedVersion === project.academyDraftVersion)
+            )))}
             onSelect={handleAcademyStepSelect}
           />
         )}
@@ -954,6 +1158,74 @@ export default function HomePage() {
                     onOpenEbookPipeline={handleOpenEbookPipeline}
                     pendingEbookTranscriptCount={ebookTranscriptImports.length}
                   />
+                ) : activeNav === "brief" ? (
+                  <AcademyBuildBrief
+                    brief={buildBrief}
+                    sourceTitle={blueprint?.title ?? "your source material"}
+                    hasVideoSource={Boolean(blueprint?.assets.some((asset) => asset.type.toLowerCase().includes("video")))}
+                    isGenerating={isPlanning}
+                    error={planError}
+                    onChange={(nextBrief) => {
+                      setBuildBrief(nextBrief);
+                      setPlanError(null);
+                    }}
+                    onRecommend={() => {
+                      if (!blueprint) return;
+                      const recommended = recommendAcademyBuildBrief(
+                        blueprint.summary,
+                        Boolean(blueprint.assets.some((asset) => asset.type.toLowerCase().includes("video"))),
+                      );
+                      setBuildBrief(recommended);
+                      setPlanError(null);
+                    }}
+                    onGenerateOutline={() => { void handleGenerateOutline(buildBrief); }}
+                  />
+                ) : activeNav === "outline" ? (
+                  coursePlan ? (
+                    <AcademyOutlineEditor
+                      outline={coursePlan}
+                      isBuilding={isBuilding}
+                      error={planError}
+                      onChange={(nextPlan) => {
+                        setCoursePlan(nextPlan);
+                        setPlanError(null);
+                        localStorage.setItem("nexus_academy_course_plan", JSON.stringify(nextPlan));
+                      }}
+                      onApprove={(nextPlan) => { void handleApproveOutline(nextPlan); }}
+                      onBack={() => setActiveNav("brief")}
+                    />
+                  ) : (
+                    <div className="flex min-h-[300px] items-center justify-center rounded-2xl border border-red-500/20 bg-red-500/5 p-5 text-sm text-red-200">
+                      Generate a course outline from the Define step before editing it.
+                    </div>
+                  )
+                ) : activeNav === "review" ? (
+                  academyResult ? (
+                    <AcademyCourseEditor
+                      academy={academyResult}
+                      saving={editorSaving}
+                      error={editorError}
+                      onSave={async (updated) => {
+                        setEditorSaving(true);
+                        setEditorError(null);
+                        try {
+                          await persistAcademyUpdate(updated, "Course studio changes saved.");
+                          if (!currentProjectId) {
+                            const saved = await handleSaveProject(updated.academyName, undefined, updated);
+                            if (!saved) throw new Error("Save the project before leaving the course studio.");
+                          }
+                        } catch (error) {
+                          setEditorError(error instanceof Error ? error.message : "Could not save course changes.");
+                        } finally {
+                          setEditorSaving(false);
+                        }
+                      }}
+                    />
+                  ) : (
+                    <div className="flex min-h-[300px] items-center justify-center rounded-2xl border border-cyan-500/20 bg-slate-950/40 p-5 text-sm text-slate-400">
+                      Build the course from the approved outline before opening the course studio.
+                    </div>
+                  )
                 ) : activeNav === "deploy" ? (
                   <div className="flex h-full flex-col gap-4 overflow-y-auto rounded-2xl border border-cyan-500/20 glass p-5">
                     <p className="text-[10px] font-bold uppercase tracking-widest text-cyan-500">Deploy</p>
@@ -1087,6 +1359,8 @@ export default function HomePage() {
         isOpen={assistantOpen}
         onClose={() => setAssistantOpen(false)}
         academy={academyResult}
+        buildBrief={buildBrief}
+        coursePlan={coursePlan}
         onUpdate={handleAssistantUpdate}
         siteConfig={siteConfig}
         onSiteUpdate={handleSiteUpdate}

@@ -7,6 +7,7 @@ import type { AcademyPackage } from "@/lib/schemas/academy";
 import { SiteConfigSchema } from "@/lib/schemas/site-config";
 import type { SiteConfig } from "@/lib/schemas/site-config";
 import { enforceAcademyMediaCapabilities, normalizeAcademyLearnerVoice } from "@/lib/academy-content";
+import { AcademyBuildBriefSchema, AcademyOutlineSchema } from "@/lib/schemas/academy-build";
 import { z } from "zod";
 
 export const runtime = "nodejs";
@@ -14,6 +15,8 @@ export const maxDuration = 120;
 
 const RequestSchema = z.object({
   academy:     AcademyPackageSchema,
+  buildBrief:  AcademyBuildBriefSchema.optional(),
+  coursePlan:  AcademyOutlineSchema.nullable().optional(),
   instruction: z.string().min(1).max(4000),
   siteConfig:  SiteConfigSchema.optional(),
   dryRun:       z.boolean().optional(),
@@ -199,7 +202,7 @@ export async function POST(req: NextRequest) {
     return new Response(JSON.stringify({ error: message }), { status: 400, headers: { "Content-Type": "application/json" } });
   }
 
-  const { academy, instruction, siteConfig } = parsedInput;
+  const { academy, buildBrief, coursePlan, instruction, siteConfig } = parsedInput;
   const dryRun = parsedInput.dryRun ?? false;
 
   // ── Optimistic locking ───────────────────────────────────────────────
@@ -249,6 +252,7 @@ export async function POST(req: NextRequest) {
 You are Nexus Director AI, an expert academy editor with control over the academy content, visual presentation, and site configuration. Treat the user's instruction as the creative authority. Use the complete academy context and your own editorial judgment to make the requested change, including broad or structural changes when the user asks for them.
 
 Return only fields that need to change so the server can merge your patch safely. Preserve unrelated content unless the user's request calls for a broader rewrite. You may create, rewrite, reorganize, or remove content when that is the clearest interpretation of the request; use clarificationNeeded only when a missing detail makes a correct change impossible. Keep generated claims consistent with the existing academy and any direction in the user's instruction.
+Treat the approved build brief and course outline as the current design contract; do not change structure or teaching direction unless the user explicitly asks for it.
 
 For curriculum changes, identify modules and lessons by their zero-based indexes in the supplied academy. Use curriculumPatches for module updates, inserts, deletes, and lessonPatches. Use operation="delete" only when the user's instruction actually requests removal. New modules must include complete lesson objects. Use the existing schema's enum values and field shapes.
 
@@ -259,6 +263,12 @@ For site changes, return siteConfigPatch with only the requested keys. For acade
         "",
         "CURRENT SITE CONFIG:",
         JSON.stringify(siteConfig ?? {}),
+        "",
+        "APPROVED BUILD BRIEF:",
+        JSON.stringify(buildBrief ?? {}),
+        "",
+        "APPROVED COURSE OUTLINE:",
+        JSON.stringify(coursePlan ?? {}),
         historyBlock,
         "",
         "USER INSTRUCTION:",

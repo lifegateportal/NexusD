@@ -43,6 +43,8 @@ function summary(project: z.infer<typeof AcademyProjectSchema>) {
     updatedAt: project.updatedAt,
     folderId: project.folderId,
     academyPublishedSlug: project.academyPublishedSlug,
+    academyDraftVersion: project.academyDraftVersion,
+    academyPublishedVersion: project.academyPublishedVersion,
     hasAcademy: true,
   };
 }

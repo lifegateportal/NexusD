@@ -291,6 +291,13 @@ export function AcademyProjectsPanel({
                     <div className="mt-2 space-y-2">
                       {project.academyPublishedSlug ? (
                         <>
+                          {project.academyPublishedVersion
+                            && project.academyDraftVersion
+                            && project.academyPublishedVersion !== project.academyDraftVersion && (
+                            <p className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs font-medium text-amber-300">
+                              Unpublished edits are ready. Republish to update the live course.
+                            </p>
+                          )}
                           <a
                             href={`/academy/${project.academyPublishedSlug}`}
                             target="_blank"

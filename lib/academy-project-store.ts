@@ -4,7 +4,7 @@ import { SiteConfigSchema } from "@/lib/schemas/site-config";
 import type { ProjectSnapshot } from "@/lib/project-store";
 
 export type AcademyProject = AcademyProjectRecord;
-export type AcademyProjectSummary = Omit<AcademyProject, "academy" | "siteConfig" | "blueprint" | "logicResult" | "uiResult" | "deliveryInstructions" | "chatHistory"> & {
+export type AcademyProjectSummary = Omit<AcademyProject, "academy" | "buildBrief" | "coursePlan" | "siteConfig" | "blueprint" | "logicResult" | "uiResult" | "deliveryInstructions" | "chatHistory"> & {
   academy: null;
   hasAcademy: true;
 };

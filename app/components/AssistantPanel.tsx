@@ -9,6 +9,7 @@ import type { AcademyPackage } from "@/lib/schemas/academy";
 import type { SiteConfig } from "@/lib/schemas/site-config";
 import type { EbookManifest } from "@/lib/schemas/ebook";
 import type { ChatMessage } from "@/lib/project-store";
+import type { AcademyBuildBrief, AcademyOutline } from "@/lib/schemas/academy-build";
 
 type Message = ChatMessage;
 
@@ -16,6 +17,8 @@ type AssistantPanelProps = {
   isOpen: boolean;
   onClose: () => void;
   academy: AcademyPackage | null;
+  buildBrief?: AcademyBuildBrief | null;
+  coursePlan?: AcademyOutline | null;
   onUpdate: (academy: AcademyPackage, summary: string) => void;
   siteConfig: SiteConfig;
   onSiteUpdate: (config: SiteConfig, summary: string) => void;
@@ -169,7 +172,7 @@ function formatAuditReport(r: BookAuditReport): string {
   return lines.join("\n");
 }
 
-export function AssistantPanel({ isOpen, onClose, academy, onUpdate, siteConfig, onSiteUpdate, ebookManifest, onEbookUpdate, ebookPipelineSnapshot, loadedHistory, loadKey, onChatChange }: AssistantPanelProps) {
+export function AssistantPanel({ isOpen, onClose, academy, buildBrief, coursePlan, onUpdate, siteConfig, onSiteUpdate, ebookManifest, onEbookUpdate, ebookPipelineSnapshot, loadedHistory, loadKey, onChatChange }: AssistantPanelProps) {
   const [messages, setMessages] = useState<Message[]>([
     { role: "system", content: IDLE_HINT },
   ]);
@@ -348,6 +351,8 @@ export function AssistantPanel({ isOpen, onClose, academy, onUpdate, siteConfig,
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           academy,
+          buildBrief: buildBrief ?? undefined,
+          coursePlan: coursePlan ?? undefined,
           instruction: text,
           siteConfig,
           history: messages.slice(-20).map((m) => ({ role: m.role, content: m.content })),

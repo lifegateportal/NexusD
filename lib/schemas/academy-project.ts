@@ -3,6 +3,7 @@ import { AcademyPackageSchema } from "@/lib/schemas/academy";
 import { IngestResultSchema, LogicTransformResultSchema } from "@/lib/schemas/blueprint";
 import { UiManifestResultSchema } from "@/lib/schemas/ui-manifest";
 import { SiteConfigSchema } from "@/lib/schemas/site-config";
+import { AcademyBuildBriefSchema, AcademyOutlineSchema } from "@/lib/schemas/academy-build";
 
 export const AcademyChatMessageSchema = z.object({
   role: z.enum(["user", "assistant", "system"]),
@@ -16,6 +17,8 @@ export const AcademyProjectSchema = z.object({
   updatedAt: z.string().datetime(),
   folderId: z.string().optional(),
   academy: AcademyPackageSchema,
+  buildBrief: AcademyBuildBriefSchema.default({}),
+  coursePlan: AcademyOutlineSchema.nullable().default(null),
   siteConfig: SiteConfigSchema,
   deliveryInstructions: z.string(),
   chatHistory: z.array(AcademyChatMessageSchema),
@@ -23,6 +26,8 @@ export const AcademyProjectSchema = z.object({
   logicResult: LogicTransformResultSchema.nullable(),
   uiResult: UiManifestResultSchema.nullable(),
   academyPublishedSlug: z.string().regex(/^[a-z0-9-]+$/).optional(),
+  academyDraftVersion: z.string().datetime().optional(),
+  academyPublishedVersion: z.string().datetime().optional(),
 }).strict();
 
 export type AcademyProjectRecord = z.infer<typeof AcademyProjectSchema>;
