@@ -93,7 +93,7 @@ function buildBookToc(manifest: EbookManifest): string {
   const backParts: Array<[string, string | null | undefined]> = [
     ["Conclusion", fm.conclusion],
     ["About the Author", fm.aboutAuthor],
-    ["Resources", fm.resourcesList],
+    ["Resources", Array.isArray(fm.resourcesList) ? fm.resourcesList.join("\n") : fm.resourcesList],
   ];
   if (backParts.some(([, t]) => (t ?? "").trim())) {
     lines.push("");
@@ -355,12 +355,18 @@ export function AssistantPanel({ isOpen, onClose, academy, buildBrief, coursePla
           coursePlan: coursePlan ?? undefined,
           instruction: text,
           siteConfig,
-          history: messages.slice(-20).map((m) => ({ role: m.role, content: m.content })),
+          history: messages
+            .filter((m) => m.role === "user" || m.role === "assistant")
+            .slice(-20)
+            .map((m) => ({ role: m.role as "user" | "assistant", content: m.content })),
           academyVersion: (academy as Record<string, unknown>).__version as string | undefined,
         }),
       });
 
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      if (!res.ok) {
+        const payload = await res.json().catch(() => null) as { error?: string } | null;
+        throw new Error(payload?.error ?? `HTTP ${res.status}`);
+      }
 
       // Read SSE stream — buffer all chunks then find the data: line.
       // Parsing chunk-by-chunk causes "Unterminated string" when JSON spans chunks.
@@ -372,15 +378,27 @@ export function AssistantPanel({ isOpen, onClose, academy, buildBrief, coursePla
         if (done) break;
         buffer += decoder.decode(value, { stream: true });
       }
-      let json: { academy?: unknown; siteConfig?: unknown; summary?: string; error?: string; code?: string; needsClarification?: boolean; clarificationNeeded?: string; confidence?: "high" | "medium" | "low"; academyVersion?: string } | null = null;
+      type AcademyAssistantResponse = {
+        academy?: unknown;
+        siteConfig?: unknown;
+        summary?: string;
+        error?: string;
+        code?: string;
+        needsClarification?: boolean;
+        clarificationNeeded?: string;
+        confidence?: "high" | "medium" | "low";
+        academyVersion?: string;
+      };
+      let parsedResponse: AcademyAssistantResponse | null = null;
       for (const line of buffer.split("\n")) {
         if (line.startsWith("data: ")) {
-          json = JSON.parse(line.slice(6)) as typeof json;
+          parsedResponse = JSON.parse(line.slice(6)) as AcademyAssistantResponse;
           break;
         }
       }
 
-      if (!json) throw new Error("No response from assistant");
+      if (!parsedResponse) throw new Error("No response from assistant");
+      const json = parsedResponse;
       if (json.error && json.code === "VERSION_CONFLICT") {
         setMessages((prev) => [...prev, { role: "assistant", content: `⚠️ **Edit conflict** — the academy was changed in another tab. Please reload and try again.` }]);
         return;
@@ -532,9 +550,15 @@ export function AssistantPanel({ isOpen, onClose, academy, buildBrief, coursePla
                         <button key={chip} type="button" onClick={() => { setInput(chip); inputRef.current?.focus(); }} className="flex-shrink-0 rounded-lg border border-slate-700 px-3 py-1.5 text-[11px] text-slate-400 transition hover:border-cyan-500/40 hover:text-cyan-300">{chip}</button>
                       ))}
                     </div>
+                    <p className="mb-2 mt-3 text-[10px] font-semibold uppercase tracking-widest text-slate-600">Structure</p>
+                    <div className="flex gap-1.5 overflow-x-auto pb-1">
+                      {["Rename module 2","Add a new module","Reorder module 2 before module 1","Remove lesson 3 from module 1"].map((chip) => (
+                        <button key={chip} type="button" onClick={() => { setInput(chip); inputRef.current?.focus(); }} className="flex-shrink-0 rounded-lg border border-slate-700 px-3 py-1.5 text-[11px] text-slate-400 transition hover:border-emerald-500/40 hover:text-emerald-300">{chip}</button>
+                      ))}
+                    </div>
                     <p className="mb-2 mt-3 text-[10px] font-semibold uppercase tracking-widest text-slate-600">Visual &amp; Theme</p>
                     <div className="flex gap-1.5 overflow-x-auto pb-1">
-                      {["Change theme to amber","Change theme to emerald","Change theme to violet","Change theme to rose","Change theme to solar (light mode)","Use a split hero layout","Use a minimal layout","Use a centered layout"].map((chip) => (
+                      {["Change theme to midnight blue","Change theme to amber","Change theme to emerald","Change theme to violet","Change theme to rose","Change theme to solar (light mode)","Use a split hero layout","Use a minimal layout","Use a centered layout"].map((chip) => (
                         <button key={chip} type="button" onClick={() => { setInput(chip); inputRef.current?.focus(); }} className="flex-shrink-0 rounded-lg border border-slate-700 px-3 py-1.5 text-[11px] text-slate-400 transition hover:border-violet-500/40 hover:text-violet-300">{chip}</button>
                       ))}
                     </div>

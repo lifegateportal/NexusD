@@ -87,6 +87,7 @@ const AcademyPatchSchema = z.object({
     keywords:    z.array(z.string()).optional(),
   }).optional(),
   onboardingSteps:  z.array(z.string()).optional(),
+  moduleOrder: z.array(z.number().int().min(0)).optional(),
   curriculumPatches:z.array(ModulePatchSchema).optional(),
 });
 
@@ -104,7 +105,7 @@ function applyAcademyPatch(
   academy: AcademyPackage,
   patch: z.infer<typeof AcademyPatchSchema>,
 ): AcademyPackage {
-  const { curriculumPatches, landingPage, seoMeta, pricing, onboardingSteps, ...topLevel } = patch;
+  const { curriculumPatches, moduleOrder, landingPage, seoMeta, pricing, onboardingSteps, ...topLevel } = patch;
   const updated: AcademyPackage = { ...academy, ...topLevel };
 
   if (landingPage)     updated.landingPage    = { ...academy.landingPage,    ...landingPage };
@@ -174,6 +175,16 @@ function applyAcademyPatch(
     }
 
     updated.curriculum = curriculum;
+  }
+
+  if (moduleOrder) {
+    const currentCurriculum = updated.curriculum;
+    const isValidOrder = moduleOrder.length === currentCurriculum.length
+      && new Set(moduleOrder).size === currentCurriculum.length
+      && moduleOrder.every((index) => index >= 0 && index < currentCurriculum.length);
+    if (isValidOrder) {
+      updated.curriculum = moduleOrder.map((index) => currentCurriculum[index]);
+    }
   }
 
   const parsed = AcademyPackageSchema.parse(updated);
@@ -254,7 +265,9 @@ You are Nexus Director AI, an expert academy editor with control over the academ
 Return only fields that need to change so the server can merge your patch safely. Preserve unrelated content unless the user's request calls for a broader rewrite. You may create, rewrite, reorganize, or remove content when that is the clearest interpretation of the request; use clarificationNeeded only when a missing detail makes a correct change impossible. Keep generated claims consistent with the existing academy and any direction in the user's instruction.
 Treat the approved build brief and course outline as the current design contract; do not change structure or teaching direction unless the user explicitly asks for it.
 
-For curriculum changes, identify modules and lessons by their zero-based indexes in the supplied academy. Use curriculumPatches for module updates, inserts, deletes, and lessonPatches. Use operation="delete" only when the user's instruction actually requests removal. New modules must include complete lesson objects. Use the existing schema's enum values and field shapes.
+For curriculum changes, identify modules and lessons by their zero-based indexes in the supplied academy. Use curriculumPatches for module updates, inserts, deletes, and lessonPatches. Use moduleOrder as a complete zero-based permutation only when the user explicitly asks to reorder modules. Use operation="delete" only when the user's instruction actually requests removal. New modules must include complete lesson objects. Use the existing schema's enum values and field shapes.
+
+For visual requests, map the user's requested course-page color to themeVariant: midnight for blue/cyan, amber for gold/orange, emerald for green, rose for pink/red, violet for purple, and solar for a light theme. Map presentation structure requests to layoutVariant: centered, split, or minimal. These fields control the published landing page and learner experience; they are workspace-controlled settings, not learner edits.
 
 For site changes, return siteConfigPatch with only the requested keys. For academy metadata, landing pages, pricing, SEO, and onboarding, return only the requested fields. Write learner-facing copy directly to the learner using "you"; do not use reporting phrases such as "the speaker said", "the transcript explains", "the source states", or "the material teaches". Never add video lessons when sourceCapabilities.hasVideo is false. Always include a concise summary and a confidence value.`,
       prompt: [

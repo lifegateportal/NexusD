@@ -9,14 +9,6 @@ import { getTheme } from "@/lib/theme";
 
 type Lesson = AcademyPackage["curriculum"][number]["lessons"][number];
 
-type DraftLesson = {
-  title: string;
-  description: string;
-  notes: string;
-  keyTakeaways: string; // newline-separated
-  actionItems: string;  // newline-separated
-};
-
 type LearnPageProps = {
   initialAcademy?: AcademyPackage | null;
   backHref?: string;
@@ -142,8 +134,6 @@ export function AcademyLearnView({
   const [lessonEndTime, setLessonEndTime] = useState(0);
   const [selectedAnswers, setSelectedAnswers] = useState<number[]>([]);
   const [completedLessons, setCompletedLessons] = useState<Set<string>>(new Set());
-  const [isEditing, setIsEditing] = useState(false);
-  const [draft, setDraft] = useState<DraftLesson | null>(null);
   // Mobile: toggle between lesson list and lesson content
   const [mobileView, setMobileView] = useState<"list" | "content">("list");
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -202,58 +192,6 @@ export function AcademyLearnView({
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initialAcademy, storageKey]);
-
-  function openEdit() {
-    if (!activeLesson) return;
-    setDraft({
-      title: activeLesson.title,
-      description: activeLesson.description,
-      notes: activeLesson.notes ?? "",
-      keyTakeaways: (activeLesson.keyTakeaways ?? []).join("\n"),
-      actionItems: (activeLesson.actionItems ?? []).join("\n"),
-    });
-    setIsEditing(true);
-  }
-
-  function cancelEdit() {
-    setIsEditing(false);
-    setDraft(null);
-  }
-
-  function saveEdit() {
-    if (!academy || !activeLesson || !draft) return;
-    const oldTitle = activeLesson.title;
-    const newCurriculum = academy.curriculum.map((mod) => ({
-      ...mod,
-      lessons: mod.lessons.map((l) =>
-        l.title === oldTitle
-          ? {
-              ...l,
-              title: draft.title.trim() || oldTitle,
-              description: draft.description,
-              notes: draft.notes,
-              keyTakeaways: draft.keyTakeaways.split("\n").map((s) => s.trim()).filter(Boolean),
-              actionItems: draft.actionItems.split("\n").map((s) => s.trim()).filter(Boolean),
-            }
-          : l
-      ),
-    }));
-    const updated = { ...academy, curriculum: newCurriculum };
-    const newTitle = draft.title.trim() || oldTitle;
-    // Preserve completion state if title changed
-    if (oldTitle !== newTitle && completedLessons.has(oldTitle)) {
-      const next = new Set(completedLessons);
-      next.delete(oldTitle);
-      next.add(newTitle);
-      setCompletedLessons(next);
-      localStorage.setItem(`${storageKey}_completed_lessons`, JSON.stringify([...next]));
-    }
-    setAcademy(updated);
-    setActiveLesson(newCurriculum.flatMap((m) => m.lessons).find((l) => l.title === newTitle) ?? null);
-    if (!initialAcademy) localStorage.setItem(storageKey, JSON.stringify(updated));
-    setIsEditing(false);
-    setDraft(null);
-  }
 
   function toggleComplete(title: string) {
     setCompletedLessons((prev) => {
@@ -501,13 +439,6 @@ export function AcademyLearnView({
                 <h1 className={`text-xl font-bold sm:text-2xl ${t.heading}`}>
                   {activeLesson.title}
                 </h1>
-                <button
-                  type="button"
-                  onClick={openEdit}
-                  className={`flex-shrink-0 rounded-lg border ${t.cardBorder} px-2.5 py-1 text-xs font-medium ${t.muted} transition hover:${t.accentBorder} hover:${t.accentText}`}
-                >
-                  Edit
-                </button>
               </div>
 
               <p className={`mb-6 text-sm ${t.muted} leading-relaxed`}>{activeLesson.durationMinutes} min</p>
@@ -715,89 +646,6 @@ export function AcademyLearnView({
       </div>
     </div>
 
-    {/* ── Edit lesson modal ── */}
-    {isEditing && draft && (
-      <div
-        className={`fixed inset-0 z-50 flex items-start justify-center overflow-y-auto ${t.pageBg}/90 p-4`}
-        onClick={(e) => { if (e.target === e.currentTarget) cancelEdit(); }}
-      >
-        <div className={`my-8 w-full max-w-2xl rounded-2xl border ${t.cardBorder} ${t.card} p-6`}>
-          <div className="mb-5 flex items-center justify-between">
-            <h2 className={`text-base font-bold ${t.heading}`}>Edit Lesson</h2>
-            <div className="flex gap-2">
-              <button
-                type="button"
-                onClick={cancelEdit}
-                className={`flex min-h-10 items-center rounded-xl border ${t.cardBorder} px-4 text-sm ${t.muted} transition`}
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                onClick={saveEdit}
-                className={`flex min-h-10 items-center rounded-xl ${t.accentBg} px-4 text-sm font-semibold text-slate-950 transition ${t.accentBgHover}`}
-              >
-                Save changes
-              </button>
-            </div>
-          </div>
-
-          <div className="space-y-5">
-            <div>
-              <label className={`mb-1.5 block text-xs font-semibold uppercase tracking-widest ${t.label}`}>Lesson title</label>
-              <input
-                type="text"
-                value={draft.title}
-                onChange={(e) => setDraft({ ...draft, title: e.target.value })}
-                className={`w-full rounded-xl border ${t.inputBorder} ${t.sectionAlt} px-4 py-2.5 text-base ${t.heading} ${t.inputFocus} focus:outline-none`}
-              />
-            </div>
-
-            <div>
-              <label className={`mb-1.5 block text-xs font-semibold uppercase tracking-widest ${t.label}`}>Description</label>
-              <textarea
-                value={draft.description}
-                onChange={(e) => setDraft({ ...draft, description: e.target.value })}
-                rows={2}
-                className={`w-full resize-none rounded-xl border ${t.inputBorder} ${t.sectionAlt} px-4 py-2.5 text-base ${t.heading} ${t.inputFocus} focus:outline-none`}
-              />
-            </div>
-
-            <div>
-              <label className={`mb-1.5 block text-xs font-semibold uppercase tracking-widest ${t.label}`}>Notes</label>
-              <textarea
-                value={draft.notes}
-                onChange={(e) => setDraft({ ...draft, notes: e.target.value })}
-                rows={10}
-                className={`w-full resize-y rounded-xl border ${t.inputBorder} ${t.sectionAlt} px-4 py-2.5 text-base ${t.heading} ${t.inputFocus} focus:outline-none`}
-              />
-            </div>
-
-            <div>
-              <label className={`mb-1 block text-xs font-semibold uppercase tracking-widest ${t.label}`}>Key takeaways</label>
-              <p className={`mb-1.5 text-[11px] ${t.label}`}>One item per line</p>
-              <textarea
-                value={draft.keyTakeaways}
-                onChange={(e) => setDraft({ ...draft, keyTakeaways: e.target.value })}
-                rows={4}
-                className={`w-full resize-none rounded-xl border ${t.inputBorder} ${t.sectionAlt} px-4 py-2.5 text-base ${t.heading} ${t.inputFocus} focus:outline-none`}
-              />
-            </div>
-
-            <div>
-              <label className={`mb-1 block text-xs font-semibold uppercase tracking-widest ${t.label}`}>Action items</label>
-              <p className={`mb-1.5 text-[11px] ${t.label}`}>One item per line</p>
-              <textarea
-                value={draft.actionItems}
-                onChange={(e) => setDraft({ ...draft, actionItems: e.target.value })}
-                rows={3}
-                className={`w-full resize-none rounded-xl border ${t.inputBorder} ${t.sectionAlt} px-4 py-2.5 text-base ${t.heading} ${t.inputFocus} focus:outline-none`}
-              />
-            </div>
-          </div>
-        </div>
-      </div>
-    )}
     </>
   );
 }
