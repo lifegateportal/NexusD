@@ -1077,8 +1077,8 @@ export default function HomePage() {
             : isBookView
               ? "flex flex-1 flex-col gap-3 overflow-y-auto overscroll-contain p-3 pb-3 lg:min-h-0 lg:overflow-hidden lg:pb-3"
               : showActivityPanel
-              ? "mx-2 mb-2 flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto overscroll-contain rounded-2xl border border-cyan-500/10 bg-shell-950/20 p-3 shadow-panel lg:mx-3 lg:mb-3 lg:grid lg:grid-cols-[240px_minmax(0,1fr)] lg:overflow-hidden lg:pb-3"
-              : "mx-2 mb-2 flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto overscroll-contain rounded-2xl border border-cyan-500/10 bg-shell-950/20 p-3 shadow-panel lg:mx-3 lg:mb-3 lg:overflow-hidden lg:pb-3"
+              ? "mx-2 mb-2 flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto overscroll-contain rounded-2xl border border-cyan-500/10 bg-shell-950/20 p-3 shadow-panel lg:mx-3 lg:mb-3 lg:grid lg:grid-rows-[minmax(0,1fr)] lg:grid-cols-[240px_minmax(0,1fr)] lg:overflow-hidden lg:pb-3"
+              : "mx-2 mb-2 flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto overscroll-contain rounded-2xl border border-cyan-500/10 bg-shell-950/20 p-3 shadow-panel lg:mx-3 lg:mb-3 lg:grid lg:grid-rows-[minmax(0,1fr)] lg:overflow-hidden lg:pb-3"
         }
         >
 
@@ -1087,7 +1087,7 @@ export default function HomePage() {
             <>
               {/* Terminal — hidden for sermon mode to maximize writing/presentation space */}
               {showActivityPanel && (
-                <div className="hidden lg:block lg:min-h-0 lg:col-span-1">
+                <div className="hidden lg:block lg:h-full lg:min-h-0 lg:overflow-hidden lg:col-span-1">
                   <TerminalLog
                     entries={logs}
                     isStreaming={stage === "ingesting" || stage === "reasoning"}
@@ -1103,7 +1103,7 @@ export default function HomePage() {
                   : isBookView
                     ? "flex min-h-[65dvh] flex-col animate-fade-up lg:flex-1 lg:min-h-0"
                     : showActivityPanel
-                      ? "min-h-[65dvh] min-w-0 animate-fade-up lg:h-full lg:col-span-1 lg:min-h-0"
+                      ? "flex min-h-[65dvh] min-w-0 flex-col animate-fade-up lg:h-full lg:col-span-1 lg:min-h-0 lg:overflow-hidden"
                       : isProjectsView
                         ? "mx-auto flex min-h-0 w-full max-w-6xl flex-initial shrink-0 flex-col animate-fade-up lg:flex-1"
                         : "mx-auto flex w-full max-w-4xl flex-col animate-fade-up"}

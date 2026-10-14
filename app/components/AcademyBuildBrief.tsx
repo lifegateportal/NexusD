@@ -75,7 +75,7 @@ export function AcademyBuildBrief({
     && !isGenerating;
 
   return (
-    <section className="flex min-h-0 flex-col overflow-y-auto rounded-2xl border border-cyan-500/20 bg-slate-950/40 p-4 shadow-panel sm:p-5">
+    <section className="flex min-h-0 flex-1 flex-col overflow-y-auto overscroll-contain rounded-2xl border border-cyan-500/20 bg-slate-950/40 p-4 shadow-panel sm:p-5 lg:min-h-0">
       <div className="flex flex-col gap-3 border-b border-slate-800 pb-5 sm:flex-row sm:items-start sm:justify-between">
         <div>
           <p className="text-[10px] font-bold uppercase tracking-[0.24em] text-cyan-400">Define the course</p>
