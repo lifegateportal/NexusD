@@ -1,77 +1,30 @@
 import chromium from "@sparticuz/chromium";
 import { chromium as playwrightChromium, type Page } from "playwright-core";
 import { renderHtmlToEditableDocxBuffer } from "@/lib/nexuslm-editable-docx";
+import {
+  NEXUSLM_CSS_PX_PER_INCH,
+  pageSizeFromHtml,
+  type NexusLMPageSize,
+} from "@/lib/nexuslm-page-setup";
 
 export { renderHtmlToEditableDocxBuffer };
 
-const CSS_PX_PER_INCH = 96;
-const DEFAULT_PAGE_SIZE = { widthInches: 8.27, heightInches: 11.69 };
-const DEFAULT_VIEWPORT = {
-  width: Math.round(DEFAULT_PAGE_SIZE.widthInches * CSS_PX_PER_INCH),
-  height: Math.round(DEFAULT_PAGE_SIZE.heightInches * CSS_PX_PER_INCH),
-};
 const MAX_RENDERED_HEIGHT_PX = 120_000;
 const RENDER_TIMEOUT_MS = 30_000;
 
-type PageSize = {
-  widthInches: number;
-  heightInches: number;
-};
-
 type RenderedHtmlPages = {
   pages: Buffer[];
-  pageSize: PageSize;
+  pageSize: NexusLMPageSize;
 };
-
-const KNOWN_PAGE_SIZES: Record<string, PageSize> = {
-  a4: { widthInches: 8.27, heightInches: 11.69 },
-  letter: { widthInches: 8.5, heightInches: 11 },
-  legal: { widthInches: 8.5, heightInches: 14 },
-};
-
-function parseLength(value: string): number | null {
-  const match = value.trim().match(/^([\d.]+)\s*(in|cm|mm|px|pt)$/i);
-  if (!match) return null;
-  const amount = Number.parseFloat(match[1]);
-  if (!Number.isFinite(amount) || amount <= 0) return null;
-  switch (match[2].toLowerCase()) {
-    case "in": return amount;
-    case "cm": return amount / 2.54;
-    case "mm": return amount / 25.4;
-    case "pt": return amount / 72;
-    case "px": return amount / CSS_PX_PER_INCH;
-    default: return null;
-  }
-}
-
-function pageSizeFromHtml(html: string): PageSize {
-  const pageRule = html.match(/@page\b[^{}]*\{([\s\S]*?)\}/i)?.[1] ?? "";
-  const sizeDeclaration = pageRule.match(/\bsize\s*:\s*([^;]+)/i)?.[1]?.trim();
-  if (!sizeDeclaration) return DEFAULT_PAGE_SIZE;
-
-  const normalized = sizeDeclaration.toLowerCase().replace(/\s+/g, " ");
-  const named = KNOWN_PAGE_SIZES[normalized];
-  if (named) return named;
-  const namedWithOrientation = normalized.match(/^(a4|letter|legal)\s+(portrait|landscape)$/);
-  if (namedWithOrientation) {
-    const base = KNOWN_PAGE_SIZES[namedWithOrientation[1]];
-    return namedWithOrientation[2] === "landscape"
-      ? { widthInches: base.heightInches, heightInches: base.widthInches }
-      : base;
-  }
-
-  const lengths = normalized.split(" ").map(parseLength).filter((value): value is number => value !== null);
-  if (lengths.length >= 2) {
-    return { widthInches: lengths[0], heightInches: lengths[1] };
-  }
-
-  return DEFAULT_PAGE_SIZE;
-}
 
 function renderSetupStyle(): string {
   return `<style id="nexuslm-export-renderer">
     *, *::before, *::after { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
     ::-webkit-scrollbar { width: 0 !important; height: 0 !important; }
+    @media print {
+      html, body { height: auto !important; min-height: 0 !important; max-height: none !important; overflow: visible !important; }
+      body > * { max-height: none !important; overflow: visible !important; }
+    }
   </style>`;
 }
 
@@ -110,8 +63,8 @@ async function renderHtmlPages(html: string): Promise<RenderedHtmlPages> {
   if (!html.trim()) throw new Error("The HTML design is empty.");
   const pageSize = pageSizeFromHtml(html);
   const viewport = {
-    width: Math.round(pageSize.widthInches * CSS_PX_PER_INCH),
-    height: Math.round(pageSize.heightInches * CSS_PX_PER_INCH),
+    width: Math.round(pageSize.widthInches * NEXUSLM_CSS_PX_PER_INCH),
+    height: Math.round(pageSize.heightInches * NEXUSLM_CSS_PX_PER_INCH),
   };
   const executablePath = await chromium.executablePath();
   const browser = await playwrightChromium.launch({
@@ -138,6 +91,7 @@ async function renderHtmlPages(html: string): Promise<RenderedHtmlPages> {
       }
       await route.abort();
     });
+    await page.emulateMedia({ media: "print" });
     await page.setContent(injectRenderSetup(html), {
       timeout: RENDER_TIMEOUT_MS,
       waitUntil: "load",
@@ -158,7 +112,7 @@ async function renderHtmlPages(html: string): Promise<RenderedHtmlPages> {
   }
 }
 
-async function renderHtmlPdf(html: string, pageSize: PageSize): Promise<Buffer> {
+async function renderHtmlPdf(html: string, pageSize: NexusLMPageSize): Promise<Buffer> {
   const executablePath = await chromium.executablePath();
   const browser = await playwrightChromium.launch({
     args: [...chromium.args, "--no-sandbox", "--disable-setuid-sandbox"],
@@ -168,8 +122,8 @@ async function renderHtmlPdf(html: string, pageSize: PageSize): Promise<Buffer> 
   try {
     const context = await browser.newContext({
       viewport: {
-        width: Math.round(pageSize.widthInches * CSS_PX_PER_INCH),
-        height: Math.round(pageSize.heightInches * CSS_PX_PER_INCH),
+        width: Math.round(pageSize.widthInches * NEXUSLM_CSS_PX_PER_INCH),
+        height: Math.round(pageSize.heightInches * NEXUSLM_CSS_PX_PER_INCH),
       },
       deviceScaleFactor: 1,
       javaScriptEnabled: false,
@@ -184,19 +138,19 @@ async function renderHtmlPdf(html: string, pageSize: PageSize): Promise<Buffer> 
       }
       await route.abort();
     });
+    await page.emulateMedia({ media: "print" });
     await page.setContent(injectRenderSetup(html), {
       timeout: RENDER_TIMEOUT_MS,
       waitUntil: "load",
     });
     await waitForRenderedAssets(page);
     await getRenderedContentHeight(page);
-    await page.emulateMedia({ media: "screen" });
     const pdf = await page.pdf({
-      format: "A4",
+      width: `${pageSize.widthInches}in`,
+      height: `${pageSize.heightInches}in`,
       printBackground: true,
       preferCSSPageSize: true,
       displayHeaderFooter: false,
-      margin: { top: "0", right: "0", bottom: "0", left: "0" },
     });
     await context.close();
     return pdf;

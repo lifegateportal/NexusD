@@ -601,20 +601,25 @@ function DocumentPreview({
   onPrintHtml,
   onDownloadArtifact,
   exportingArtifact,
+  fullscreen = false,
 }: {
   attachment: PreviewDocument;
   onPrintHtml: (content: string) => void;
   onDownloadArtifact: (attachment: PreviewDocument, format: ArtifactDownloadFormat) => void;
   exportingArtifact: ArtifactDownloadFormat | null;
+  fullscreen?: boolean;
 }) {
   const kind = attachmentKind(attachment);
+  const frameClassName = fullscreen
+    ? "min-h-0 w-full flex-1 rounded-xl border border-slate-800 bg-white"
+    : "h-[52dvh] min-h-[22rem] w-full rounded-xl border border-slate-800 bg-white";
 
   if (kind === "pdf") {
     return attachment.previewDataUrl ? (
       <iframe
         title={attachment.name}
         src={attachment.previewDataUrl}
-        className="h-[52dvh] min-h-[22rem] w-full rounded-xl border border-slate-800 bg-white"
+        className={frameClassName}
       />
     ) : (
       <p className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-4 text-sm leading-6 text-amber-100">
@@ -644,7 +649,7 @@ function DocumentPreview({
 
   if (kind === "html") {
     return (
-      <div className="space-y-2">
+      <div className={fullscreen ? "flex min-h-0 flex-1 flex-col gap-2" : "space-y-2"}>
         <div className="flex flex-wrap gap-2">
           <button
             type="button"
@@ -669,14 +674,16 @@ function DocumentPreview({
           title={attachment.name}
           srcDoc={attachment.content}
           sandbox="allow-modals"
-          className="h-[52dvh] min-h-[22rem] w-full rounded-xl border border-slate-800 bg-white"
+          className={frameClassName}
         />
       </div>
     );
   }
 
   return (
-    <pre className="h-[52dvh] min-h-[22rem] overflow-auto whitespace-pre-wrap rounded-xl border border-slate-800 bg-slate-950 p-4 text-xs leading-6 text-slate-300">
+    <pre className={fullscreen
+      ? "min-h-0 flex-1 overflow-auto whitespace-pre-wrap rounded-xl border border-slate-800 bg-slate-950 p-4 text-xs leading-6 text-slate-300"
+      : "h-[52dvh] min-h-[22rem] overflow-auto whitespace-pre-wrap rounded-xl border border-slate-800 bg-slate-950 p-4 text-xs leading-6 text-slate-300"}>
       {attachment.content}
     </pre>
   );
@@ -709,6 +716,7 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
   const [exportingArtifact, setExportingArtifact] = useState<ArtifactDownloadFormat | null>(null);
   const [showDocumentPreview, setShowDocumentPreview] = useState(false);
   const [previewExpanded, setPreviewExpanded] = useState(false);
+  const [previewFullscreen, setPreviewFullscreen] = useState(false);
   const [sources, setSources] = useState<Source[]>([]);
   const [pendingEdit, setPendingEdit] = useState<PendingEdit | null>(null);
   const [pendingDraft, setPendingDraft] = useState<ChapterDraft | null>(null);
@@ -1459,6 +1467,25 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
   const selectedAttachment = attachments.find((attachment) => attachment.id === selectedAttachmentId) ?? null;
   const previewDocument = generatedPreview ?? selectedAttachment;
 
+  useEffect(() => {
+    if (showDocumentPreview && previewDocument) return;
+    setPreviewFullscreen(false);
+  }, [previewDocument, showDocumentPreview]);
+
+  useEffect(() => {
+    if (!previewFullscreen) return;
+    const previousOverflow = document.body.style.overflow;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setPreviewFullscreen(false);
+    };
+    document.body.style.overflow = "hidden";
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [previewFullscreen]);
+
   function openAttachmentPreview(id: string): void {
     if (!attachments.some((attachment) => attachment.id === id)) return;
     clearGeneratedPreview();
@@ -1596,13 +1623,38 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
     window.setTimeout(() => URL.revokeObjectURL(url), 1000);
   }
 
+  function printFrameDimensions(content: string): { width: string; height: string } {
+    const pageRule = content.match(/@page\b[^{}]*\{([\s\S]*?)\}/i)?.[1] ?? "";
+    const size = pageRule.match(/\bsize\s*:\s*([^;]+)/i)?.[1]?.trim().toLowerCase().replace(/\s+/g, " ");
+    const namedSizes: Record<string, { width: string; height: string }> = {
+      a4: { width: "8.27in", height: "11.69in" },
+      letter: { width: "8.5in", height: "11in" },
+      legal: { width: "8.5in", height: "14in" },
+    };
+    const oriented = size?.match(/^(a4|letter|legal)\s+(portrait|landscape)$/);
+    if (oriented) {
+      const named = namedSizes[oriented[1]];
+      return oriented[2] === "landscape"
+        ? { width: named.height, height: named.width }
+        : named;
+    }
+    const named = size ? namedSizes[size] : undefined;
+    if (named) return named;
+    const lengths = size?.match(/^([\d.]+(?:in|cm|mm|px|pt))\s+([\d.]+(?:in|cm|mm|px|pt))$/);
+    return lengths ? { width: lengths[1], height: lengths[2] } : { width: "8.27in", height: "11.69in" };
+  }
+
   function printHtmlArtifact(content: string): void {
+    const dimensions = printFrameDimensions(content);
     const frame = document.createElement("iframe");
     frame.setAttribute("sandbox", "allow-modals");
     frame.setAttribute("aria-hidden", "true");
     frame.style.position = "fixed";
-    frame.style.width = "1px";
-    frame.style.height = "1px";
+    frame.style.left = "-10000px";
+    frame.style.top = "0";
+    frame.style.width = dimensions.width;
+    frame.style.height = dimensions.height;
+    frame.style.border = "0";
     frame.style.opacity = "0";
     frame.style.pointerEvents = "none";
     frame.onload = () => {
@@ -3100,10 +3152,27 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
                         Download
                       </a>
                     )}
+                    <button
+                      type="button"
+                      onClick={() => setPreviewFullscreen(true)}
+                      className="min-h-12 min-w-12 rounded-lg border border-cyan-400/40 px-3 text-[11px] font-semibold text-cyan-200"
+                    >
+                      Fullscreen
+                    </button>
                     <button type="button" onClick={() => setPreviewExpanded((current) => !current)} className="min-h-12 rounded-lg border border-slate-700 px-3 text-[11px] font-semibold text-cyan-300 lg:hidden">
                       {previewExpanded ? "Collapse" : "Expand"}
                     </button>
-                    <button type="button" onClick={() => setShowDocumentPreview(false)} className="min-h-12 min-w-12 rounded-lg text-slate-400" aria-label="Close document preview">×</button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setPreviewFullscreen(false);
+                        setShowDocumentPreview(false);
+                      }}
+                      className="min-h-12 min-w-12 rounded-lg text-slate-400"
+                      aria-label="Close document preview"
+                    >
+                      ×
+                    </button>
                   </div>
                 </div>
                 <DocumentPreview
@@ -3114,6 +3183,38 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
                 />
               </div>
             )}
+          </div>
+        )}
+
+        {previewFullscreen && previewDocument && (
+          <div
+            className="fixed inset-0 z-50 h-dvh max-h-dvh overflow-hidden bg-slate-950/95 p-3 pb-[max(env(safe-area-inset-bottom),_5rem)] lg:p-6 lg:pb-6"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="nexuslm-preview-fullscreen-title"
+          >
+            <div className="flex h-full max-h-full min-h-0 flex-col overflow-hidden rounded-none border border-slate-800 bg-shell-950 shadow-2xl lg:mx-auto lg:max-w-7xl lg:rounded-2xl">
+              <div className="flex min-h-16 shrink-0 items-center justify-between gap-3 border-b border-slate-800 px-3 lg:px-5">
+                <p id="nexuslm-preview-fullscreen-title" className="truncate text-sm font-semibold text-slate-200">{previewDocument.name}</p>
+                <button
+                  type="button"
+                  onClick={() => setPreviewFullscreen(false)}
+                  className="min-h-12 min-w-12 rounded-xl border border-slate-700 text-lg text-slate-300"
+                  aria-label="Close fullscreen document preview"
+                >
+                  ×
+                </button>
+              </div>
+              <div className="flex min-h-0 flex-1 flex-col overflow-y-auto p-3 lg:p-5">
+                <DocumentPreview
+                  attachment={previewDocument}
+                  onPrintHtml={printHtmlArtifact}
+                  onDownloadArtifact={(attachment, format) => void downloadHtmlArtifact(attachment, format)}
+                  exportingArtifact={exportingArtifact}
+                  fullscreen
+                />
+              </div>
+            </div>
           </div>
         )}
 

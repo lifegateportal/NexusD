@@ -18,22 +18,15 @@ import {
   VerticalAlign,
   WidthType,
 } from "docx";
+import {
+  NEXUSLM_CSS_PX_PER_INCH,
+  pageMarginsFromHtml,
+  pageSizeFromHtml,
+  type NexusLMPageMargins,
+  type NexusLMPageSize,
+} from "@/lib/nexuslm-page-setup";
 
-const CSS_PX_PER_INCH = 96;
-const DEFAULT_PAGE_SIZE = { widthInches: 8.27, heightInches: 11.69 };
 const RENDER_TIMEOUT_MS = 30_000;
-
-type PageSize = {
-  widthInches: number;
-  heightInches: number;
-};
-
-type PageMargins = {
-  top: number;
-  right: number;
-  bottom: number;
-  left: number;
-};
 
 type InlineModel = {
   text: string;
@@ -96,74 +89,18 @@ type TableModel = {
 
 type DocumentModel = {
   blocks: Array<ParagraphModel | TableModel>;
-  pageSize: PageSize;
-  margins: PageMargins;
+  pageSize: NexusLMPageSize;
+  margins: NexusLMPageMargins;
 };
-
-const KNOWN_PAGE_SIZES: Record<string, PageSize> = {
-  a4: { widthInches: 8.27, heightInches: 11.69 },
-  letter: { widthInches: 8.5, heightInches: 11 },
-  legal: { widthInches: 8.5, heightInches: 14 },
-};
-
-function parseLength(value: string): number | null {
-  const match = value.trim().match(/^([\d.]+)\s*(in|cm|mm|px|pt)$/i);
-  if (!match) return null;
-  const amount = Number.parseFloat(match[1]);
-  if (!Number.isFinite(amount) || amount <= 0) return null;
-  switch (match[2].toLowerCase()) {
-    case "in": return amount;
-    case "cm": return amount / 2.54;
-    case "mm": return amount / 25.4;
-    case "pt": return amount / 72;
-    case "px": return amount / CSS_PX_PER_INCH;
-    default: return null;
-  }
-}
-
-function pageRuleFromHtml(html: string): string {
-  return html.match(/@page\b[^{}]*\{([\s\S]*?)\}/i)?.[1] ?? "";
-}
-
-function pageSizeFromHtml(html: string): PageSize {
-  const sizeDeclaration = pageRuleFromHtml(html).match(/\bsize\s*:\s*([^;]+)/i)?.[1]?.trim();
-  if (!sizeDeclaration) return DEFAULT_PAGE_SIZE;
-  const normalized = sizeDeclaration.toLowerCase().replace(/\s+/g, " ");
-  const named = KNOWN_PAGE_SIZES[normalized];
-  if (named) return named;
-  const oriented = normalized.match(/^(a4|letter|legal)\s+(portrait|landscape)$/);
-  if (oriented) {
-    const base = KNOWN_PAGE_SIZES[oriented[1]];
-    return oriented[2] === "landscape"
-      ? { widthInches: base.heightInches, heightInches: base.widthInches }
-      : base;
-  }
-  const lengths = normalized.split(" ").map(parseLength).filter((value): value is number => value !== null);
-  return lengths.length >= 2
-    ? { widthInches: lengths[0], heightInches: lengths[1] }
-    : DEFAULT_PAGE_SIZE;
-}
-
-function pageMarginsFromHtml(html: string): PageMargins {
-  const declaration = pageRuleFromHtml(html).match(/\bmargin\s*:\s*([^;]+)/i)?.[1]?.trim();
-  const values = declaration
-    ? declaration.split(/\s+/).map(parseLength).filter((value): value is number => value !== null)
-    : [];
-  const [top, right = top, bottom = top, left = right] = values.length === 1
-    ? [values[0], values[0], values[0], values[0]]
-    : values.length === 2
-      ? [values[0], values[1], values[0], values[1]]
-      : values.length === 3
-        ? [values[0], values[1], values[2], values[1]]
-        : values.length >= 4
-          ? values
-          : [0, 0, 0, 0];
-  const toTwips = (inches: number) => Math.round(inches * 1440);
-  return { top: toTwips(top), right: toTwips(right), bottom: toTwips(bottom), left: toTwips(left) };
-}
 
 function setupHtml(html: string): string {
-  const setup = `<style id="nexuslm-docx-renderer">*, *::before, *::after { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }</style>`;
+  const setup = `<style id="nexuslm-docx-renderer">
+    *, *::before, *::after { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
+    @media print {
+      html, body { height: auto !important; min-height: 0 !important; max-height: none !important; overflow: visible !important; }
+      body > * { max-height: none !important; overflow: visible !important; }
+    }
+  </style>`;
   const withoutScripts = html.replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, "");
   return /<\/head\s*>/i.test(withoutScripts)
     ? withoutScripts.replace(/<\/head\s*>/i, `${setup}</head>`)
@@ -193,8 +130,8 @@ async function extractDocumentModel(html: string): Promise<DocumentModel> {
   try {
     const pageSize = pageSizeFromHtml(html);
     const viewport = {
-      width: Math.round(pageSize.widthInches * CSS_PX_PER_INCH),
-      height: Math.round(pageSize.heightInches * CSS_PX_PER_INCH),
+      width: Math.round(pageSize.widthInches * NEXUSLM_CSS_PX_PER_INCH),
+      height: Math.round(pageSize.heightInches * NEXUSLM_CSS_PX_PER_INCH),
     };
     const context = await browser.newContext({
       viewport,
@@ -211,6 +148,7 @@ async function extractDocumentModel(html: string): Promise<DocumentModel> {
         await route.abort();
       }
     });
+    await page.emulateMedia({ media: "print" });
     await page.setContent(setupHtml(html), { timeout: RENDER_TIMEOUT_MS, waitUntil: "load" });
     await waitForAssets(page);
     const model = await page.evaluate(function () {
