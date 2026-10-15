@@ -35,6 +35,18 @@ import {
   type CodingWorkspace,
   type CodingWorkspaceSnapshot,
 } from "@/lib/coding-workspace";
+import {
+  bootCodingWebContainer,
+  CodingWebContainerCommandSchema,
+  CodingPreviewRuntimeSchema,
+  CodingWebContainerOutputSchema,
+  CodingWebContainerReadySchema,
+  CodingWebContainerStatusSchema,
+  createCodingWebContainerFileTree,
+  teardownCodingWebContainer,
+  type CodingWebContainerStatus,
+} from "@/lib/coding-webcontainer";
+import type { Unsubscribe, WebContainerProcess } from "@webcontainer/api";
 
 const STORAGE_KEY = "nexus-coding-chat";
 const VOICE_STORAGE_KEY = "nexus-coding-voice-mode";
@@ -183,7 +195,10 @@ export function CodingChatPanel() {
   const [previewUrlDraft, setPreviewUrlDraft] = useState("");
   const [previewUrl, setPreviewUrl] = useState("");
   const [livePreview, setLivePreview] = useState<CodingPreview | null>(null);
-  const [livePreviewCommand, setLivePreviewCommand] = useState("npm run dev -- --host 0.0.0.0");
+  const [previewRuntime, setPreviewRuntime] = useState<"webcontainer" | "runner">("webcontainer");
+  const [webContainerStatus, setWebContainerStatus] = useState<CodingWebContainerStatus>("stopped");
+  const [webContainerLogs, setWebContainerLogs] = useState("");
+  const [livePreviewCommand, setLivePreviewCommand] = useState("npm run dev");
   const [livePreviewPort, setLivePreviewPort] = useState("3000");
   const [livePreviewNetwork, setLivePreviewNetwork] = useState(true);
   const [voiceModeEnabled, setVoiceModeEnabled] = useState(false);
@@ -209,6 +224,12 @@ export function CodingChatPanel() {
   const workspaceChangeReasonRef = useRef("Manual workspace edit");
   const workspaceChangeSourceRef = useRef<"user" | "agent" | "import">("user");
   const workspaceSaveQueueRef = useRef(Promise.resolve());
+  const webContainerProcessRef = useRef<WebContainerProcess | null>(null);
+  const webContainerUnsubscribeRef = useRef<Unsubscribe | null>(null);
+  const webContainerGenerationRef = useRef(0);
+  const webContainerReadyRef = useRef(false);
+  const webContainerSyncedFilesRef = useRef<Set<string>>(new Set());
+  const webContainerSyncQueueRef = useRef(Promise.resolve());
   const fileTree = useMemo(() => buildCodingTree(files), [files]);
   const selectedFile = useMemo(
     () => files.find((file) => file.name === selectedFileName) ?? null,
@@ -225,6 +246,15 @@ export function CodingChatPanel() {
 
   useEffect(() => {
     folderInputRef.current?.setAttribute("webkitdirectory", "");
+  }, []);
+
+  useEffect(() => () => {
+    webContainerGenerationRef.current += 1;
+    webContainerUnsubscribeRef.current?.();
+    webContainerProcessRef.current?.kill();
+    void teardownCodingWebContainer().catch((runtimeError: unknown) => {
+      console.error("[coding] Failed to stop WebContainer", runtimeError);
+    });
   }, []);
 
   const applyWorkspaceSnapshot = useCallback((snapshot: CodingWorkspaceSnapshot) => {
@@ -1027,7 +1057,178 @@ export function CodingChatPanel() {
     window.setTimeout(() => URL.revokeObjectURL(objectUrl), 0);
   }, [previewUrl, selectedFile, selectedFileCanPreview]);
 
+  const stopWebContainerPreview = useCallback(async () => {
+    webContainerGenerationRef.current += 1;
+    webContainerUnsubscribeRef.current?.();
+    webContainerUnsubscribeRef.current = null;
+    webContainerProcessRef.current?.kill();
+    webContainerProcessRef.current = null;
+    webContainerReadyRef.current = false;
+    webContainerSyncedFilesRef.current.clear();
+    try {
+      await teardownCodingWebContainer();
+    } catch (runtimeError) {
+      setError(runtimeError instanceof Error ? runtimeError.message : "The WebContainer could not be stopped.");
+    }
+    setWebContainerStatus(CodingWebContainerStatusSchema.parse("stopped"));
+    setPreviewUrl("");
+    setWorkspaceStatus("Saved");
+  }, []);
+
+  const startWebContainerPreview = useCallback(async () => {
+    if (!workspaceId || !workspaceRevisionId) {
+      setError("Save or create a coding project before starting a live preview.");
+      return;
+    }
+    const parsedCommand = CodingWebContainerCommandSchema.safeParse(livePreviewCommand);
+    if (!parsedCommand.success) {
+      setError("Enter a command between 1 and 500 characters.");
+      return;
+    }
+    const command = parsedCommand.data;
+    setError(null);
+    await workspaceSaveQueueRef.current;
+    await stopWebContainerPreview();
+    const generation = ++webContainerGenerationRef.current;
+    webContainerReadyRef.current = false;
+    setWebContainerLogs("");
+    setWebContainerStatus(CodingWebContainerStatusSchema.parse("starting"));
+    setWorkspaceStatus("Starting WebContainer");
+    setPreviewUrl("");
+    setShowPreview(true);
+
+    const consumeOutput = (process: WebContainerProcess) => {
+      void process.output.pipeTo(new WritableStream<string>({
+        write(chunk) {
+          const parsedOutput = CodingWebContainerOutputSchema.safeParse(chunk);
+          if (!parsedOutput.success) throw new Error("The WebContainer returned invalid terminal output.");
+          if (generation !== webContainerGenerationRef.current) return;
+          setWebContainerLogs((current) => `${current}${parsedOutput.data}`.slice(-12_000));
+        },
+      })).catch((outputError: unknown) => {
+        if (generation === webContainerGenerationRef.current) {
+          setError(outputError instanceof Error ? outputError.message : "WebContainer terminal output failed.");
+        }
+      });
+    };
+
+    try {
+      if (!window.crossOriginIsolated) {
+        throw new Error("WebContainers need cross-origin isolation. Reload Nexus Code after enabling its COOP/COEP response headers.");
+      }
+      const runtime = await bootCodingWebContainer();
+      if (generation !== webContainerGenerationRef.current) return;
+      await runtime.mount(createCodingWebContainerFileTree(files));
+      webContainerSyncedFilesRef.current = new Set(files.map((file) => file.name));
+      if (generation !== webContainerGenerationRef.current) return;
+
+      if (files.some((file) => file.name === "package.json")) {
+        setWebContainerStatus(CodingWebContainerStatusSchema.parse("installing"));
+        setWorkspaceStatus("Installing project dependencies");
+        const installProcess = await runtime.spawn("npm", ["install"]);
+        webContainerProcessRef.current = installProcess;
+        consumeOutput(installProcess);
+        const installExitCode = await installProcess.exit;
+        webContainerProcessRef.current = null;
+        if (installExitCode !== 0) throw new Error(`Dependency installation failed with exit code ${installExitCode}.`);
+      }
+      if (generation !== webContainerGenerationRef.current) return;
+
+      const readyUnsubscribe = runtime.on("server-ready", (port, url) => {
+        const parsed = CodingWebContainerReadySchema.safeParse({ port, url });
+        if (!parsed.success) {
+          setError("The WebContainer announced an invalid preview address.");
+          return;
+        }
+        if (generation !== webContainerGenerationRef.current) return;
+        webContainerReadyRef.current = true;
+        setPreviewUrl(parsed.data.url);
+        setWebContainerStatus(CodingWebContainerStatusSchema.parse("running"));
+        setWorkspaceStatus(`App running on port ${parsed.data.port}`);
+      });
+      const errorUnsubscribe = runtime.on("error", (runtimeError) => {
+        if (generation !== webContainerGenerationRef.current) return;
+        setWebContainerStatus(CodingWebContainerStatusSchema.parse("failed"));
+        setError(runtimeError.message || "The WebContainer runtime failed.");
+      });
+      webContainerUnsubscribeRef.current = () => {
+        readyUnsubscribe();
+        errorUnsubscribe();
+      };
+
+      const [executable, ...args] = command.split(/\s+/);
+      if (!executable) throw new Error("Enter a command to start the app.");
+      const process = await runtime.spawn(executable, args);
+      webContainerProcessRef.current = process;
+      consumeOutput(process);
+      void process.exit.then((exitCode) => {
+        if (generation !== webContainerGenerationRef.current) return;
+        webContainerProcessRef.current = null;
+        if (exitCode !== 0 || !webContainerReadyRef.current) {
+          setWebContainerStatus(CodingWebContainerStatusSchema.parse("failed"));
+          setWorkspaceStatus("WebContainer app stopped");
+          setError(`The app command exited with code ${exitCode} before a preview was ready.`);
+        }
+      }).catch((processError: unknown) => {
+        if (generation !== webContainerGenerationRef.current) return;
+        setWebContainerStatus(CodingWebContainerStatusSchema.parse("failed"));
+        setError(processError instanceof Error ? processError.message : "The app command failed.");
+      });
+    } catch (previewError) {
+      if (generation !== webContainerGenerationRef.current) return;
+      setWebContainerStatus(CodingWebContainerStatusSchema.parse("failed"));
+      setWorkspaceStatus("WebContainer failed");
+      setError(previewError instanceof Error ? previewError.message : "WebContainer preview could not start.");
+    }
+  }, [files, livePreviewCommand, stopWebContainerPreview, workspaceId, workspaceRevisionId]);
+
+  useEffect(() => {
+    if (webContainerStatus !== "running") return;
+    let cancelled = false;
+    const nextFileNames = new Set(files.map((file) => file.name));
+    webContainerSyncQueueRef.current = webContainerSyncQueueRef.current
+      .catch(() => undefined)
+      .then(async () => {
+        if (cancelled) return;
+        const tree = createCodingWebContainerFileTree(files);
+        const runtime = await bootCodingWebContainer();
+        if (cancelled) return;
+        for (const oldFileName of webContainerSyncedFilesRef.current) {
+          if (!nextFileNames.has(oldFileName)) {
+            await runtime.fs.rm(oldFileName, { force: true, recursive: true });
+          }
+        }
+        await runtime.mount(tree);
+        if (!cancelled) webContainerSyncedFilesRef.current = nextFileNames;
+      })
+      .catch((syncError: unknown) => {
+        if (!cancelled) {
+          setError(syncError instanceof Error ? syncError.message : "Coding files could not be synced to the WebContainer.");
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [files, webContainerStatus]);
+
   const startLivePreview = useCallback(async () => {
+    if (previewRuntime === "webcontainer") {
+      try {
+        if (workspaceId && livePreview) {
+          const response = await fetch(`/api/coding/workspaces/${encodeURIComponent(workspaceId)}/previews/${encodeURIComponent(livePreview.id)}`, {
+            method: "DELETE",
+            credentials: "same-origin",
+          });
+          if (!response.ok) throw new Error("The previous isolated preview could not be stopped.");
+          setLivePreview(null);
+        }
+        await startWebContainerPreview();
+      } catch (previewError) {
+        setError(previewError instanceof Error ? previewError.message : "WebContainer preview could not start.");
+      }
+      return;
+    }
+    await stopWebContainerPreview();
     if (!workspaceId || !workspaceRevisionId) {
       setError("Save or create a coding project before starting a live preview.");
       return;
@@ -1077,6 +1278,9 @@ export function CodingChatPanel() {
     livePreviewCommand,
     livePreviewNetwork,
     livePreviewPort,
+    previewRuntime,
+    startWebContainerPreview,
+    stopWebContainerPreview,
     workspaceId,
     workspaceRevisionId,
   ]);
@@ -1644,16 +1848,23 @@ export function CodingChatPanel() {
               <div className="flex items-center justify-between gap-2">
                 <div>
                   <p className="text-xs font-semibold text-violet-200">Temporary live preview</p>
-                  <p className="mt-1 text-[10px] leading-4 text-slate-500">Runs the current revision in the isolated runner.</p>
+                  <p className="mt-1 text-[10px] leading-4 text-slate-500">
+                    {previewRuntime === "webcontainer"
+                      ? "Runs this project in a StackBlitz WebContainer in your browser."
+                      : "Runs the current revision in the isolated runner."}
+                  </p>
                 </div>
-                <label className="flex min-h-12 shrink-0 items-center gap-2 px-1 text-[10px] text-slate-400">
-                  <input
-                    type="checkbox"
-                    checked={livePreviewNetwork}
-                    onChange={(event) => setLivePreviewNetwork(event.target.checked)}
-                    className="h-4 w-4 accent-violet-400"
-                  />
-                  Network
+                <label className="flex min-h-12 shrink-0 items-center gap-2 text-[10px] text-slate-400">
+                  Runtime
+                  <select
+                    value={previewRuntime}
+                    onChange={(event) => setPreviewRuntime(CodingPreviewRuntimeSchema.parse(event.target.value))}
+                    aria-label="Preview runtime"
+                    className="min-h-12 rounded-lg border border-slate-700 bg-slate-900 px-2 text-base text-slate-200"
+                  >
+                    <option value="webcontainer">WebContainer</option>
+                    <option value="runner">Isolated runner</option>
+                  </select>
                 </label>
               </div>
               <div className="mt-2 flex flex-col gap-2 sm:flex-row">
@@ -1662,27 +1873,60 @@ export function CodingChatPanel() {
                   onChange={(event) => setLivePreviewCommand(event.target.value)}
                   aria-label="Live preview command"
                   className="min-w-0 flex-1 rounded-lg border border-slate-700 bg-slate-900 px-3 py-3 text-base text-slate-200 focus:border-violet-400/60 focus:outline-none"
-                  placeholder="npm run dev -- --host 0.0.0.0"
+                  placeholder="npm run dev"
                 />
-                <input
-                  value={livePreviewPort}
-                  onChange={(event) => setLivePreviewPort(event.target.value)}
-                  inputMode="numeric"
-                  aria-label="Live preview port"
-                  className="w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-3 text-base text-slate-200 sm:w-24"
-                  placeholder="3000"
-                />
-                {livePreview && livePreview.status !== "stopped" ? (
-                  <button type="button" onClick={() => void stopLivePreview()} className="min-h-12 rounded-lg border border-rose-400/40 px-3 text-xs font-semibold text-rose-200">
+                {previewRuntime === "runner" && (
+                  <>
+                    <input
+                      value={livePreviewPort}
+                      onChange={(event) => setLivePreviewPort(event.target.value)}
+                      inputMode="numeric"
+                      aria-label="Live preview port"
+                      className="min-h-12 w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-3 text-base text-slate-200 sm:w-24"
+                      placeholder="3000"
+                    />
+                    <label className="flex min-h-12 shrink-0 items-center gap-2 px-1 text-[10px] text-slate-400">
+                      <input
+                        type="checkbox"
+                        checked={livePreviewNetwork}
+                        onChange={(event) => setLivePreviewNetwork(event.target.checked)}
+                        className="h-5 w-5 accent-violet-400"
+                      />
+                      Network
+                    </label>
+                  </>
+                )}
+                {(previewRuntime === "webcontainer"
+                  ? webContainerStatus === "starting" || webContainerStatus === "installing" || webContainerStatus === "running"
+                  : Boolean(livePreview && livePreview.status !== "stopped" && livePreview.status !== "failed")) ? (
+                  <button
+                    type="button"
+                    onClick={() => void (previewRuntime === "webcontainer" ? stopWebContainerPreview() : stopLivePreview())}
+                    className="min-h-12 rounded-lg border border-rose-400/40 px-3 text-xs font-semibold text-rose-200"
+                  >
                     Stop
                   </button>
                 ) : (
-                  <button type="button" onClick={() => void startLivePreview()} className="min-h-12 rounded-lg bg-violet-400 px-3 text-xs font-bold text-slate-950">
+                  <button
+                    type="button"
+                    onClick={() => void startLivePreview()}
+                    className="min-h-12 rounded-lg bg-violet-400 px-3 text-xs font-bold text-slate-950"
+                  >
                     Start
                   </button>
                 )}
               </div>
-              {livePreview && (
+              {previewRuntime === "webcontainer" && webContainerStatus !== "stopped" && (
+                <>
+                  <p className="mt-2 text-[10px] text-violet-300" aria-live="polite">
+                    {webContainerStatus === "installing" ? "Installing dependencies..." : `WebContainer ${webContainerStatus}.`}
+                  </p>
+                  {webContainerLogs && (
+                    <pre className="mt-2 max-h-32 overflow-auto whitespace-pre-wrap rounded-lg bg-slate-950 p-2 text-[10px] leading-4 text-slate-400">{webContainerLogs}</pre>
+                  )}
+                </>
+              )}
+              {previewRuntime === "runner" && livePreview && (
                 <p className="mt-2 text-[10px] text-violet-300" aria-live="polite">
                   {livePreview.status === "starting" ? "Starting container..." : livePreview.status === "running" ? "Preview is live." : `Preview ${livePreview.status}.`}
                 </p>
