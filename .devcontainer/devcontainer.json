@@ -1,0 +1,12 @@
+{
+  "name": "NexusD",
+  "forwardPorts": [5000],
+  "portsAttributes": {
+    "5000": {
+      "label": "NexusD",
+      "onAutoForward": "openPreview",
+      "protocol": "http",
+      "visibility": "private"
+    }
+  }
+}
