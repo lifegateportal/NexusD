@@ -1796,68 +1796,66 @@ export function CodingChatPanel() {
 
   return (
     <section className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl border border-cyan-500/20 bg-slate-950/70 shadow-panel" aria-label="Nexus Code workspace">
-      <header className="shrink-0 border-b border-cyan-500/20 bg-slate-950/80 px-3 py-3 backdrop-blur sm:px-4">
-        <div className="flex items-start justify-between gap-3">
-          <div className="min-w-0">
-            <p className="text-[10px] font-bold uppercase tracking-[0.2em] text-cyan-400">Dedicated coding pipeline</p>
-            <h1 className="mt-1 truncate text-base font-bold text-slate-100 sm:text-lg">Nexus Code</h1>
-            <div className="mt-2 flex max-w-full items-center gap-2">
-              <select
-                value={workspaceId ?? ""}
-                onChange={(event) => void openWorkspace(event.target.value)}
-                disabled={loading || workspaces.length === 0}
-                aria-label="Select coding project"
-                className="min-h-12 min-w-0 max-w-[min(60vw,22rem)] flex-1 rounded-xl border border-slate-700 bg-slate-900 px-3 text-base text-slate-200 focus:border-cyan-400/60 focus:outline-none disabled:opacity-60"
-              >
-                {!workspaceId && <option value="">{workspaceName}</option>}
-                {workspaces.map((workspace) => (
-                  <option key={workspace.id} value={workspace.id}>{workspace.name}</option>
-                ))}
-              </select>
-              <button
-                type="button"
-                onClick={() => void createWorkspace()}
-                disabled={loading}
-                className="min-h-12 shrink-0 rounded-xl border border-cyan-400/40 px-3 text-xs font-semibold text-cyan-200 disabled:opacity-40"
-              >
-                New project
-              </button>
-              <button
-                type="button"
-                onClick={() => void deleteWorkspace()}
-                disabled={loading || !workspaceId}
-                className="min-h-12 shrink-0 rounded-xl border border-rose-400/40 px-3 text-xs font-semibold text-rose-200 disabled:opacity-40"
-              >
-                Delete
-              </button>
-            </div>
-          </div>
-          <div className="flex shrink-0 items-center gap-2">
-            <div className={`rounded-full border px-2.5 py-1 text-[10px] font-semibold ${loading ? "border-amber-400/40 text-amber-300" : "border-emerald-400/30 text-emerald-300"}`}>
+      <header className="relative z-20 shrink-0 border-b border-cyan-500/20 bg-slate-950/90 px-3 py-2 backdrop-blur sm:px-4">
+        <div className="flex min-h-12 items-center justify-between gap-2">
+          <h1 className="min-w-0 truncate text-base font-bold text-slate-100 sm:text-lg">Nexus Code</h1>
+          <div className="flex shrink-0 items-center gap-1.5">
+            <div className={`rounded-full border px-2 py-1 text-[10px] font-semibold ${loading ? "border-amber-400/40 text-amber-300" : "border-emerald-400/30 text-emerald-300"}`} aria-live="polite">
               {status}
             </div>
             <button
               type="button"
               onClick={() => void undoWorkspace()}
               disabled={!workspaceParentRevisionId || loading || !workspaceRevisionId}
-              className="min-h-12 rounded-xl border border-slate-700 px-2 text-xs font-semibold text-slate-400 disabled:opacity-40"
+              className="min-h-12 min-w-12 rounded-xl border border-slate-700 px-2 text-xs font-semibold text-slate-400 disabled:opacity-40"
             >
               Undo
             </button>
-            <button type="button" onClick={clearConversation} className="min-h-12 rounded-xl px-2 text-xs font-semibold text-slate-500 hover:bg-slate-800 hover:text-slate-200">
+            <button
+              type="button"
+              onClick={clearConversation}
+              className="min-h-12 min-w-12 rounded-xl px-2 text-xs font-semibold text-slate-500 hover:bg-slate-800 hover:text-slate-200"
+            >
               Clear
             </button>
           </div>
         </div>
-        <div className="mt-2 flex flex-wrap gap-2">
-          <div className="flex min-h-12 items-center rounded-xl border border-slate-800 px-3 text-[10px] font-semibold text-slate-500" aria-live="polite">
-            {workspaceStatus}
-          </div>
+        <div className="mt-1 flex min-h-12 flex-wrap items-center gap-2">
+          <select
+            value={workspaceId ?? ""}
+            onChange={(event) => void openWorkspace(event.target.value)}
+            disabled={loading || workspaces.length === 0}
+            aria-label="Select coding project"
+            className="min-h-12 min-w-36 max-w-[min(48vw,18rem)] flex-1 rounded-xl border border-slate-700 bg-slate-900 px-3 text-base text-slate-200 focus:border-cyan-400/60 focus:outline-none disabled:opacity-60"
+          >
+            {!workspaceId && <option value="">{workspaceName}</option>}
+            {workspaces.map((workspace) => (
+              <option key={workspace.id} value={workspace.id}>{workspace.name}</option>
+            ))}
+          </select>
+          <button
+            type="button"
+            onClick={() => void createWorkspace()}
+            disabled={loading}
+            className="min-h-12 shrink-0 rounded-xl border border-cyan-400/40 px-3 text-xs font-semibold text-cyan-200 disabled:opacity-40"
+          >
+            <span className="sm:hidden">New</span>
+            <span className="hidden sm:inline">New project</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => void deleteWorkspace()}
+            disabled={loading || !workspaceId}
+            className="min-h-12 shrink-0 rounded-xl border border-rose-400/40 px-3 text-xs font-semibold text-rose-200 disabled:opacity-40"
+          >
+            Delete
+          </button>
+          <span className="shrink-0 px-1 text-[10px] font-semibold text-slate-500" aria-live="polite">{workspaceStatus}</span>
           <button
             type="button"
             onClick={() => toggleWorkspacePanel("files")}
             aria-pressed={showFiles}
-            className={`min-h-12 rounded-xl border px-3 text-xs font-semibold ${showFiles ? "border-cyan-400/50 bg-cyan-500/15 text-cyan-200" : "border-slate-700 text-slate-400"}`}
+            className={`min-h-12 shrink-0 rounded-xl border px-3 text-xs font-semibold ${showFiles ? "border-cyan-400/50 bg-cyan-500/15 text-cyan-200" : "border-slate-700 text-slate-400"}`}
           >
             Explorer {files.length > 0 ? `(${files.length})` : ""}
           </button>
@@ -1865,98 +1863,99 @@ export function CodingChatPanel() {
             type="button"
             onClick={() => toggleWorkspacePanel("preview")}
             aria-pressed={showPreview}
-            className={`min-h-12 rounded-xl border px-3 text-xs font-semibold ${showPreview ? "border-violet-400/50 bg-violet-500/15 text-violet-200" : "border-slate-700 text-slate-400"}`}
+            className={`min-h-12 shrink-0 rounded-xl border px-3 text-xs font-semibold ${showPreview ? "border-violet-400/50 bg-violet-500/15 text-violet-200" : "border-slate-700 text-slate-400"}`}
           >
             Preview
           </button>
-        </div>
-        <div className="mt-3 rounded-xl border border-violet-500/20 bg-violet-500/5 p-3">
-          <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-            <div className="min-w-0">
+          <details className="group relative shrink-0">
+            <summary className="flex min-h-12 cursor-pointer list-none items-center rounded-xl border border-violet-400/30 px-3 text-xs font-semibold text-violet-200 [&::-webkit-details-marker]:hidden">
+              Export / GitHub
+              <span className="ml-2 text-[10px] text-violet-300/70" aria-hidden="true">⌄</span>
+            </summary>
+            <div className="absolute right-0 top-full z-50 mt-2 max-h-[min(70dvh,36rem)] w-[min(90vw,34rem)] overflow-y-auto rounded-2xl border border-violet-500/30 bg-slate-950 p-3 shadow-2xl">
               <p className="text-xs font-semibold text-violet-200">Export or publish this project</p>
               <p className="mt-1 text-[10px] leading-4 text-slate-400">
-                GitHub connection uses GitHub&apos;s broad repository permission for public and private repos.
-                Matching file paths are overwritten; other repository files are kept.
+                GitHub uses broad repository permission for public and private repositories. Matching paths are overwritten; other files are kept.
               </p>
-            </div>
-            <div className="flex shrink-0 flex-wrap gap-2">
-              <button
-                type="button"
-                onClick={() => void exportWorkspaceZip()}
-                disabled={zipExporting || files.length === 0}
-                className="min-h-12 rounded-xl border border-cyan-400/40 px-3 text-xs font-semibold text-cyan-200 disabled:opacity-40"
-              >
-                {zipExporting ? "Preparing ZIP…" : "Export ZIP"}
-              </button>
-              {githubConnected ? (
+              <div className="mt-3 flex flex-wrap gap-2">
                 <button
                   type="button"
-                  onClick={() => void disconnectGitHub()}
-                  disabled={githubLoading}
-                  className="min-h-12 rounded-xl border border-slate-700 px-3 text-xs font-semibold text-slate-300 disabled:opacity-40"
+                  onClick={() => void exportWorkspaceZip()}
+                  disabled={zipExporting || files.length === 0}
+                  className="min-h-12 rounded-xl border border-cyan-400/40 px-3 text-xs font-semibold text-cyan-200 disabled:opacity-40"
                 >
-                  Disconnect {githubLogin ? `@${githubLogin}` : "GitHub"}
+                  {zipExporting ? "Preparing ZIP…" : "Export ZIP"}
                 </button>
-              ) : (
-                <a
-                  href="/api/coding/github/connect"
-                  aria-disabled={githubLoading}
-                  className={`flex min-h-12 items-center rounded-xl bg-violet-300 px-3 text-xs font-bold text-slate-950 ${githubLoading ? "pointer-events-none opacity-40" : ""}`}
-                >
-                  Connect GitHub
-                </a>
+                {githubConnected ? (
+                  <button
+                    type="button"
+                    onClick={() => void disconnectGitHub()}
+                    disabled={githubLoading}
+                    className="min-h-12 rounded-xl border border-slate-700 px-3 text-xs font-semibold text-slate-300 disabled:opacity-40"
+                  >
+                    Disconnect {githubLogin ? `@${githubLogin}` : "GitHub"}
+                  </button>
+                ) : (
+                  <a
+                    href="/api/coding/github/connect"
+                    aria-disabled={githubLoading}
+                    className={`flex min-h-12 items-center rounded-xl bg-violet-300 px-3 text-xs font-bold text-slate-950 ${githubLoading ? "pointer-events-none opacity-40" : ""}`}
+                  >
+                    Connect GitHub
+                  </a>
+                )}
+              </div>
+              {githubConnected && (
+                <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                  <label className="min-w-0 text-[10px] font-semibold text-slate-400">
+                    Personal repository
+                    <select
+                      value={selectedGitHubRepository}
+                      onChange={(event) => setSelectedGitHubRepository(event.target.value)}
+                      disabled={githubLoading || githubRepositories.length === 0}
+                      className="mt-1 min-h-12 w-full rounded-xl border border-slate-700 bg-slate-900 px-3 text-base text-slate-200 disabled:opacity-50"
+                    >
+                      {githubRepositories.length === 0 && <option value="">No owned repositories found</option>}
+                      {githubRepositories.map((repository) => (
+                        <option key={repository.fullName} value={repository.fullName}>
+                          {repository.fullName}{repository.private ? " · private" : " · public"}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="min-w-0 text-[10px] font-semibold text-slate-400">
+                    Commit message
+                    <input
+                      value={githubCommitMessage}
+                      onChange={(event) => setGithubCommitMessage(event.target.value)}
+                      maxLength={200}
+                      className="mt-1 min-h-12 w-full rounded-xl border border-slate-700 bg-slate-900 px-3 text-base text-slate-200"
+                    />
+                  </label>
+                  <button
+                    type="button"
+                    onClick={() => void publishWorkspaceToGitHub()}
+                    disabled={githubPublishing || githubLoading || !workspaceRevisionId || !workspaceFilesAreSaved || !selectedGitHubRepository || !githubCommitMessage.trim()}
+                    className="min-h-12 rounded-xl bg-violet-300 px-4 text-xs font-bold text-slate-950 disabled:opacity-40 sm:col-span-2"
+                  >
+                    {githubPublishing ? "Publishing…" : "Publish to GitHub"}
+                  </button>
+                </div>
+              )}
+              {githubConnected && !workspaceFilesAreSaved && (
+                <p className="mt-2 text-[10px] text-amber-200">Project edits are saving. Publishing will be available when they are saved.</p>
+              )}
+              {githubError && <p role="alert" className="mt-2 text-xs text-rose-200">{githubError}</p>}
+              {githubNotice && (
+                <p role="status" className="mt-2 text-xs text-emerald-200">
+                  {githubNotice}
+                  {githubCommitUrl && (
+                    <>{" "}<a href={githubCommitUrl} target="_blank" rel="noopener noreferrer" className="underline">View commit</a></>
+                  )}
+                </p>
               )}
             </div>
-          </div>
-          {githubConnected && (
-            <div className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-[minmax(12rem,1fr)_minmax(12rem,1fr)_auto]">
-              <label className="min-w-0 text-[10px] font-semibold text-slate-400">
-                Personal repository
-                <select
-                  value={selectedGitHubRepository}
-                  onChange={(event) => setSelectedGitHubRepository(event.target.value)}
-                  disabled={githubLoading || githubRepositories.length === 0}
-                  className="mt-1 min-h-12 w-full rounded-xl border border-slate-700 bg-slate-900 px-3 text-base text-slate-200 disabled:opacity-50"
-                >
-                  {githubRepositories.length === 0 && <option value="">No owned repositories found</option>}
-                  {githubRepositories.map((repository) => (
-                    <option key={repository.fullName} value={repository.fullName}>
-                      {repository.fullName}{repository.private ? " · private" : " · public"}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label className="min-w-0 text-[10px] font-semibold text-slate-400">
-                Commit message
-                <input
-                  value={githubCommitMessage}
-                  onChange={(event) => setGithubCommitMessage(event.target.value)}
-                  maxLength={200}
-                  className="mt-1 min-h-12 w-full rounded-xl border border-slate-700 bg-slate-900 px-3 text-base text-slate-200"
-                />
-              </label>
-              <button
-                type="button"
-                onClick={() => void publishWorkspaceToGitHub()}
-                disabled={githubPublishing || githubLoading || !workspaceRevisionId || !workspaceFilesAreSaved || !selectedGitHubRepository || !githubCommitMessage.trim()}
-                className="min-h-12 self-end rounded-xl bg-violet-300 px-4 text-xs font-bold text-slate-950 disabled:opacity-40"
-              >
-                {githubPublishing ? "Publishing…" : "Publish to GitHub"}
-              </button>
-            </div>
-          )}
-          {githubConnected && !workspaceFilesAreSaved && (
-            <p className="mt-2 text-[10px] text-amber-200">Project edits are saving. Publishing will be available when they are saved.</p>
-          )}
-          {githubError && <p role="alert" className="mt-2 text-xs text-rose-200">{githubError}</p>}
-          {githubNotice && (
-            <p role="status" className="mt-2 text-xs text-emerald-200">
-              {githubNotice}
-              {githubCommitUrl && (
-                <>{" "}<a href={githubCommitUrl} target="_blank" rel="noopener noreferrer" className="underline">View commit</a></>
-              )}
-            </p>
-          )}
+          </details>
         </div>
       </header>
 
@@ -2126,9 +2125,9 @@ export function CodingChatPanel() {
               }
             }}
             disabled={loading}
-            rows={3}
+            rows={2}
             placeholder="Describe the feature, bug, or code you want Nexus to work on…"
-            className="min-h-24 w-full resize-none border-0 bg-transparent px-2 py-2 text-base leading-6 text-slate-100 placeholder:text-slate-600 focus:outline-none disabled:opacity-50"
+            className="min-h-16 w-full resize-none border-0 bg-transparent px-2 py-2 text-base leading-6 text-slate-100 placeholder:text-slate-600 focus:outline-none disabled:opacity-50 sm:min-h-20"
           />
           {attachedFileNames.length > 0 && (
             <div className="flex items-center gap-2 overflow-x-auto border-t border-slate-800 px-2 pt-2 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
