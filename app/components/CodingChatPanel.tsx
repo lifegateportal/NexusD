@@ -1717,13 +1717,23 @@ export function CodingChatPanel() {
           <div className="mb-3 rounded-xl border border-rose-500/30 bg-rose-500/10 px-3 py-2">
             <p role="alert" className="text-xs text-rose-200">{error || voiceError}</p>
             {webContainerNeedsTopLevel && (
-              <button
-                type="button"
-                onClick={() => window.open(window.location.href, "_blank", "noopener,noreferrer")}
-                className="mt-2 min-h-12 rounded-lg bg-rose-200 px-3 text-xs font-bold text-slate-950"
-              >
-                Open Nexus Code in a new tab
-              </button>
+              <div className="mt-2 flex flex-wrap gap-2">
+                <a
+                  href="/coding"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="flex min-h-12 items-center rounded-lg bg-rose-200 px-3 text-xs font-bold text-slate-950"
+                >
+                  Open Nexus Code in a new tab
+                </a>
+                <a
+                  href="/coding"
+                  target="_top"
+                  className="flex min-h-12 items-center rounded-lg border border-rose-200/40 px-3 text-xs font-bold text-rose-100"
+                >
+                  Open in this tab
+                </a>
+              </div>
             )}
           </div>
         )}
