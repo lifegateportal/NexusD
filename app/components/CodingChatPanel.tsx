@@ -193,6 +193,7 @@ export function CodingChatPanel() {
   const [showFiles, setShowFiles] = useState(false);
   const [showPreview, setShowPreview] = useState(false);
   const [previewExpanded, setPreviewExpanded] = useState(false);
+  const [webContainerTerminalCollapsed, setWebContainerTerminalCollapsed] = useState(false);
   const [previewUrlDraft, setPreviewUrlDraft] = useState("");
   const [previewUrl, setPreviewUrl] = useState("");
   const [livePreview, setLivePreview] = useState<CodingPreview | null>(null);
@@ -1164,6 +1165,7 @@ export function CodingChatPanel() {
         webContainerPreviewProcessRef.current = Array.from(webContainerProcessesRef.current).at(-1) ?? null;
         setWebContainerNeedsTopLevel(false);
         setPreviewUrl(parsed.data.url);
+        setWebContainerTerminalCollapsed(true);
         setWebContainerStatus(CodingWebContainerStatusSchema.parse("running"));
         setWorkspaceStatus(`App running on port ${parsed.data.port}`);
         appendTerminalLine(`[server] Ready on port ${parsed.data.port}: ${parsed.data.url}`);
@@ -2059,17 +2061,29 @@ export function CodingChatPanel() {
                   <div className="mt-2 overflow-hidden rounded-lg border border-emerald-500/20 bg-[#030806]">
                     <div className="flex min-h-10 items-center justify-between border-b border-emerald-500/15 px-3 text-[10px] font-semibold uppercase tracking-widest text-emerald-300">
                       <span>Terminal</span>
-                      <span>{webContainerStatus}</span>
+                      <div className="flex items-center gap-3">
+                        <span>{webContainerStatus}</span>
+                        <button
+                          type="button"
+                          onClick={() => setWebContainerTerminalCollapsed((collapsed) => !collapsed)}
+                          aria-expanded={!webContainerTerminalCollapsed}
+                          className="min-h-10 px-2 text-[10px] font-semibold text-emerald-100"
+                        >
+                          {webContainerTerminalCollapsed ? "Show output" : "Hide output"}
+                        </button>
+                      </div>
                     </div>
-                    <pre
-                      ref={webContainerTerminalRef}
-                      role="log"
-                      aria-label="WebContainer terminal output"
-                      aria-live="polite"
-                      className="max-h-[30dvh] min-h-20 overflow-auto whitespace-pre-wrap break-words p-3 font-mono text-[11px] leading-5 text-emerald-100"
-                    >
-                      {webContainerLogs || "Waiting for WebContainer output..."}
-                    </pre>
+                    {!webContainerTerminalCollapsed && (
+                      <pre
+                        ref={webContainerTerminalRef}
+                        role="log"
+                        aria-label="WebContainer terminal output"
+                        aria-live="polite"
+                        className="max-h-[30dvh] min-h-20 overflow-auto whitespace-pre-wrap break-words p-3 font-mono text-[11px] leading-5 text-emerald-100"
+                      >
+                        {webContainerLogs || "Waiting for WebContainer output..."}
+                      </pre>
+                    )}
                   </div>
                 </>
               )}
@@ -2096,6 +2110,11 @@ export function CodingChatPanel() {
             </div>
           </div>
           <div className="min-h-0 flex-1 overflow-auto p-3" style={{ WebkitOverflowScrolling: "touch" }}>
+            {previewUrl && previewRuntime === "webcontainer" && (
+              <div className="mb-3 rounded-xl border border-amber-400/30 bg-amber-400/10 p-3 text-xs leading-5 text-amber-100">
+                If the preview says it needs third-party cookies, the browser is blocking its WebContainer service worker. iPad Safari may block this cross-site preview; try opening it in a desktop browser or use the Isolated runner.
+              </div>
+            )}
             {previewUrl || selectedFileCanPreview ? (
               <div className={`mx-auto flex min-h-0 w-full overflow-hidden rounded-2xl border border-slate-700 bg-white shadow-2xl ${previewExpanded ? "h-full flex-1 flex-col" : ""}`}>
                 <div className="flex h-8 items-center gap-1 border-b border-slate-300 bg-slate-100 px-3">
