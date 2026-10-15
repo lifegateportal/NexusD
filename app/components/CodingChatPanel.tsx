@@ -198,6 +198,7 @@ export function CodingChatPanel() {
   const [previewRuntime, setPreviewRuntime] = useState<"webcontainer" | "runner">("webcontainer");
   const [webContainerStatus, setWebContainerStatus] = useState<CodingWebContainerStatus>("stopped");
   const [webContainerLogs, setWebContainerLogs] = useState("");
+  const [webContainerNeedsTopLevel, setWebContainerNeedsTopLevel] = useState(false);
   const [livePreviewCommand, setLivePreviewCommand] = useState("npm run dev");
   const [livePreviewPort, setLivePreviewPort] = useState("3000");
   const [livePreviewNetwork, setLivePreviewNetwork] = useState(true);
@@ -1114,8 +1115,13 @@ export function CodingChatPanel() {
 
     try {
       if (!window.crossOriginIsolated) {
-        throw new Error("WebContainers need cross-origin isolation. Reload Nexus Code after enabling its COOP/COEP response headers.");
+        const embedded = window.self !== window.top;
+        setWebContainerNeedsTopLevel(embedded);
+        throw new Error(embedded
+          ? "StackBlitz's embedded preview cannot provide the cross-origin isolation WebContainers need. Open Nexus Code in a new tab."
+          : "WebContainers need cross-origin isolation. Reload Nexus Code after enabling its COOP/COEP response headers.");
       }
+      setWebContainerNeedsTopLevel(false);
       const runtime = await bootCodingWebContainer();
       if (generation !== webContainerGenerationRef.current) return;
       await runtime.mount(createCodingWebContainerFileTree(files));
@@ -1142,6 +1148,7 @@ export function CodingChatPanel() {
         }
         if (generation !== webContainerGenerationRef.current) return;
         webContainerReadyRef.current = true;
+        setWebContainerNeedsTopLevel(false);
         setPreviewUrl(parsed.data.url);
         setWebContainerStatus(CodingWebContainerStatusSchema.parse("running"));
         setWorkspaceStatus(`App running on port ${parsed.data.port}`);
@@ -1707,9 +1714,18 @@ export function CodingChatPanel() {
 
           <div className="shrink-0 border-t border-cyan-500/20 bg-slate-950/95 p-3 sm:p-4" style={{ paddingBottom: "max(env(safe-area-inset-bottom), 0.75rem)" }}>
         {(error || voiceError) && (
-          <p role="alert" className="mb-3 rounded-xl border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-xs text-rose-200">
-            {error || voiceError}
-          </p>
+          <div className="mb-3 rounded-xl border border-rose-500/30 bg-rose-500/10 px-3 py-2">
+            <p role="alert" className="text-xs text-rose-200">{error || voiceError}</p>
+            {webContainerNeedsTopLevel && (
+              <button
+                type="button"
+                onClick={() => window.open(window.location.href, "_blank", "noopener,noreferrer")}
+                className="mt-2 min-h-12 rounded-lg bg-rose-200 px-3 text-xs font-bold text-slate-950"
+              >
+                Open Nexus Code in a new tab
+              </button>
+            )}
+          </div>
         )}
         <div className="rounded-2xl border border-slate-700/80 bg-slate-900/65 p-2 sm:p-3">
           <input

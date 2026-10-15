@@ -7,9 +7,10 @@ code itself.
 Nexus Code's Preview panel defaults to a StackBlitz WebContainer, which runs
 project commands such as `npm run dev` in the browser without this Docker
 service. The `/coding` page sends the COOP/COEP headers required by
-WebContainers. Choose **Isolated runner** in the panel to use this service
-instead; it remains useful when a project needs the runner's server-side
-container environment.
+WebContainers. StackBlitz's embedded preview may still prevent cross-origin
+isolation; in that case, open Nexus Code in a top-level browser tab. Choose
+**Isolated runner** in the panel to use this service instead; it remains useful
+when a project needs the runner's server-side container environment.
 
 ## Security boundary
 
