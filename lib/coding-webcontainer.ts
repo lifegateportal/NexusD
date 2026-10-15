@@ -30,6 +30,7 @@ export const CodingWebContainerStatusSchema = z.enum([
   "stopped",
   "starting",
   "installing",
+  "ready",
   "running",
   "failed",
 ]);
@@ -54,6 +55,23 @@ export const CodingWebContainerOutputSchema = z.string().max(100_000);
 export type CodingWebContainerStatus = z.infer<typeof CodingWebContainerStatusSchema>;
 
 let webContainerPromise: Promise<WebContainer> | null = null;
+let webContainerBootGeneration = 0;
+
+export async function withCodingWebContainerTimeout<T>(
+  operation: Promise<T>,
+  timeoutMs: number,
+  message: string,
+): Promise<T> {
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<T>((_, reject) => {
+    timeoutId = setTimeout(() => reject(new Error(message)), timeoutMs);
+  });
+  try {
+    return await Promise.race([operation, timeout]);
+  } finally {
+    if (timeoutId) clearTimeout(timeoutId);
+  }
+}
 
 export function createCodingWebContainerFileTree(input: unknown): FileSystemTree {
   const files = CodingWebContainerFilesSchema.parse(input);
@@ -96,14 +114,39 @@ export function createCodingWebContainerFileTree(input: unknown): FileSystemTree
   return tree;
 }
 
-export async function bootCodingWebContainer(): Promise<WebContainer> {
+export async function bootCodingWebContainer(onProgress?: (message: string) => void): Promise<WebContainer> {
   if (!webContainerPromise) {
-    webContainerPromise = import("@webcontainer/api")
-      .then(({ WebContainer: WebContainerRuntime }) => WebContainerRuntime.boot({ coep: "require-corp" }))
-      .catch((error: unknown) => {
+    const generation = ++webContainerBootGeneration;
+    const boot = (async () => {
+      onProgress?.("Loading the WebContainer API...");
+      const { WebContainer: WebContainerRuntime } = await withCodingWebContainerTimeout(
+        import("@webcontainer/api"),
+        30_000,
+        "The WebContainer API did not load within 30 seconds. Check the connection and try starting the container again.",
+      );
+      onProgress?.("Connecting to the StackBlitz WebContainer runtime...");
+      return WebContainerRuntime.boot({ coep: "require-corp" });
+    })();
+    void boot.then((runtime) => {
+      if (generation !== webContainerBootGeneration) runtime.teardown();
+    }).catch(() => undefined);
+    webContainerPromise = withCodingWebContainerTimeout(
+      boot,
+      90_000,
+      "The StackBlitz WebContainer runtime did not respond within 90 seconds. Reload Nexus Code before trying again.",
+    ).then((runtime) => {
+      if (generation !== webContainerBootGeneration) {
+        runtime.teardown();
+        throw new Error("WebContainer startup was cancelled.");
+      }
+      return runtime;
+    }).catch((error: unknown) => {
+      if (generation === webContainerBootGeneration) {
         webContainerPromise = null;
-        throw error;
-      });
+        webContainerBootGeneration += 1;
+      }
+      throw error;
+    });
   }
   return webContainerPromise;
 }
@@ -111,7 +154,12 @@ export async function bootCodingWebContainer(): Promise<WebContainer> {
 export async function teardownCodingWebContainer(): Promise<void> {
   const current = webContainerPromise;
   webContainerPromise = null;
+  webContainerBootGeneration += 1;
   if (!current) return;
-  const runtime = await current;
+  const runtime = await withCodingWebContainerTimeout(
+    current,
+    5_000,
+    "WebContainer startup is still pending. Reload this page to reset it.",
+  );
   runtime.teardown();
 }

@@ -117,13 +117,16 @@ export function NexusNav({ active, onSelect }: NexusNavProps) {
     if (href.startsWith("/ebook") && pathname.startsWith("/ebook")) return;
     if (href.startsWith("/coding") && pathname.startsWith("/coding")) return;
     if (href === "/" && pathname === "/") return;
+    if (href === "/coding") {
+      window.location.assign(href);
+      return;
+    }
     router.push(href);
   }, [pathname, router]);
 
   useEffect(() => {
     router.prefetch("/");
     router.prefetch("/ebook?tab=pipeline");
-    router.prefetch("/coding");
     router.prefetch("/translate");
   }, [router]);
 

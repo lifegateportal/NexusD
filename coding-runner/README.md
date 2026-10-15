@@ -11,6 +11,10 @@ WebContainers. StackBlitz's embedded preview may still prevent cross-origin
 isolation; in that case, open Nexus Code in a top-level browser tab. Choose
 **Isolated runner** in the panel to use this service instead; it remains useful
 when a project needs the runner's server-side container environment.
+Start the WebContainer separately from its terminal commands. The container
+mounts the project once and stays available for commands such as `npm install`
+and `npm run dev`; command output streams in the Preview panel, and the app
+preview appears when a dev server reports its ready port.
 
 ## Security boundary
 

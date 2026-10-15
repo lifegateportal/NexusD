@@ -44,9 +44,10 @@ import {
   CodingWebContainerStatusSchema,
   createCodingWebContainerFileTree,
   teardownCodingWebContainer,
+  withCodingWebContainerTimeout,
   type CodingWebContainerStatus,
 } from "@/lib/coding-webcontainer";
-import type { Unsubscribe, WebContainerProcess } from "@webcontainer/api";
+import type { Unsubscribe, WebContainer, WebContainerProcess } from "@webcontainer/api";
 
 const STORAGE_KEY = "nexus-coding-chat";
 const VOICE_STORAGE_KEY = "nexus-coding-voice-mode";
@@ -199,6 +200,7 @@ export function CodingChatPanel() {
   const [webContainerStatus, setWebContainerStatus] = useState<CodingWebContainerStatus>("stopped");
   const [webContainerLogs, setWebContainerLogs] = useState("");
   const [webContainerNeedsTopLevel, setWebContainerNeedsTopLevel] = useState(false);
+  const [webContainerReloadRequired, setWebContainerReloadRequired] = useState(false);
   const [livePreviewCommand, setLivePreviewCommand] = useState("npm run dev");
   const [livePreviewPort, setLivePreviewPort] = useState("3000");
   const [livePreviewNetwork, setLivePreviewNetwork] = useState(true);
@@ -225,12 +227,15 @@ export function CodingChatPanel() {
   const workspaceChangeReasonRef = useRef("Manual workspace edit");
   const workspaceChangeSourceRef = useRef<"user" | "agent" | "import">("user");
   const workspaceSaveQueueRef = useRef(Promise.resolve());
-  const webContainerProcessRef = useRef<WebContainerProcess | null>(null);
+  const webContainerRuntimeRef = useRef<WebContainer | null>(null);
+  const webContainerProcessesRef = useRef(new Set<WebContainerProcess>());
+  const webContainerPreviewProcessRef = useRef<WebContainerProcess | null>(null);
   const webContainerUnsubscribeRef = useRef<Unsubscribe | null>(null);
   const webContainerGenerationRef = useRef(0);
   const webContainerReadyRef = useRef(false);
   const webContainerSyncedFilesRef = useRef<Set<string>>(new Set());
   const webContainerSyncQueueRef = useRef(Promise.resolve());
+  const webContainerTerminalRef = useRef<HTMLPreElement>(null);
   const fileTree = useMemo(() => buildCodingTree(files), [files]);
   const selectedFile = useMemo(
     () => files.find((file) => file.name === selectedFileName) ?? null,
@@ -252,11 +257,18 @@ export function CodingChatPanel() {
   useEffect(() => () => {
     webContainerGenerationRef.current += 1;
     webContainerUnsubscribeRef.current?.();
-    webContainerProcessRef.current?.kill();
+    webContainerProcessesRef.current.forEach((process) => process.kill());
+    webContainerProcessesRef.current.clear();
+    webContainerRuntimeRef.current = null;
     void teardownCodingWebContainer().catch((runtimeError: unknown) => {
       console.error("[coding] Failed to stop WebContainer", runtimeError);
     });
   }, []);
+
+  useEffect(() => {
+    const terminal = webContainerTerminalRef.current;
+    if (terminal) terminal.scrollTop = terminal.scrollHeight;
+  }, [webContainerLogs]);
 
   const applyWorkspaceSnapshot = useCallback((snapshot: CodingWorkspaceSnapshot) => {
     workspaceReadyRef.current = false;
@@ -1062,8 +1074,10 @@ export function CodingChatPanel() {
     webContainerGenerationRef.current += 1;
     webContainerUnsubscribeRef.current?.();
     webContainerUnsubscribeRef.current = null;
-    webContainerProcessRef.current?.kill();
-    webContainerProcessRef.current = null;
+    webContainerProcessesRef.current.forEach((process) => process.kill());
+    webContainerProcessesRef.current.clear();
+    webContainerPreviewProcessRef.current = null;
+    webContainerRuntimeRef.current = null;
     webContainerReadyRef.current = false;
     webContainerSyncedFilesRef.current.clear();
     try {
@@ -1076,69 +1090,68 @@ export function CodingChatPanel() {
     setWorkspaceStatus("Saved");
   }, []);
 
-  const startWebContainerPreview = useCallback(async () => {
+  const startWebContainer = useCallback(async () => {
     if (!workspaceId || !workspaceRevisionId) {
-      setError("Save or create a coding project before starting a live preview.");
+      setError("Save or create a coding project before starting a WebContainer.");
       return;
     }
-    const parsedCommand = CodingWebContainerCommandSchema.safeParse(livePreviewCommand);
-    if (!parsedCommand.success) {
-      setError("Enter a command between 1 and 500 characters.");
+    if (webContainerReloadRequired) {
+      setError("Reload Nexus Code before starting the WebContainer again.");
       return;
     }
-    const command = parsedCommand.data;
+    if (webContainerStatus === "starting") return;
+    if (webContainerRuntimeRef.current && webContainerStatus !== "failed") {
+      setError("The WebContainer is already started. Run commands in its terminal or stop the container first.");
+      return;
+    }
     setError(null);
     await workspaceSaveQueueRef.current;
     await stopWebContainerPreview();
     const generation = ++webContainerGenerationRef.current;
     webContainerReadyRef.current = false;
-    setWebContainerLogs("");
+    setWebContainerLogs("[boot] Starting browser WebContainer...\n");
     setWebContainerStatus(CodingWebContainerStatusSchema.parse("starting"));
     setWorkspaceStatus("Starting WebContainer");
     setPreviewUrl("");
     setShowPreview(true);
 
-    const consumeOutput = (process: WebContainerProcess) => {
-      void process.output.pipeTo(new WritableStream<string>({
-        write(chunk) {
-          const parsedOutput = CodingWebContainerOutputSchema.safeParse(chunk);
-          if (!parsedOutput.success) throw new Error("The WebContainer returned invalid terminal output.");
-          if (generation !== webContainerGenerationRef.current) return;
-          setWebContainerLogs((current) => `${current}${parsedOutput.data}`.slice(-12_000));
-        },
-      })).catch((outputError: unknown) => {
-        if (generation === webContainerGenerationRef.current) {
-          setError(outputError instanceof Error ? outputError.message : "WebContainer terminal output failed.");
-        }
-      });
+    const appendTerminalLine = (line: string) => {
+      setWebContainerLogs((current) => `${current}${current.endsWith("\n") ? "" : "\n"}${line}\n`.slice(-30_000));
     };
 
     try {
-      if (!window.crossOriginIsolated) {
+      if (workspaceId && livePreview) {
+        const response = await fetch(`/api/coding/workspaces/${encodeURIComponent(workspaceId)}/previews/${encodeURIComponent(livePreview.id)}`, {
+          method: "DELETE",
+          credentials: "same-origin",
+        });
+        if (!response.ok) throw new Error("The previous isolated preview could not be stopped.");
+        setLivePreview(null);
+      }
+      const secureContext = window.isSecureContext;
+      const isolated = window.crossOriginIsolated;
+      const sharedMemoryAvailable = typeof SharedArrayBuffer !== "undefined";
+      appendTerminalLine(`[env] secure context: ${secureContext}; cross-origin isolated: ${isolated}; SharedArrayBuffer: ${sharedMemoryAvailable}`);
+      if (!secureContext || !isolated || !sharedMemoryAvailable) {
         const embedded = window.self !== window.top;
         setWebContainerNeedsTopLevel(embedded);
         throw new Error(embedded
-          ? "StackBlitz's embedded preview cannot provide the cross-origin isolation WebContainers need. Open Nexus Code in a new tab."
-          : "WebContainers need cross-origin isolation. Reload Nexus Code after enabling its COOP/COEP response headers.");
+          ? "WebContainers need cross-origin isolation and SharedArrayBuffer. Open Nexus Code in a top-level tab with COOP/COEP headers."
+          : "WebContainers need a secure, cross-origin-isolated page with SharedArrayBuffer. Check the COOP/COEP response headers.");
       }
       setWebContainerNeedsTopLevel(false);
-      const runtime = await bootCodingWebContainer();
+      const runtime = await bootCodingWebContainer((stage) => appendTerminalLine(`[boot] ${stage}`));
       if (generation !== webContainerGenerationRef.current) return;
-      await runtime.mount(createCodingWebContainerFileTree(files));
+      appendTerminalLine(`[fs] Mounting ${files.length} project files...`);
+      await withCodingWebContainerTimeout(
+        runtime.mount(createCodingWebContainerFileTree(files)),
+        45_000,
+        "Mounting the project timed out after 45 seconds.",
+      );
+      if (generation !== webContainerGenerationRef.current) return;
+      webContainerRuntimeRef.current = runtime;
       webContainerSyncedFilesRef.current = new Set(files.map((file) => file.name));
-      if (generation !== webContainerGenerationRef.current) return;
-
-      if (files.some((file) => file.name === "package.json")) {
-        setWebContainerStatus(CodingWebContainerStatusSchema.parse("installing"));
-        setWorkspaceStatus("Installing project dependencies");
-        const installProcess = await runtime.spawn("npm", ["install"]);
-        webContainerProcessRef.current = installProcess;
-        consumeOutput(installProcess);
-        const installExitCode = await installProcess.exit;
-        webContainerProcessRef.current = null;
-        if (installExitCode !== 0) throw new Error(`Dependency installation failed with exit code ${installExitCode}.`);
-      }
-      if (generation !== webContainerGenerationRef.current) return;
+      appendTerminalLine("[fs] Project files mounted.");
 
       const readyUnsubscribe = runtime.on("server-ready", (port, url) => {
         const parsed = CodingWebContainerReadySchema.safeParse({ port, url });
@@ -1148,49 +1161,132 @@ export function CodingChatPanel() {
         }
         if (generation !== webContainerGenerationRef.current) return;
         webContainerReadyRef.current = true;
+        webContainerPreviewProcessRef.current = Array.from(webContainerProcessesRef.current).at(-1) ?? null;
         setWebContainerNeedsTopLevel(false);
         setPreviewUrl(parsed.data.url);
         setWebContainerStatus(CodingWebContainerStatusSchema.parse("running"));
         setWorkspaceStatus(`App running on port ${parsed.data.port}`);
+        appendTerminalLine(`[server] Ready on port ${parsed.data.port}: ${parsed.data.url}`);
       });
       const errorUnsubscribe = runtime.on("error", (runtimeError) => {
         if (generation !== webContainerGenerationRef.current) return;
+        webContainerRuntimeRef.current = null;
         setWebContainerStatus(CodingWebContainerStatusSchema.parse("failed"));
         setError(runtimeError.message || "The WebContainer runtime failed.");
+        appendTerminalLine(`[runtime error] ${runtimeError.message || "The WebContainer runtime failed."}`);
       });
       webContainerUnsubscribeRef.current = () => {
         readyUnsubscribe();
         errorUnsubscribe();
       };
-
-      const [executable, ...args] = command.split(/\s+/);
-      if (!executable) throw new Error("Enter a command to start the app.");
-      const process = await runtime.spawn(executable, args);
-      webContainerProcessRef.current = process;
-      consumeOutput(process);
-      void process.exit.then((exitCode) => {
-        if (generation !== webContainerGenerationRef.current) return;
-        webContainerProcessRef.current = null;
-        if (exitCode !== 0 || !webContainerReadyRef.current) {
-          setWebContainerStatus(CodingWebContainerStatusSchema.parse("failed"));
-          setWorkspaceStatus("WebContainer app stopped");
-          setError(`The app command exited with code ${exitCode} before a preview was ready.`);
-        }
-      }).catch((processError: unknown) => {
-        if (generation !== webContainerGenerationRef.current) return;
-        setWebContainerStatus(CodingWebContainerStatusSchema.parse("failed"));
-        setError(processError instanceof Error ? processError.message : "The app command failed.");
-      });
+      setWebContainerStatus(CodingWebContainerStatusSchema.parse("ready"));
+      setWorkspaceStatus("WebContainer ready");
+      appendTerminalLine("[container] Ready. Enter a command to run in this project.");
     } catch (previewError) {
       if (generation !== webContainerGenerationRef.current) return;
       setWebContainerStatus(CodingWebContainerStatusSchema.parse("failed"));
       setWorkspaceStatus("WebContainer failed");
-      setError(previewError instanceof Error ? previewError.message : "WebContainer preview could not start.");
+      const message = previewError instanceof Error ? previewError.message : "WebContainer preview could not start.";
+      if (message.includes("did not respond within 90 seconds")) setWebContainerReloadRequired(true);
+      setError(message);
+      appendTerminalLine(`[error] ${message}`);
+      webContainerProcessesRef.current.forEach((process) => process.kill());
+      webContainerProcessesRef.current.clear();
     }
-  }, [files, livePreviewCommand, stopWebContainerPreview, workspaceId, workspaceRevisionId]);
+  }, [files, livePreview, stopWebContainerPreview, webContainerReloadRequired, webContainerStatus, workspaceId, workspaceRevisionId]);
+
+  const runWebContainerCommand = useCallback(async () => {
+    const runtime = webContainerRuntimeRef.current;
+    if (!runtime || !["ready", "installing", "running"].includes(webContainerStatus)) {
+      setError("Start the WebContainer before running a command.");
+      return;
+    }
+    const parsedCommand = CodingWebContainerCommandSchema.safeParse(livePreviewCommand);
+    if (!parsedCommand.success) {
+      setError("Enter a command between 1 and 500 characters.");
+      return;
+    }
+    const command = parsedCommand.data;
+    const generation = webContainerGenerationRef.current;
+    const commandRunsNpmInstall = /^\s*npm\s+(?:install|i)\b/.test(command);
+    setError(null);
+    setWebContainerLogs((current) => `${current}${current.endsWith("\n") ? "" : "\n"}$ ${command}\n`.slice(-30_000));
+    if (commandRunsNpmInstall && !webContainerReadyRef.current) {
+      setWebContainerStatus(CodingWebContainerStatusSchema.parse("installing"));
+      setWorkspaceStatus("Installing project dependencies");
+    } else if (!webContainerReadyRef.current) {
+      setWorkspaceStatus("Running WebContainer command");
+    }
+
+    const consumeOutput = (process: WebContainerProcess) => {
+      void process.output.pipeTo(new WritableStream<string>({
+        write(chunk) {
+          const parsedOutput = CodingWebContainerOutputSchema.safeParse(chunk);
+          if (!parsedOutput.success) throw new Error("The WebContainer returned invalid terminal output.");
+          if (generation !== webContainerGenerationRef.current) return;
+          setWebContainerLogs((current) => `${current}${parsedOutput.data}`.slice(-30_000));
+        },
+      })).catch((outputError: unknown) => {
+        if (generation === webContainerGenerationRef.current) {
+          const message = outputError instanceof Error ? outputError.message : "WebContainer terminal output failed.";
+          setError(message);
+          setWebContainerLogs((current) => `${current}\n[terminal error] ${message}\n`.slice(-30_000));
+        }
+      });
+    };
+
+    try {
+      const process = await withCodingWebContainerTimeout(
+        runtime.spawn("jsh", ["-c", command], { terminal: { cols: 80, rows: 24 } }),
+        30_000,
+        "The command could not start within 30 seconds.",
+      );
+      if (generation !== webContainerGenerationRef.current) {
+        process.kill();
+        return;
+      }
+      webContainerProcessesRef.current.add(process);
+      consumeOutput(process);
+      void process.exit.then((exitCode) => {
+        if (generation !== webContainerGenerationRef.current) return;
+        webContainerProcessesRef.current.delete(process);
+        setWebContainerLogs((current) => `${current}${current.endsWith("\n") ? "" : "\n"}[exit ${exitCode}] ${command}\n`.slice(-30_000));
+        if (webContainerPreviewProcessRef.current === process) {
+          webContainerPreviewProcessRef.current = null;
+          webContainerReadyRef.current = false;
+          setPreviewUrl("");
+          setWebContainerStatus(CodingWebContainerStatusSchema.parse("ready"));
+          setWorkspaceStatus("WebContainer ready");
+        } else if (commandRunsNpmInstall && !webContainerReadyRef.current) {
+          setWebContainerStatus(CodingWebContainerStatusSchema.parse("ready"));
+          setWorkspaceStatus("WebContainer ready");
+        }
+        if (exitCode !== 0) {
+          setError(`Command exited with code ${exitCode}: ${command}`);
+        }
+      }).catch((processError: unknown) => {
+        if (generation !== webContainerGenerationRef.current) return;
+        webContainerProcessesRef.current.delete(process);
+        const message = processError instanceof Error ? processError.message : "The WebContainer command failed.";
+        setError(message);
+        setWebContainerLogs((current) => `${current}\n[process error] ${message}\n`.slice(-30_000));
+        if (commandRunsNpmInstall && !webContainerReadyRef.current) {
+          setWebContainerStatus(CodingWebContainerStatusSchema.parse("ready"));
+        }
+      });
+    } catch (commandError) {
+      if (generation !== webContainerGenerationRef.current) return;
+      const message = commandError instanceof Error ? commandError.message : "The WebContainer command could not start.";
+      setError(message);
+      setWebContainerLogs((current) => `${current}\n[command error] ${message}\n`.slice(-30_000));
+      if (commandRunsNpmInstall && !webContainerReadyRef.current) {
+        setWebContainerStatus(CodingWebContainerStatusSchema.parse("ready"));
+      }
+    }
+  }, [livePreviewCommand, webContainerStatus]);
 
   useEffect(() => {
-    if (webContainerStatus !== "running") return;
+    if (webContainerStatus !== "ready" && webContainerStatus !== "running" && webContainerStatus !== "installing") return;
     let cancelled = false;
     const nextFileNames = new Set(files.map((file) => file.name));
     webContainerSyncQueueRef.current = webContainerSyncQueueRef.current
@@ -1219,22 +1315,6 @@ export function CodingChatPanel() {
   }, [files, webContainerStatus]);
 
   const startLivePreview = useCallback(async () => {
-    if (previewRuntime === "webcontainer") {
-      try {
-        if (workspaceId && livePreview) {
-          const response = await fetch(`/api/coding/workspaces/${encodeURIComponent(workspaceId)}/previews/${encodeURIComponent(livePreview.id)}`, {
-            method: "DELETE",
-            credentials: "same-origin",
-          });
-          if (!response.ok) throw new Error("The previous isolated preview could not be stopped.");
-          setLivePreview(null);
-        }
-        await startWebContainerPreview();
-      } catch (previewError) {
-        setError(previewError instanceof Error ? previewError.message : "WebContainer preview could not start.");
-      }
-      return;
-    }
     await stopWebContainerPreview();
     if (!workspaceId || !workspaceRevisionId) {
       setError("Save or create a coding project before starting a live preview.");
@@ -1285,8 +1365,6 @@ export function CodingChatPanel() {
     livePreviewCommand,
     livePreviewNetwork,
     livePreviewPort,
-    previewRuntime,
-    startWebContainerPreview,
     stopWebContainerPreview,
     workspaceId,
     workspaceRevisionId,
@@ -1876,7 +1954,7 @@ export function CodingChatPanel() {
                   <p className="text-xs font-semibold text-violet-200">Temporary live preview</p>
                   <p className="mt-1 text-[10px] leading-4 text-slate-500">
                     {previewRuntime === "webcontainer"
-                      ? "Runs this project in a StackBlitz WebContainer in your browser."
+                      ? "Start the container once, then run commands such as npm install and npm run dev."
                       : "Runs the current revision in the isolated runner."}
                   </p>
                 </div>
@@ -1897,9 +1975,18 @@ export function CodingChatPanel() {
                 <input
                   value={livePreviewCommand}
                   onChange={(event) => setLivePreviewCommand(event.target.value)}
-                  aria-label="Live preview command"
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter" && previewRuntime === "webcontainer") {
+                      event.preventDefault();
+                      void runWebContainerCommand();
+                    }
+                  }}
+                  aria-label={previewRuntime === "webcontainer" ? "WebContainer command" : "Live preview command"}
+                  autoCapitalize="off"
+                  autoCorrect="off"
+                  spellCheck={false}
                   className="min-w-0 flex-1 rounded-lg border border-slate-700 bg-slate-900 px-3 py-3 text-base text-slate-200 focus:border-violet-400/60 focus:outline-none"
-                  placeholder="npm run dev"
+                  placeholder={previewRuntime === "webcontainer" ? "npm install or npm run dev" : "npm run dev"}
                 />
                 {previewRuntime === "runner" && (
                   <>
@@ -1922,34 +2009,68 @@ export function CodingChatPanel() {
                     </label>
                   </>
                 )}
-                {(previewRuntime === "webcontainer"
-                  ? webContainerStatus === "starting" || webContainerStatus === "installing" || webContainerStatus === "running"
+                {previewRuntime === "webcontainer" && webContainerReloadRequired ? (
+                  <button
+                    type="button"
+                    onClick={() => window.location.reload()}
+                    className="min-h-12 rounded-lg border border-amber-400/40 px-3 text-xs font-semibold text-amber-200"
+                  >
+                    Reload page
+                  </button>
+                ) : (previewRuntime === "webcontainer"
+                  ? webContainerStatus === "starting" || webContainerStatus === "installing" || webContainerStatus === "ready" || webContainerStatus === "running"
                   : Boolean(livePreview && livePreview.status !== "stopped" && livePreview.status !== "failed")) ? (
                   <button
                     type="button"
                     onClick={() => void (previewRuntime === "webcontainer" ? stopWebContainerPreview() : stopLivePreview())}
                     className="min-h-12 rounded-lg border border-rose-400/40 px-3 text-xs font-semibold text-rose-200"
                   >
-                    Stop
+                    {previewRuntime === "webcontainer" ? "Stop container" : "Stop"}
                   </button>
                 ) : (
                   <button
                     type="button"
-                    onClick={() => void startLivePreview()}
+                    onClick={() => void (previewRuntime === "webcontainer" ? startWebContainer() : startLivePreview())}
                     className="min-h-12 rounded-lg bg-violet-400 px-3 text-xs font-bold text-slate-950"
                   >
-                    Start
+                    {previewRuntime === "webcontainer" ? "Start container" : "Start"}
+                  </button>
+                )}
+                {previewRuntime === "webcontainer" && (
+                  <button
+                    type="button"
+                    onClick={() => void runWebContainerCommand()}
+                    disabled={!["ready", "installing", "running"].includes(webContainerStatus)}
+                    className="min-h-12 rounded-lg bg-emerald-400 px-3 text-xs font-bold text-slate-950 disabled:bg-slate-700 disabled:text-slate-500"
+                  >
+                    Run
                   </button>
                 )}
               </div>
               {previewRuntime === "webcontainer" && webContainerStatus !== "stopped" && (
                 <>
                   <p className="mt-2 text-[10px] text-violet-300" aria-live="polite">
-                    {webContainerStatus === "installing" ? "Installing dependencies..." : `WebContainer ${webContainerStatus}.`}
+                    {webContainerStatus === "installing"
+                      ? "Installing dependencies..."
+                      : webContainerStatus === "ready"
+                        ? "Container ready. Run commands whenever you need."
+                        : `WebContainer ${webContainerStatus}.`}
                   </p>
-                  {webContainerLogs && (
-                    <pre className="mt-2 max-h-32 overflow-auto whitespace-pre-wrap rounded-lg bg-slate-950 p-2 text-[10px] leading-4 text-slate-400">{webContainerLogs}</pre>
-                  )}
+                  <div className="mt-2 overflow-hidden rounded-lg border border-emerald-500/20 bg-[#030806]">
+                    <div className="flex min-h-10 items-center justify-between border-b border-emerald-500/15 px-3 text-[10px] font-semibold uppercase tracking-widest text-emerald-300">
+                      <span>Terminal</span>
+                      <span>{webContainerStatus}</span>
+                    </div>
+                    <pre
+                      ref={webContainerTerminalRef}
+                      role="log"
+                      aria-label="WebContainer terminal output"
+                      aria-live="polite"
+                      className="max-h-[30dvh] min-h-20 overflow-auto whitespace-pre-wrap break-words p-3 font-mono text-[11px] leading-5 text-emerald-100"
+                    >
+                      {webContainerLogs || "Waiting for WebContainer output..."}
+                    </pre>
+                  </div>
                 </>
               )}
               {previewRuntime === "runner" && livePreview && (
