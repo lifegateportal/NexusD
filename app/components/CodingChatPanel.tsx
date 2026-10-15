@@ -2102,7 +2102,7 @@ export function CodingChatPanel() {
                   </button>
                 )}
                 {previewUrl && (
-                  <a href={previewUrl} target="_blank" rel="noopener noreferrer" className="inline-flex min-h-12 items-center justify-center rounded-xl border border-slate-700 px-3 text-xs font-semibold text-slate-300">
+                  <a href={previewUrl} target="_blank" rel="opener" className="inline-flex min-h-12 items-center justify-center rounded-xl border border-slate-700 px-3 text-xs font-semibold text-slate-300">
                     New tab
                   </a>
                 )}
