@@ -2088,9 +2088,9 @@ export function CodingChatPanel() {
                   </button>
                 )}
                 {previewUrl && (
-                  <button type="button" onClick={() => window.open(previewUrl, "_blank", "noopener,noreferrer")} className="min-h-12 rounded-xl border border-slate-700 px-3 text-xs font-semibold text-slate-300">
+                  <a href={previewUrl} target="_blank" rel="noopener noreferrer" className="inline-flex min-h-12 items-center justify-center rounded-xl border border-slate-700 px-3 text-xs font-semibold text-slate-300">
                     New tab
-                  </button>
+                  </a>
                 )}
               </div>
             </div>
