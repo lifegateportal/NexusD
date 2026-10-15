@@ -16,6 +16,10 @@ const EnvironmentSchema = z.object({
   // Isolated Nexus Code runner — optional until the sidecar is deployed
   CODING_RUNNER_URL:   z.string().url().optional(),
   CODING_RUNNER_TOKEN: z.string().min(1).optional(),
+  GITHUB_OAUTH_CLIENT_ID: z.string().min(1).optional(),
+  GITHUB_OAUTH_CLIENT_SECRET: z.string().min(1).optional(),
+  GITHUB_OAUTH_CALLBACK_URL: z.string().url().optional(),
+  GITHUB_OAUTH_SESSION_SECRET: z.string().min(32).optional(),
   // Cloudflare R2 — optional, enables cloud video storage
   R2_ACCOUNT_ID:       z.string().optional(),
   R2_ACCESS_KEY_ID:    z.string().optional(),

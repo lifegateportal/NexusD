@@ -20,6 +20,20 @@ export const CodingHistoryMessageSchema = z.object({
   content: z.string().max(120_000),
 }).strict();
 
+export const CodingWorkbenchContextSchema = z.object({
+  projectName: z.string().max(120).default(""),
+  workspaceStatus: z.string().max(100).default(""),
+  activeSurface: z.enum(["assistant", "editor"]).default("assistant"),
+  fileExplorerOpen: z.boolean().default(false),
+  previewPanelOpen: z.boolean().default(false),
+  selectedFileName: z.string().max(512).nullable().default(null),
+  explorerPaths: z.array(z.string().max(512)).max(200).default([]),
+  previewRuntime: z.enum(["webcontainer", "runner"]).default("webcontainer"),
+  runtimeStatus: z.enum(["stopped", "starting", "installing", "ready", "running", "failed"]).default("stopped"),
+  previewUrl: z.string().max(2048).nullable().default(null),
+  terminalOutput: z.string().max(30_000).default(""),
+}).strict();
+
 export const CodingChatRequestSchema = z.object({
   query: z.string().trim().min(1).max(20_000),
   mode: CodingModeSchema.default("ask"),
@@ -28,6 +42,7 @@ export const CodingChatRequestSchema = z.object({
   revisionId: CodingRevisionIdSchema.optional(),
   history: z.array(CodingHistoryMessageSchema).max(20).default([]),
   files: z.array(CodingFileSchema).max(200).default([]),
+  workbench: CodingWorkbenchContextSchema.default({}),
 }).superRefine((value, context) => {
   const totalCharacters = value.files.reduce((sum, file) => sum + file.content.length, 0);
   if (totalCharacters > 4_000_000) {

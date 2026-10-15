@@ -36,6 +36,11 @@ import {
   type CodingWorkspaceSnapshot,
 } from "@/lib/coding-workspace";
 import {
+  CodingGitHubPublishResponseSchema,
+  CodingGitHubRepositoriesResponseSchema,
+} from "@/lib/coding-github-schema";
+import { createCodingWorkspaceZip } from "@/lib/coding-zip";
+import {
   bootCodingWebContainer,
   CodingWebContainerCommandSchema,
   CodingPreviewRuntimeSchema,
@@ -181,6 +186,21 @@ export function CodingChatPanel() {
   const [workspaceRevisionId, setWorkspaceRevisionId] = useState<string | null>(null);
   const [workspaceParentRevisionId, setWorkspaceParentRevisionId] = useState<string | null>(null);
   const [workspaceStatus, setWorkspaceStatus] = useState("Loading workspace");
+  const [githubConnected, setGithubConnected] = useState(false);
+  const [githubLogin, setGithubLogin] = useState<string | null>(null);
+  const [githubRepositories, setGithubRepositories] = useState<Array<{
+    fullName: string;
+    private: boolean;
+    defaultBranch: string | null;
+  }>>([]);
+  const [selectedGitHubRepository, setSelectedGitHubRepository] = useState("");
+  const [githubCommitMessage, setGithubCommitMessage] = useState("Publish from Nexus Code");
+  const [githubLoading, setGithubLoading] = useState(true);
+  const [githubPublishing, setGithubPublishing] = useState(false);
+  const [githubError, setGithubError] = useState<string | null>(null);
+  const [githubNotice, setGithubNotice] = useState<string | null>(null);
+  const [githubCommitUrl, setGithubCommitUrl] = useState<string | null>(null);
+  const [zipExporting, setZipExporting] = useState(false);
   const [input, setInput] = useState("");
   const [attachedFileNames, setAttachedFileNames] = useState<string[]>([]);
   const [mode, setMode] = useState<CodingMode>("ask");
@@ -202,7 +222,7 @@ export function CodingChatPanel() {
   const [webContainerLogs, setWebContainerLogs] = useState("");
   const [webContainerNeedsTopLevel, setWebContainerNeedsTopLevel] = useState(false);
   const [webContainerReloadRequired, setWebContainerReloadRequired] = useState(false);
-  const [livePreviewCommand, setLivePreviewCommand] = useState("npm run dev");
+  const [livePreviewCommand, setLivePreviewCommand] = useState("npm install && npm run dev");
   const [livePreviewPort, setLivePreviewPort] = useState("3000");
   const [livePreviewNetwork, setLivePreviewNetwork] = useState(true);
   const [voiceModeEnabled, setVoiceModeEnabled] = useState(false);
@@ -245,6 +265,144 @@ export function CodingChatPanel() {
   const selectedFileIsHtml = selectedFile?.language === "html"
     || /\.(?:html?|xhtml)$/i.test(selectedFile?.name ?? "");
   const selectedFileCanPreview = Boolean(selectedFile && selectedFileIsHtml);
+  const workspaceFilesAreSaved = useMemo(
+    () => JSON.stringify(files) === workspaceSyncedFilesRef.current,
+    [files, workspaceRevisionId],
+  );
+
+  const loadGitHubConnection = useCallback(async () => {
+    setGithubLoading(true);
+    try {
+      const response = await fetch("/api/coding/github/repos", {
+        cache: "no-store",
+        credentials: "same-origin",
+      });
+      const payload: unknown = await response.json().catch(() => null);
+      if (!response.ok) {
+        const errorPayload = payload as { error?: unknown } | null;
+        throw new Error(typeof errorPayload?.error === "string" ? errorPayload.error : "GitHub status could not be loaded.");
+      }
+      const parsed = CodingGitHubRepositoriesResponseSchema.safeParse(payload);
+      if (!parsed.success) throw new Error("GitHub returned an invalid repository list.");
+      setGithubConnected(parsed.data.connected);
+      setGithubLogin(parsed.data.login);
+      setGithubRepositories(parsed.data.repositories);
+      setSelectedGitHubRepository((current) => (
+        parsed.data.repositories.some((repository) => repository.fullName === current)
+          ? current
+          : parsed.data.repositories[0]?.fullName ?? ""
+      ));
+      if (!parsed.data.connected) {
+        setGithubLogin(null);
+        setGithubRepositories([]);
+        setSelectedGitHubRepository("");
+      }
+      setGithubError(null);
+    } catch (loadError) {
+      setGithubError(loadError instanceof Error ? loadError.message : "GitHub status could not be loaded.");
+    } finally {
+      setGithubLoading(false);
+    }
+  }, []);
+
+  const exportWorkspaceZip = useCallback(async () => {
+    setZipExporting(true);
+    setGithubError(null);
+    setGithubNotice(null);
+    try {
+      const { blob, filename } = await createCodingWorkspaceZip(files, workspaceName);
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = filename;
+      anchor.rel = "noopener";
+      document.body.append(anchor);
+      anchor.click();
+      anchor.remove();
+      window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+      setGithubNotice(`${filename} is ready to download.`);
+    } catch (exportError) {
+      setGithubError(exportError instanceof Error ? exportError.message : "ZIP export failed.");
+    } finally {
+      setZipExporting(false);
+    }
+  }, [files, workspaceName]);
+
+  const publishWorkspaceToGitHub = useCallback(async () => {
+    if (!workspaceId || !workspaceRevisionId || !selectedGitHubRepository) return;
+    if (!workspaceFilesAreSaved) {
+      setGithubError("Wait for project changes to finish saving before publishing.");
+      return;
+    }
+    const confirmed = window.confirm(
+      `Publish ${workspaceName} to ${selectedGitHubRepository} on its default branch? Matching file paths will be overwritten; other repository files will be kept.`,
+    );
+    if (!confirmed) return;
+    setGithubPublishing(true);
+    setGithubError(null);
+    setGithubNotice(null);
+    setGithubCommitUrl(null);
+    try {
+      const response = await fetch("/api/coding/github/publish", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "same-origin",
+        body: JSON.stringify({
+          workspaceId,
+          revisionId: workspaceRevisionId,
+          repository: selectedGitHubRepository,
+          message: githubCommitMessage,
+        }),
+      });
+      const payload: unknown = await response.json().catch(() => null);
+      if (!response.ok) {
+        const errorPayload = payload as { error?: unknown } | null;
+        throw new Error(typeof errorPayload?.error === "string" ? errorPayload.error : "GitHub publishing failed.");
+      }
+      const parsed = CodingGitHubPublishResponseSchema.safeParse(payload);
+      if (!parsed.success) throw new Error("GitHub returned an invalid publishing result.");
+      setGithubCommitUrl(parsed.data.commitUrl);
+      setGithubNotice(`Published ${parsed.data.fileCount} files to ${parsed.data.repository} (${parsed.data.branch}).`);
+    } catch (publishError) {
+      setGithubError(publishError instanceof Error ? publishError.message : "GitHub publishing failed.");
+    } finally {
+      setGithubPublishing(false);
+    }
+  }, [githubCommitMessage, selectedGitHubRepository, workspaceFilesAreSaved, workspaceId, workspaceName, workspaceRevisionId]);
+
+  const disconnectGitHub = useCallback(async () => {
+    setGithubLoading(true);
+    setGithubError(null);
+    try {
+      const response = await fetch("/api/coding/github/disconnect", {
+        method: "POST",
+        credentials: "same-origin",
+      });
+      if (!response.ok) throw new Error("GitHub could not be disconnected.");
+      setGithubConnected(false);
+      setGithubLogin(null);
+      setGithubRepositories([]);
+      setSelectedGitHubRepository("");
+      setGithubCommitUrl(null);
+      setGithubNotice("GitHub has been disconnected from this browser.");
+    } catch (disconnectError) {
+      setGithubError(disconnectError instanceof Error ? disconnectError.message : "GitHub could not be disconnected.");
+    } finally {
+      setGithubLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    const callbackError = new URLSearchParams(window.location.search).get("github_error");
+    void (async () => {
+      await loadGitHubConnection();
+      if (!callbackError) return;
+      setGithubError(callbackError);
+      const cleanUrl = new URL(window.location.href);
+      cleanUrl.searchParams.delete("github_error");
+      window.history.replaceState(null, "", `${cleanUrl.pathname}${cleanUrl.search}${cleanUrl.hash}`);
+    })();
+  }, [loadGitHubConnection]);
 
   useEffect(() => {
     if (selectedFileName && files.some((file) => file.name === selectedFileName)) return;
@@ -1483,6 +1641,25 @@ export function CodingChatPanel() {
           revisionId: workspaceRevisionRef.current ?? undefined,
           history: requestHistory,
           files,
+          workbench: {
+            projectName: workspaceName,
+            workspaceStatus,
+            activeSurface: codingSurface,
+            fileExplorerOpen: showFiles,
+            previewPanelOpen: showPreview,
+            selectedFileName,
+            explorerPaths: files.map((file) => file.name),
+            previewRuntime,
+            runtimeStatus: previewRuntime === "webcontainer"
+              ? webContainerStatus
+              : livePreview?.status ?? "stopped",
+            previewUrl: previewRuntime === "webcontainer"
+              ? previewUrl || null
+              : livePreview?.previewUrl ?? null,
+            terminalOutput: previewRuntime === "webcontainer"
+              ? webContainerLogs
+              : "",
+          },
         }),
         signal: controller.signal,
       });
@@ -1557,7 +1734,29 @@ export function CodingChatPanel() {
       abortRef.current = null;
       setLoading(false);
     }
-  }, [agent, attachedFileNames, files, input, loading, messages, mode, speakAssistantResponse, syncGeneratedFiles, workspaceId]);
+  }, [
+    agent,
+    attachedFileNames,
+    codingSurface,
+    files,
+    input,
+    livePreview?.previewUrl,
+    loading,
+    messages,
+    mode,
+    previewRuntime,
+    previewUrl,
+    selectedFileName,
+    showFiles,
+    showPreview,
+    speakAssistantResponse,
+    syncGeneratedFiles,
+    webContainerLogs,
+    webContainerStatus,
+    workspaceId,
+    workspaceName,
+    workspaceStatus,
+  ]);
 
   const stop = useCallback(() => {
     abortRef.current?.abort();
@@ -1670,6 +1869,94 @@ export function CodingChatPanel() {
           >
             Preview
           </button>
+        </div>
+        <div className="mt-3 rounded-xl border border-violet-500/20 bg-violet-500/5 p-3">
+          <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+            <div className="min-w-0">
+              <p className="text-xs font-semibold text-violet-200">Export or publish this project</p>
+              <p className="mt-1 text-[10px] leading-4 text-slate-400">
+                GitHub connection uses GitHub&apos;s broad repository permission for public and private repos.
+                Matching file paths are overwritten; other repository files are kept.
+              </p>
+            </div>
+            <div className="flex shrink-0 flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={() => void exportWorkspaceZip()}
+                disabled={zipExporting || files.length === 0}
+                className="min-h-12 rounded-xl border border-cyan-400/40 px-3 text-xs font-semibold text-cyan-200 disabled:opacity-40"
+              >
+                {zipExporting ? "Preparing ZIP…" : "Export ZIP"}
+              </button>
+              {githubConnected ? (
+                <button
+                  type="button"
+                  onClick={() => void disconnectGitHub()}
+                  disabled={githubLoading}
+                  className="min-h-12 rounded-xl border border-slate-700 px-3 text-xs font-semibold text-slate-300 disabled:opacity-40"
+                >
+                  Disconnect {githubLogin ? `@${githubLogin}` : "GitHub"}
+                </button>
+              ) : (
+                <a
+                  href="/api/coding/github/connect"
+                  aria-disabled={githubLoading}
+                  className={`flex min-h-12 items-center rounded-xl bg-violet-300 px-3 text-xs font-bold text-slate-950 ${githubLoading ? "pointer-events-none opacity-40" : ""}`}
+                >
+                  Connect GitHub
+                </a>
+              )}
+            </div>
+          </div>
+          {githubConnected && (
+            <div className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-[minmax(12rem,1fr)_minmax(12rem,1fr)_auto]">
+              <label className="min-w-0 text-[10px] font-semibold text-slate-400">
+                Personal repository
+                <select
+                  value={selectedGitHubRepository}
+                  onChange={(event) => setSelectedGitHubRepository(event.target.value)}
+                  disabled={githubLoading || githubRepositories.length === 0}
+                  className="mt-1 min-h-12 w-full rounded-xl border border-slate-700 bg-slate-900 px-3 text-base text-slate-200 disabled:opacity-50"
+                >
+                  {githubRepositories.length === 0 && <option value="">No owned repositories found</option>}
+                  {githubRepositories.map((repository) => (
+                    <option key={repository.fullName} value={repository.fullName}>
+                      {repository.fullName}{repository.private ? " · private" : " · public"}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="min-w-0 text-[10px] font-semibold text-slate-400">
+                Commit message
+                <input
+                  value={githubCommitMessage}
+                  onChange={(event) => setGithubCommitMessage(event.target.value)}
+                  maxLength={200}
+                  className="mt-1 min-h-12 w-full rounded-xl border border-slate-700 bg-slate-900 px-3 text-base text-slate-200"
+                />
+              </label>
+              <button
+                type="button"
+                onClick={() => void publishWorkspaceToGitHub()}
+                disabled={githubPublishing || githubLoading || !workspaceRevisionId || !workspaceFilesAreSaved || !selectedGitHubRepository || !githubCommitMessage.trim()}
+                className="min-h-12 self-end rounded-xl bg-violet-300 px-4 text-xs font-bold text-slate-950 disabled:opacity-40"
+              >
+                {githubPublishing ? "Publishing…" : "Publish to GitHub"}
+              </button>
+            </div>
+          )}
+          {githubConnected && !workspaceFilesAreSaved && (
+            <p className="mt-2 text-[10px] text-amber-200">Project edits are saving. Publishing will be available when they are saved.</p>
+          )}
+          {githubError && <p role="alert" className="mt-2 text-xs text-rose-200">{githubError}</p>}
+          {githubNotice && (
+            <p role="status" className="mt-2 text-xs text-emerald-200">
+              {githubNotice}
+              {githubCommitUrl && (
+                <>{" "}<a href={githubCommitUrl} target="_blank" rel="noopener noreferrer" className="underline">View commit</a></>
+              )}
+            </p>
+          )}
         </div>
       </header>
 
@@ -1906,6 +2193,11 @@ export function CodingChatPanel() {
           </div>
         </div>
         <p className="mt-2 text-[10px] text-slate-600">Ctrl/⌘ + Enter to send · attached files are used as coding context</p>
+        <p className="mt-1 text-[10px] text-slate-600">
+          Each message sends project files, up to 20 prior chat messages, the active file and view
+          {previewRuntime === "webcontainer" ? ", and recent WebContainer terminal output" : ""}
+          {" to the selected AI provider."}
+        </p>
       </div>
         </div>
 
