@@ -10,6 +10,13 @@ const nextConfig: NextConfig = {
           { key: "Cross-Origin-Embedder-Policy", value: "require-corp" },
         ],
       },
+      {
+        source: "/webcontainer/connect/:path*",
+        headers: [
+          { key: "Cross-Origin-Opener-Policy", value: "same-origin" },
+          { key: "Cross-Origin-Embedder-Policy", value: "unsafe-none" },
+        ],
+      },
     ];
   },
   serverExternalPackages: ["@deepgram/sdk", "epub-gen-memory", "pdfkit", "@sparticuz/chromium", "playwright-core"],

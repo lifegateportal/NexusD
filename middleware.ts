@@ -31,6 +31,7 @@ export async function middleware(request: NextRequest) {
   if (
     pathname.startsWith("/login") ||
     pathname.startsWith("/api/auth/") ||
+    pathname.startsWith("/webcontainer/connect/") ||
     (pathname.startsWith("/academy") && request.method === "GET") ||
     (pathname === "/api/academy/publish" && request.method === "GET") ||
     pathname.startsWith("/library") ||
