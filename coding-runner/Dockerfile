@@ -1,9 +1,9 @@
 FROM docker:27-cli
 
-RUN apk add --no-cache nodejs
+RUN apk add --no-cache nodejs openssh-client zip
 
 WORKDIR /app
-COPY package.json server.mjs ./
+COPY package.json server.mjs epicglobal-deployments.mjs ./
 
 ENV NODE_ENV=production
 ENV PORT=8090

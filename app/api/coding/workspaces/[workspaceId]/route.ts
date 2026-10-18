@@ -49,14 +49,15 @@ export async function DELETE(_request: NextRequest, ctx: RouteContext) {
     const attachedApp = deployments.find((deployment) => (
       deployment.status !== "stopped"
       && (
-        Boolean(deployment.appId)
+        Boolean(deployment.url)
         || deployment.status === "queued"
         || deployment.status === "building"
+        || deployment.status === "deploying"
       )
     ));
     if (attachedApp) {
       return NextResponse.json(
-        { error: "Cancel the deployment build or delete its DigitalOcean app before deleting this coding project." },
+        { error: "Cancel the deployment or take its hosted site offline before deleting this coding project." },
         { status: 409 },
       );
     }

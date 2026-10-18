@@ -70,25 +70,36 @@ retention period. Network access is intentionally required for this feature so
 the sidecar can reach the preview port, and should only be enabled for trusted
 projects.
 
-## DigitalOcean image builds
+## EpicGlobal deployments
 
-Nexus Code can send a saved Node.js revision to `POST /deployments`. The runner
-builds an AMD64 image with a generated Node 22 Dockerfile, pushes it to the
-configured DigitalOcean Container Registry, and exposes bounded build logs at
-`GET /deployments/{buildId}`. Projects must include a root `package.json` with
-a `start` script. `.env` files are rejected and excluded from the build context.
+Nexus Code sends a saved revision to `POST /deployments`. Static projects are
+built inside the isolated sandbox and only the built ZIP is uploaded to
+EpicGlobal. Full-stack Node.js projects are packaged and sent over SSH to the
+Droplet's forced-command deploy agent. The agent is maintained here at
+`epicglobal-droplet-agent.mjs`; the setup procedure and required Nexus server
+configuration are in the
+[EpicGlobal deployment guide](../docs/nexus-code-epicglobal-deployments.md).
 
-The runner receives short-lived registry credentials for each build. It does
-not receive the long-lived DigitalOcean API token; Nexus uses that token to
-request the registry credentials and to create or update the App Platform app.
-The build executes project npm install/build scripts inside Docker's build
-environment. Run this service on a dedicated, patched host and keep its
-authenticated API private. The runner has access to the host Docker socket,
-which is equivalent to host-level administrative access; do not use a shared
-host containing unrelated workloads or secrets.
+For full-stack hosting, configure these runner variables:
 
-Image builds are limited by `CODING_RUNNER_BUILD_TIMEOUT_MS` and
-`CODING_RUNNER_MAX_CONCURRENT_BUILDS`; default build concurrency is one.
-Configure host-level CPU, memory, and disk limits for the dedicated Docker
-daemon that runs the builder. The runner cannot enforce those limits on the
-daemon's BuildKit workers with the Docker CLI.
+```text
+CODING_DEPLOY_SSH_HOST=your-droplet-hostname-or-ip
+CODING_DEPLOY_SSH_USER=nexus-deploy
+CODING_DEPLOY_SSH_PORT=22
+CODING_DEPLOY_SSH_PRIVATE_KEY_BASE64=base64-encoded-private-key
+CODING_DEPLOY_SSH_KNOWN_HOSTS=your-droplet-hostname-or-ip ssh-ed25519 AAAA...
+```
+
+The SSH key is used only by the runner. Its Droplet-side key is restricted to
+the root-owned deploy-agent launcher; do not configure an unrestricted SSH
+account or forward this key into project builds. Verify and pin the Droplet host
+key. The runner receives the EpicGlobal orchestrator API key only with a
+deployment request and does not expose it to the sandbox or the project.
+
+Both static builds and full-stack source packages are limited to a 4 MB source
+revision. Full-stack builds run on the Droplet under a per-project unprivileged
+account; the installed systemd service has memory, CPU, and task limits.
+Deployment jobs are serialized by default and bounded by
+`CODING_RUNNER_BUILD_TIMEOUT_MS` (30 minutes by default). Keep the authenticated
+runner API private and operate it on a dedicated host: it has access to the
+Docker socket, which is equivalent to host-level administrative access.

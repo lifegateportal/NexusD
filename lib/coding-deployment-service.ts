@@ -2,19 +2,12 @@ import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import {
   CodingBuildResponseSchema,
+  CodingDeploymentEnvironmentSchema,
   CodingDeploymentSchema,
+  CodingProjectDeleteResponseSchema,
   type CodingDeployment,
+  type CodingDeploymentKind,
 } from "@/lib/coding-deployment";
-import {
-  codingAppName,
-  codingImageRepository,
-  deleteDigitalOceanApp,
-  deployCodingImage,
-  findLatestDigitalOceanDeployment,
-  getDigitalOceanAppDeployment,
-  getDigitalOceanRegistryDockerConfig,
-  CodingDigitalOceanError,
-} from "@/lib/coding-digitalocean";
 import { env } from "@/lib/env";
 import type { CodingWorkspaceSnapshot } from "@/lib/coding-workspace";
 import {
@@ -48,13 +41,13 @@ async function withDeploymentLock<T>(key: string, operation: () => Promise<T>): 
 
 export function codingDeploymentConfigurationError(): string | null {
   if (!env.AUTH_PASSWORD || !env.AUTH_COOKIE_SECRET) {
-    return "Configure Nexus login before enabling DigitalOcean deployments.";
+    return "Configure Nexus login before enabling project deployments.";
   }
   if (!env.CODING_RUNNER_URL || !env.CODING_RUNNER_TOKEN) {
     return "The isolated coding runner is not configured for deployments.";
   }
-  if (!env.DIGITALOCEAN_API_TOKEN || !env.DIGITALOCEAN_REGISTRY_NAME) {
-    return "DigitalOcean deployments are not configured on the server.";
+  if (!env.EPICGLOBAL_ORCHESTRATOR_API_KEY) {
+    return "Configure the EpicGlobal orchestrator API key on the Nexus server.";
   }
   return null;
 }
@@ -63,7 +56,7 @@ function runnerUrl(path: string): string {
   return `${env.CODING_RUNNER_URL?.replace(/\/$/, "")}${path}`;
 }
 
-async function runnerRequest(path: string, init: RequestInit = {}): Promise<unknown> {
+async function runnerRequest(path: string, init: RequestInit = {}, timeoutMs = 25_000): Promise<unknown> {
   if (!env.CODING_RUNNER_URL || !env.CODING_RUNNER_TOKEN) {
     throw new CodingDeploymentError("The isolated coding runner is not configured.", 503);
   }
@@ -74,7 +67,7 @@ async function runnerRequest(path: string, init: RequestInit = {}): Promise<unkn
       ...(init.body ? { "Content-Type": "application/json" } : {}),
       ...init.headers,
     },
-    signal: AbortSignal.timeout(25_000),
+    signal: AbortSignal.timeout(timeoutMs),
   });
   const payload: unknown = await response.json().catch(() => null);
   if (!response.ok) {
@@ -89,18 +82,44 @@ async function runnerRequest(path: string, init: RequestInit = {}): Promise<unkn
   return payload;
 }
 
-function packageStartError(snapshot: CodingWorkspaceSnapshot): string | null {
-  if (snapshot.revision.files.some((file) => file.name === "Dockerfile")) {
-    return "Custom Dockerfiles are not supported yet; Nexus generates the Node.js production image.";
-  }
-  if (snapshot.revision.files.some((file) => (
-    /^\.env(?:$|\.(?!example$))/i.test(file.name)
-    || file.name.includes("/.env")
-  ))) {
+function isEnvironmentFile(name: string): boolean {
+  return name.split("/").some((segment) => /^\.env(?:$|\.(?!example$))/i.test(segment));
+}
+
+function projectFilesError(snapshot: CodingWorkspaceSnapshot, kind: CodingDeploymentKind): string | null {
+  const files = snapshot.revision.files;
+  if (files.some((file) => isEnvironmentFile(file.name))) {
     return "Remove .env secrets from the project before deploying.";
   }
-  const packageFile = snapshot.revision.files.find((file) => file.name === "package.json");
-  if (!packageFile) return "Deploy currently supports Node.js projects with a root package.json.";
+  if (kind === "static") {
+    const manifestFile = files.find((file) => file.name === "package.json");
+    if (manifestFile) {
+      let manifest: unknown;
+      try {
+        manifest = JSON.parse(manifestFile.content) as unknown;
+      } catch {
+        return "The project root package.json is not valid JSON.";
+      }
+      const parsed = z.object({
+        scripts: z.object({ build: z.string().trim().min(1).optional() }).passthrough().optional(),
+      }).passthrough().safeParse(manifest);
+      if (!parsed.success) return "The project root package.json has an invalid scripts section.";
+      if (!parsed.data.scripts?.build && !files.some((file) => (
+        file.name === "index.html" || file.name === "public/index.html"
+      ))) {
+        return "Add a build script or a root index.html before deploying a static site.";
+      }
+    } else if (!files.some((file) => file.name === "index.html")) {
+      return "Static deployment needs a root index.html or a package.json build script.";
+    }
+    return null;
+  }
+
+  if (files.some((file) => file.name === "Dockerfile")) {
+    return "Custom Dockerfiles are not supported by the Droplet deployment agent.";
+  }
+  const packageFile = files.find((file) => file.name === "package.json");
+  if (!packageFile) return "Full-stack deployment supports Node.js projects with a root package.json.";
   let manifest: unknown;
   try {
     manifest = JSON.parse(packageFile.content) as unknown;
@@ -111,6 +130,16 @@ function packageStartError(snapshot: CodingWorkspaceSnapshot): string | null {
     scripts: z.object({ start: z.string().trim().min(1) }).passthrough(),
   }).passthrough().safeParse(manifest);
   return parsed.success ? null : "Add a start script to package.json before deploying.";
+}
+
+function projectName(snapshot: CodingWorkspaceSnapshot): string {
+  const namePart = snapshot.workspace.name
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-|-$/g, "")
+    .slice(0, 26) || "project";
+  const idSuffix = snapshot.workspace.id.replace(/[^a-z0-9]/g, "").slice(-8);
+  return `nx-${namePart}-${idSuffix}`;
 }
 
 function updateDeployment(
@@ -124,21 +153,71 @@ function updateDeployment(
   });
 }
 
+function statusFromBuild(status: "queued" | "building" | "deploying" | "completed" | "failed"): CodingDeployment["status"] {
+  return status === "completed" ? "active" : status;
+}
+
+async function markPreviousDeploymentsStopped(
+  workspaceId: string,
+  activeDeployment: CodingDeployment,
+): Promise<void> {
+  const previous = await listCodingDeployments(workspaceId);
+  for (const item of previous) {
+    if (
+      item.id !== activeDeployment.id
+      && item.projectName === activeDeployment.projectName
+      && item.status === "active"
+    ) {
+      await saveCodingDeployment(updateDeployment(item, {
+        status: "stopped",
+        url: null,
+        phase: "Replaced by a newer deployment",
+      }));
+    }
+  }
+}
+
 export async function createCodingDeployment(
   snapshot: CodingWorkspaceSnapshot,
+  kind: CodingDeploymentKind,
+  environment: Record<string, string> = {},
 ): Promise<CodingDeployment> {
-  const projectError = packageStartError(snapshot);
+  return withDeploymentLock(snapshot.workspace.id, () => createCodingDeploymentUnlocked(snapshot, kind, environment));
+}
+
+async function createCodingDeploymentUnlocked(
+  snapshot: CodingWorkspaceSnapshot,
+  kind: CodingDeploymentKind,
+  environment: Record<string, string>,
+): Promise<CodingDeployment> {
+  const projectError = projectFilesError(snapshot, kind);
   if (projectError) throw new CodingDeploymentError(projectError, 400);
+  const parsedEnvironment = CodingDeploymentEnvironmentSchema.safeParse(environment);
+  if (!parsedEnvironment.success) throw new CodingDeploymentError("Runtime environment variables are invalid.", 400);
+  if (kind === "static" && Object.keys(parsedEnvironment.data).length > 0) {
+    throw new CodingDeploymentError("Runtime environment variables are available for full-stack apps only.", 400);
+  }
+
+  const name = projectName(snapshot);
   const existingDeployments = await listCodingDeployments(snapshot.workspace.id);
   if (existingDeployments.some((deployment) => (
     deployment.status === "queued"
     || deployment.status === "building"
     || deployment.status === "deploying"
   ))) {
-    throw new CodingDeploymentError("Wait for the current DigitalOcean deployment to finish.", 409);
+    throw new CodingDeploymentError("Wait for the current deployment to finish.", 409);
   }
-  if (!env.DIGITALOCEAN_REGISTRY_NAME) {
-    throw new CodingDeploymentError("Set DIGITALOCEAN_REGISTRY_NAME to use DigitalOcean deployments.", 503);
+  const activeDeployment = existingDeployments.find((deployment) => (
+    deployment.projectName === name && deployment.status === "active"
+  ));
+  if (activeDeployment && activeDeployment.kind !== kind) {
+    throw new CodingDeploymentError(
+      "Delete the current site before switching between static and full-stack hosting.",
+      409,
+    );
+  }
+  if (!env.EPICGLOBAL_ORCHESTRATOR_API_KEY) {
+    throw new CodingDeploymentError("Set EPICGLOBAL_ORCHESTRATOR_API_KEY on the Nexus server.", 503);
   }
 
   const now = new Date().toISOString();
@@ -146,11 +225,9 @@ export async function createCodingDeployment(
     id: `dep-${randomUUID()}`,
     workspaceId: snapshot.workspace.id,
     revisionId: snapshot.revision.id,
+    kind,
     runnerJobId: null,
-    appId: null,
-    appDeploymentId: null,
-    appName: codingAppName(snapshot.workspace.id),
-    imageRepository: codingImageRepository(snapshot.workspace.id),
+    projectName: name,
     url: null,
     status: "queued",
     phase: null,
@@ -162,17 +239,17 @@ export async function createCodingDeployment(
   await saveCodingDeployment(deployment);
 
   try {
-    const dockerConfig = await getDigitalOceanRegistryDockerConfig();
     const payload = await runnerRequest("/deployments", {
       method: "POST",
       body: JSON.stringify({
         id: deployment.id,
         workspaceId: deployment.workspaceId,
         revisionId: deployment.revisionId,
-        registry: env.DIGITALOCEAN_REGISTRY_NAME,
-        repository: deployment.imageRepository,
-        tag: deployment.revisionId,
-        dockerConfig,
+        kind,
+        projectName: deployment.projectName,
+        environment: parsedEnvironment.data,
+        epicGlobalApiUrl: env.EPICGLOBAL_API_URL,
+        epicGlobalApiKey: env.EPICGLOBAL_ORCHESTRATOR_API_KEY,
         files: snapshot.revision.files,
       }),
     });
@@ -183,23 +260,24 @@ export async function createCodingDeployment(
     }
     const next = updateDeployment(deployment, {
       runnerJobId: parsed.data.build.id,
-      status: parsed.data.build.status === "queued" ? "queued" : "building",
+      status: statusFromBuild(parsed.data.build.status),
+      phase: parsed.data.build.phase,
+      url: parsed.data.build.url,
       logs: parsed.data.logs,
       error: parsed.data.error,
     });
     await saveCodingDeployment(next);
+    if (next.status === "active") await markPreviousDeploymentsStopped(snapshot.workspace.id, next);
     return next;
   } catch (error) {
     const failed = updateDeployment(deployment, {
       status: "failed",
-      error: error instanceof Error ? error.message : "Deployment build could not be started.",
+      error: error instanceof Error ? error.message : "Deployment could not be started.",
     });
     await saveCodingDeployment(failed);
-    if (error instanceof CodingDeploymentError || error instanceof CodingDigitalOceanError) {
-      throw error;
-    }
-    console.error("[coding/deployments] Could not start deployment build", error);
-    throw new CodingDeploymentError("Deployment build could not be started.", 502);
+    if (error instanceof CodingDeploymentError) throw error;
+    console.error("[coding/deployments] Could not start deployment", error);
+    throw new CodingDeploymentError("Deployment could not be started.", 502);
   }
 }
 
@@ -221,117 +299,37 @@ async function refreshCodingDeploymentUnlocked(
   let deployment = await getCodingDeployment(workspaceId, deploymentId);
   if (!deployment) return null;
   if (["active", "failed", "stopped"].includes(deployment.status)) return deployment;
+  if (!deployment.runnerJobId) return deployment;
 
-  if (deployment.status === "queued" || deployment.status === "building") {
-    if (!deployment.runnerJobId) return deployment;
-    let payload: unknown;
-    try {
-      payload = await runnerRequest(`/deployments/${encodeURIComponent(deployment.runnerJobId)}`);
-    } catch (error) {
-      if (!(error instanceof CodingDeploymentError) || error.status !== 404) throw error;
-      deployment = updateDeployment(deployment, {
-        status: "failed",
-        error: "The deployment runner no longer has this build. Start a new deployment.",
-      });
-      await saveCodingDeployment(deployment);
-      return deployment;
-    }
-    const parsed = CodingBuildResponseSchema.safeParse(payload);
-    if (!parsed.success) {
-      console.error("[coding/deployments] Runner returned invalid build status", parsed.error.issues);
-      throw new CodingDeploymentError("The isolated runner returned invalid deployment status.", 502);
-    }
-    if (parsed.data.build.status === "failed") {
-      deployment = updateDeployment(deployment, {
-        status: "failed",
-        logs: parsed.data.logs,
-        error: parsed.data.error ?? "The project image build failed.",
-      });
-      await saveCodingDeployment(deployment);
-      return deployment;
-    }
+  let payload: unknown;
+  try {
+    payload = await runnerRequest(`/deployments/${encodeURIComponent(deployment.runnerJobId)}`);
+  } catch (error) {
+    if (!(error instanceof CodingDeploymentError) || error.status !== 404) throw error;
     deployment = updateDeployment(deployment, {
-      status: parsed.data.build.status === "completed" ? "building" : parsed.data.build.status,
-      logs: parsed.data.logs,
-      error: parsed.data.error,
+      status: "failed",
+      error: "The deployment runner no longer has this job. Start a new deployment.",
     });
     await saveCodingDeployment(deployment);
-    if (parsed.data.build.status !== "completed") return deployment;
-
-    const currentDeploymentId = deployment.id;
-    const priorDeployments = await listCodingDeployments(workspaceId);
-    const existingAppId = deployment.appId
-      ?? priorDeployments.find((prior) => (
-        prior.id !== currentDeploymentId
-        && prior.status !== "stopped"
-        && prior.appId
-      ))?.appId
-      ?? null;
-    if (existingAppId && deployment.appId !== existingAppId) {
-      deployment = updateDeployment(deployment, { appId: existingAppId });
-      await saveCodingDeployment(deployment);
-    }
-    try {
-      const appDeployment = await deployCodingImage(
-        workspaceId,
-        deployment.imageRepository,
-        deployment.revisionId,
-        existingAppId,
-      );
-      deployment = updateDeployment(deployment, {
-        status: "deploying",
-        appId: appDeployment.appId,
-        appDeploymentId: appDeployment.deploymentId,
-        url: appDeployment.url,
-        phase: appDeployment.deploymentId ? "PENDING" : "Waiting for DigitalOcean deployment",
-        error: null,
-      });
-      await saveCodingDeployment(deployment);
-      if (!deployment.appDeploymentId) {
-        const appDeploymentId = await findLatestDigitalOceanDeployment(appDeployment.appId);
-        if (appDeploymentId) {
-          deployment = updateDeployment(deployment, { appDeploymentId });
-          await saveCodingDeployment(deployment);
-        }
-      }
-    } catch (error) {
-      deployment = updateDeployment(deployment, {
-        status: "failed",
-        error: error instanceof Error ? error.message : "DigitalOcean could not start the app deployment.",
-      });
-      await saveCodingDeployment(deployment);
-      return deployment;
-    }
+    return deployment;
+  }
+  const parsed = CodingBuildResponseSchema.safeParse(payload);
+  if (!parsed.success) {
+    console.error("[coding/deployments] Runner returned invalid deployment status", parsed.error.issues);
+    throw new CodingDeploymentError("The isolated runner returned invalid deployment status.", 502);
   }
 
-  if (deployment.status !== "deploying" || !deployment.appId) return deployment;
-  try {
-    if (!deployment.appDeploymentId) {
-      const appDeploymentId = await findLatestDigitalOceanDeployment(deployment.appId);
-      if (!appDeploymentId) return deployment;
-      deployment = updateDeployment(deployment, { appDeploymentId });
-      await saveCodingDeployment(deployment);
-    }
-    const appId = deployment.appId;
-    const appDeploymentId = deployment.appDeploymentId;
-    if (!appId || !appDeploymentId) return deployment;
-    const appStatus = await getDigitalOceanAppDeployment(appId, appDeploymentId);
-    const phase = appStatus.phase.toUpperCase();
-    const isActive = phase === "ACTIVE" || phase === "COMPLETE";
-    const isFailure = ["ERROR", "CANCELED", "CANCELLED", "SUPERSEDED"].includes(phase);
-    deployment = updateDeployment(deployment, {
-      status: isActive ? "active" : isFailure ? "failed" : "deploying",
-      phase: appStatus.phase,
-      url: appStatus.url ?? deployment.url,
-      error: isFailure ? `DigitalOcean deployment ended in ${appStatus.phase}. Check its deployment logs in DigitalOcean.` : null,
-    });
-    await saveCodingDeployment(deployment);
-  } catch (error) {
-    if (error instanceof CodingDigitalOceanError) throw error;
-    throw new CodingDeploymentError(
-      error instanceof Error ? error.message : "DigitalOcean deployment status could not be loaded.",
-      502,
-    );
+  const build = parsed.data.build;
+  deployment = updateDeployment(deployment, {
+    status: statusFromBuild(build.status),
+    phase: build.phase,
+    url: build.url,
+    logs: parsed.data.logs,
+    error: parsed.data.error,
+  });
+  await saveCodingDeployment(deployment);
+  if (deployment.status === "active") {
+    await markPreviousDeploymentsStopped(workspaceId, deployment);
   }
   return deployment;
 }
@@ -349,9 +347,13 @@ async function stopCodingDeploymentUnlocked(
 ): Promise<CodingDeployment | null> {
   const deployment = await getCodingDeployment(workspaceId, deploymentId);
   if (!deployment) return null;
-  if (deployment.appId) {
-    await deleteDigitalOceanApp(deployment.appId);
-  } else if (deployment.runnerJobId) {
+  const related = await listCodingDeployments(workspaceId);
+  const projectDeployments = related.filter((item) => item.projectName === deployment.projectName);
+  const needsRemoteDelete = deployment.url !== null
+    || projectDeployments.some((item) => item.status === "active");
+  const isInProgress = ["queued", "building", "deploying"].includes(deployment.status);
+
+  if (isInProgress && deployment.runnerJobId) {
     const payload = await runnerRequest(`/deployments/${encodeURIComponent(deployment.runnerJobId)}`, {
       method: "DELETE",
     });
@@ -360,19 +362,27 @@ async function stopCodingDeploymentUnlocked(
       console.error("[coding/deployments] Runner returned invalid cancellation data", parsed.error.issues);
       throw new CodingDeploymentError("The isolated runner returned invalid cancellation data.", 502);
     }
+  } else if (!isInProgress && needsRemoteDelete) {
+    const payload = await runnerRequest(`/projects/${encodeURIComponent(deployment.projectName)}/delete`, {
+      method: "POST",
+      body: JSON.stringify({
+        kind: deployment.kind,
+        epicGlobalApiUrl: env.EPICGLOBAL_API_URL,
+        epicGlobalApiKey: env.EPICGLOBAL_ORCHESTRATOR_API_KEY,
+      }),
+    }, 190_000);
+    const parsed = CodingProjectDeleteResponseSchema.safeParse(payload);
+    if (!parsed.success) {
+      console.error("[coding/deployments] Runner returned invalid project deletion data", parsed.error.issues);
+      throw new CodingDeploymentError("The isolated runner returned invalid project deletion data.", 502);
+    }
   }
 
-  const related = deployment.appId
-    ? await listCodingDeployments(workspaceId)
-    : [deployment];
-  const stopped = related.filter((item) => (
-    item.id === deployment.id || (deployment.appId !== null && item.appId === deployment.appId)
-  ));
-  for (const item of stopped) {
+  const deploymentsToStop = isInProgress ? [deployment] : projectDeployments;
+  for (const item of deploymentsToStop) {
+    if (item.status === "stopped") continue;
     await saveCodingDeployment(updateDeployment(item, {
       status: "stopped",
-      appId: null,
-      appDeploymentId: null,
       url: null,
       error: null,
       phase: "STOPPED",

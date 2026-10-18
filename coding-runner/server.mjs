@@ -3,6 +3,12 @@ import { randomUUID, timingSafeEqual } from "node:crypto";
 import { spawn } from "node:child_process";
 import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
+import {
+  deleteHostedProject,
+  deploymentPayload,
+  executeDeployment,
+  parseDeploymentRequest,
+} from "./epicglobal-deployments.mjs";
 
 const PORT = positiveInteger(process.env.PORT, 8090);
 const RUNNER_TOKEN = process.env.CODING_RUNNER_TOKEN?.trim();
@@ -24,7 +30,7 @@ const MAX_PREVIEWS = positiveInteger(process.env.CODING_RUNNER_MAX_PREVIEWS, 4);
 const PREVIEW_START_TIMEOUT_MS = positiveInteger(process.env.CODING_RUNNER_PREVIEW_START_TIMEOUT_MS, 30_000);
 const MAX_BUILDS = positiveInteger(process.env.CODING_RUNNER_MAX_BUILDS, 40);
 const MAX_CONCURRENT_BUILDS = positiveInteger(process.env.CODING_RUNNER_MAX_CONCURRENT_BUILDS, 1);
-const BUILD_TIMEOUT_MS = positiveInteger(process.env.CODING_RUNNER_BUILD_TIMEOUT_MS, 600_000);
+const BUILD_TIMEOUT_MS = positiveInteger(process.env.CODING_RUNNER_BUILD_TIMEOUT_MS, 1_800_000);
 
 if (!RUNNER_TOKEN) {
   throw new Error("CODING_RUNNER_TOKEN must be configured.");
@@ -306,88 +312,6 @@ function parsePreviewRequest(value) {
   };
 }
 
-function parseBuildRequest(value) {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error("Invalid coding deployment build request.");
-  }
-  const input = value;
-  const deploymentId = typeof input.id === "string" ? input.id : "";
-  if (!/^dep-[a-z0-9-]{36}$/.test(deploymentId)) throw new Error("Invalid deployment id.");
-  const registry = typeof input.registry === "string" ? input.registry : "";
-  if (!/^[a-z][a-z0-9-]{0,61}[a-z0-9]$/.test(registry)) throw new Error("Invalid DigitalOcean registry name.");
-  const repository = typeof input.repository === "string" ? input.repository : "";
-  if (!/^[a-z][a-z0-9-]{0,61}[a-z0-9]$/.test(repository)) throw new Error("Invalid image repository.");
-  const tag = typeof input.tag === "string" ? input.tag : "";
-  if (!/^[a-z0-9][a-z0-9_.-]{0,127}$/.test(tag)) throw new Error("Invalid image tag.");
-  const dockerConfig = typeof input.dockerConfig === "string" ? input.dockerConfig : "";
-  if (dockerConfig.length === 0 || dockerConfig.length > 50_000) {
-    throw new Error("DigitalOcean Container Registry credentials are invalid.");
-  }
-  let parsedDockerConfig;
-  try {
-    parsedDockerConfig = JSON.parse(dockerConfig);
-  } catch {
-    throw new Error("DigitalOcean Container Registry credentials are invalid.");
-  }
-  const registryAuth = parsedDockerConfig?.auths?.["registry.digitalocean.com"];
-  if (!registryAuth || typeof registryAuth !== "object") {
-    throw new Error("DigitalOcean Container Registry credentials are invalid.");
-  }
-  const files = input.files;
-  if (!Array.isArray(files) || files.length > 200) throw new Error("A deployment can contain no more than 200 files.");
-  const names = new Set();
-  let totalBytes = 0;
-  const validatedFiles = [];
-  for (const file of files) {
-    if (!file || typeof file !== "object" || Array.isArray(file)) throw new Error("Invalid coding file.");
-    const name = relativeFilePath(file.name);
-    if (names.has(name)) throw new Error(`Duplicate coding file: ${name}`);
-    names.add(name);
-    if (/^\.env(?:$|\.(?!example$))/i.test(name) || name.includes("/.env")) {
-      throw new Error("Remove .env secrets from the project before deploying.");
-    }
-    if (typeof file.content !== "string" || file.content.length > 500_000) {
-      throw new Error(`Coding file ${name} is too large.`);
-    }
-    totalBytes += Buffer.byteLength(file.content, "utf8");
-    if (totalBytes > 4_000_000) throw new Error("Coding files are too large to deploy.");
-    validatedFiles.push({ name, content: file.content });
-  }
-  const packageFile = validatedFiles.find((file) => file.name === "package.json");
-  if (!packageFile) throw new Error("Deploy currently supports Node.js projects with a root package.json.");
-  let packageManifest;
-  try {
-    packageManifest = JSON.parse(packageFile.content);
-  } catch {
-    throw new Error("The project root package.json is not valid JSON.");
-  }
-  if (typeof packageManifest?.scripts?.start !== "string" || !packageManifest.scripts.start.trim()) {
-    throw new Error("Add a start script to package.json before deploying.");
-  }
-
-  return {
-    id: deploymentId,
-    workspaceId: workspaceId(input.workspaceId),
-    revisionId: revisionId(input.revisionId),
-    registry,
-    repository,
-    tag,
-    dockerConfig,
-    files: validatedFiles,
-  };
-}
-
-function buildPayload(build) {
-  return {
-    id: build.id,
-    deploymentId: build.request.id,
-    status: build.status,
-    image: build.status === "completed" ? build.image : null,
-    createdAt: build.createdAt,
-    updatedAt: build.updatedAt,
-  };
-}
-
 function appendBuildLog(build, chunk) {
   if (build.logsTruncated) return;
   const text = chunk.toString("utf8");
@@ -435,7 +359,8 @@ function runBuildCommand(build, args, options = {}) {
     child.once("close", (code, signal) => {
       clearTimeout(timer);
       build.process = undefined;
-      if (timedOut) rejectCommand(new Error(`Image build exceeded ${BUILD_TIMEOUT_MS}ms.`));
+      if (build.cancelled) rejectCommand(new Error("Deployment was cancelled."));
+      else if (timedOut) rejectCommand(new Error(`Deployment build exceeded ${BUILD_TIMEOUT_MS}ms.`));
       else if (code === 0) resolveCommand();
       else rejectCommand(new Error(signal ? `Docker was terminated by ${signal}.` : `Docker exited with code ${code ?? 1}.`));
     });
@@ -449,71 +374,26 @@ function runBuildCommand(build, args, options = {}) {
 
 async function executeBuild(build) {
   activeBuilds += 1;
-  build.status = "building";
-  build.updatedAt = new Date().toISOString();
-  let directory;
-  let dockerConfigDirectory;
   try {
-    directory = await prepareWorkspace(build.request.files);
-    await writeFile(join(directory, ".dockerignore"), [
-      "node_modules",
-      ".git",
-      ".next",
-      ".env",
-      ".env.*",
-      "!.env.example",
-    ].join("\n"));
-    dockerConfigDirectory = await mkdtemp(join("/tmp", "nexus-do-registry-"));
-    await chmod(dockerConfigDirectory, 0o700);
-    await writeFile(join(dockerConfigDirectory, "config.json"), build.request.dockerConfig, { mode: 0o600 });
-    if (build.cancelled) throw new Error("Deployment build was cancelled.");
-    const image = `registry.digitalocean.com/${build.request.registry}/${build.request.repository}:${build.request.tag}`;
-    const dockerfile = [
-      "FROM node:22-alpine AS build",
-      "WORKDIR /app",
-      "COPY package*.json ./",
-      "RUN if [ -f package-lock.json ]; then npm ci --no-audit --no-fund; else npm install --no-audit --no-fund; fi",
-      "COPY . .",
-      "RUN npm run build --if-present",
-      "FROM node:22-alpine",
-      "WORKDIR /app",
-      "ENV NODE_ENV=production PORT=8080",
-      "COPY --from=build /app /app",
-      "EXPOSE 8080",
-      'CMD ["npm", "run", "start"]',
-      "",
-    ].join("\n");
-    const dockerOptions = { env: { ...process.env, DOCKER_CONFIG: dockerConfigDirectory } };
-    appendBuildLog(build, `[runner] Building ${image}\n`);
-    await runBuildCommand(build, [
-      "build",
-      "--platform", "linux/amd64",
-      "--progress=plain",
-      "--shm-size", "64m",
-      "--ulimit", "nproc=256:256",
-      "--tag", image,
-      "--file", "-",
-      directory,
-    ], { ...dockerOptions, input: dockerfile });
-    if (build.cancelled) throw new Error("Deployment build was cancelled.");
-    appendBuildLog(build, "[runner] Pushing image to DigitalOcean Container Registry\n");
-    await runBuildCommand(build, ["push", image], dockerOptions);
-    build.image = image;
-    build.status = "completed";
-    appendBuildLog(build, "[runner] Image build and push completed\n");
+    await executeDeployment(build, {
+      workRoot: WORK_ROOT,
+      appendBuildLog,
+      dockerArguments,
+      runBuildCommand: (deployment, args) => runBuildCommand(deployment, args),
+      buildTimeoutMs: BUILD_TIMEOUT_MS,
+    });
   } catch (error) {
     build.status = "failed";
-    build.error = build.cancelled
-      ? "Deployment build was cancelled."
-      : error instanceof Error ? error.message : "Image build failed.";
+    build.phase = "Failed";
+    build.error = build.cancelled ? "Deployment was cancelled." : error instanceof Error ? error.message : "Deployment failed.";
     appendBuildLog(build, `\n[runner] ${build.error}\n`);
   } finally {
-    if (directory) await rm(directory, { recursive: true, force: true });
-    if (dockerConfigDirectory) await rm(dockerConfigDirectory, { recursive: true, force: true });
-    build.request.dockerConfig = "";
+    build.request.epicGlobalApiKey = "";
+    build.request.files = [];
     build.updatedAt = new Date().toISOString();
     activeBuilds -= 1;
     build.process = undefined;
+    drainBuildQueue();
   }
 }
 
@@ -778,7 +658,7 @@ async function handle(request, response) {
     if (builds.size >= MAX_BUILDS) return json(response, 429, { error: "The deployment build queue is full." });
     let requestBody;
     try {
-      requestBody = parseBuildRequest(await readJson(request, MAX_BUILD_BODY_BYTES));
+      requestBody = parseDeploymentRequest(await readJson(request, MAX_BUILD_BODY_BYTES));
     } catch (error) {
       return json(response, 400, { error: error instanceof Error ? error.message : "Invalid deployment build request." });
     }
@@ -787,7 +667,8 @@ async function handle(request, response) {
       id: `build-${randomUUID()}`,
       request: requestBody,
       status: "queued",
-      image: null,
+      phase: "Queued",
+      url: null,
       error: null,
       createdAt: now,
       updatedAt: now,
@@ -799,30 +680,55 @@ async function handle(request, response) {
     builds.set(build.id, build);
     pendingBuilds.push(build);
     drainBuildQueue();
-    return json(response, 202, { build: buildPayload(build), logs: build.logs, error: build.error });
+    return json(response, 202, { build: deploymentPayload(build), logs: build.logs, error: build.error });
   }
 
   const buildMatch = url.pathname.match(/^\/deployments\/(build-[a-z0-9-]+)$/);
   if (request.method === "GET" && buildMatch) {
     const build = builds.get(buildMatch[1]);
     if (!build) return json(response, 404, { error: "Deployment build not found." });
-    return json(response, 200, { build: buildPayload(build), logs: build.logs, error: build.error });
+    return json(response, 200, { build: deploymentPayload(build), logs: build.logs, error: build.error });
   }
   if (request.method === "DELETE" && buildMatch) {
     const build = builds.get(buildMatch[1]);
     if (!build) return json(response, 404, { error: "Deployment build not found." });
+    if (build.status === "deploying") {
+      return json(response, 409, { error: "This deployment is being handed off to EpicGlobal. Wait for it to finish before taking the site offline." });
+    }
     if (build.status === "queued") {
       const queueIndex = pendingBuilds.indexOf(build);
       if (queueIndex >= 0) pendingBuilds.splice(queueIndex, 1);
       build.status = "failed";
+      build.phase = "Cancelled";
       build.error = "Deployment build was cancelled.";
-      build.request.dockerConfig = "";
+      build.request.epicGlobalApiKey = "";
+      build.request.environment = {};
+      build.request.files = [];
       build.updatedAt = new Date().toISOString();
     } else if (build.status === "building") {
       build.cancelled = true;
       build.process?.kill("SIGTERM");
     }
-    return json(response, 200, { build: buildPayload(build), logs: build.logs, error: build.error });
+    return json(response, 200, { build: deploymentPayload(build), logs: build.logs, error: build.error });
+  }
+
+  const projectDeleteMatch = url.pathname.match(/^\/projects\/(nx-[a-z0-9-]{8,40})\/delete$/);
+  if (request.method === "POST" && projectDeleteMatch) {
+    let requestBody;
+    try {
+      requestBody = await readJson(request);
+    } catch (error) {
+      return json(response, 400, { error: error instanceof Error ? error.message : "Invalid project deletion request." });
+    }
+    try {
+      const result = await deleteHostedProject({
+        ...requestBody,
+        projectName: projectDeleteMatch[1],
+      }, 180_000);
+      return json(response, 200, result);
+    } catch (error) {
+      return json(response, 502, { error: error instanceof Error ? error.message : "Hosted project could not be removed." });
+    }
   }
 
   const runMatch = url.pathname.match(/^\/runs\/(run-[a-z0-9-]+)$/);

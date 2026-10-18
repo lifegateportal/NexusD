@@ -36,8 +36,11 @@ import {
   type CodingWorkspaceSnapshot,
 } from "@/lib/coding-workspace";
 import {
+  CodingDeploymentKindSchema,
   CodingDeploymentListResponseSchema,
   CodingDeploymentResponseSchema,
+  parseCodingDeploymentEnvironmentText,
+  type CodingDeploymentKind,
   type CodingDeployment,
 } from "@/lib/coding-deployment";
 import {
@@ -192,6 +195,8 @@ export function CodingChatPanel() {
   const [workspaceParentRevisionId, setWorkspaceParentRevisionId] = useState<string | null>(null);
   const [workspaceStatus, setWorkspaceStatus] = useState("Loading workspace");
   const [codingDeployment, setCodingDeployment] = useState<CodingDeployment | null>(null);
+  const [deploymentKind, setDeploymentKind] = useState<CodingDeploymentKind>("static");
+  const [deploymentEnvironmentText, setDeploymentEnvironmentText] = useState("");
   const [deploymentBusy, setDeploymentBusy] = useState(false);
   const [deploymentError, setDeploymentError] = useState<string | null>(null);
   const [githubConnected, setGithubConnected] = useState(false);
@@ -392,8 +397,19 @@ export function CodingChatPanel() {
       setDeploymentError("Wait for project changes to finish saving before deploying.");
       return;
     }
+    let environment: Record<string, string> = {};
+    if (deploymentKind === "fullstack") {
+      try {
+        environment = parseCodingDeploymentEnvironmentText(deploymentEnvironmentText);
+      } catch (parseError) {
+        setDeploymentError(parseError instanceof Error ? parseError.message : "Runtime environment variables are invalid.");
+        return;
+      }
+    }
     if (!window.confirm(
-      `Deploy ${workspaceName} directly to DigitalOcean App Platform? DigitalOcean hosting and Container Registry may incur charges. No GitHub repository is used.`,
+      deploymentKind === "static"
+        ? `Build and publish ${workspaceName} as a static site through EpicGlobal? The built files will be uploaded to your existing host; no GitHub repository or container registry is used.`
+        : `Deploy ${workspaceName} as a full-stack Node.js app to your EpicGlobal Droplet? The project will be public at an EpicGlobal URL. Runtime variables are sent to the host but are not saved in the Nexus workspace. No GitHub repository or container registry is used.`,
     )) return;
 
     setDeploymentBusy(true);
@@ -403,29 +419,35 @@ export function CodingChatPanel() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "same-origin",
-        body: JSON.stringify({ revisionId: workspaceRevisionId, confirmBilling: true }),
+        body: JSON.stringify({
+          revisionId: workspaceRevisionId,
+          kind: deploymentKind,
+          environment,
+          confirmDeployment: true,
+        }),
       });
       const payload: unknown = await response.json().catch(() => null);
       if (!response.ok) {
         const failure = payload as { error?: unknown } | null;
-        throw new Error(typeof failure?.error === "string" ? failure.error : "DigitalOcean deployment could not start.");
+        throw new Error(typeof failure?.error === "string" ? failure.error : "Project deployment could not start.");
       }
       const parsed = CodingDeploymentResponseSchema.safeParse(payload);
       if (!parsed.success) throw new Error("Nexus returned an invalid deployment response.");
       setCodingDeployment(parsed.data.deployment);
+      setDeploymentKind(parsed.data.deployment.kind);
     } catch (deployError) {
-      setDeploymentError(deployError instanceof Error ? deployError.message : "DigitalOcean deployment could not start.");
+      setDeploymentError(deployError instanceof Error ? deployError.message : "Project deployment could not start.");
     } finally {
       setDeploymentBusy(false);
     }
-  }, [workspaceFilesAreSaved, workspaceId, workspaceName, workspaceRevisionId]);
+  }, [deploymentEnvironmentText, deploymentKind, workspaceFilesAreSaved, workspaceId, workspaceName, workspaceRevisionId]);
 
   const stopCodingDeployment = useCallback(async () => {
     if (!workspaceId || !codingDeployment) return;
     if (!window.confirm(
-      codingDeployment.appId
-        ? `Delete ${codingDeployment.appName} from your DigitalOcean account? This will take the deployed site offline.`
-        : "Cancel this DigitalOcean deployment build?",
+      codingDeployment.url
+        ? `Take ${codingDeployment.url} offline? This removes the deployed project from EpicGlobal.`
+        : "Cancel this deployment?",
     )) return;
     setDeploymentError(null);
     try {
@@ -441,13 +463,13 @@ export function CodingChatPanel() {
       const payload: unknown = await response.json().catch(() => null);
       if (!response.ok) {
         const failure = payload as { error?: unknown } | null;
-        throw new Error(typeof failure?.error === "string" ? failure.error : "DigitalOcean app could not be deleted.");
+        throw new Error(typeof failure?.error === "string" ? failure.error : "The deployed project could not be removed.");
       }
       const parsed = CodingDeploymentResponseSchema.safeParse(payload);
       if (!parsed.success) throw new Error("Nexus returned an invalid deployment response.");
       setCodingDeployment(parsed.data.deployment);
     } catch (deleteError) {
-      setDeploymentError(deleteError instanceof Error ? deleteError.message : "DigitalOcean app could not be deleted.");
+      setDeploymentError(deleteError instanceof Error ? deleteError.message : "The deployed project could not be removed.");
     }
   }, [codingDeployment, workspaceId]);
 
@@ -507,7 +529,11 @@ export function CodingChatPanel() {
         }
         const parsed = CodingDeploymentListResponseSchema.safeParse(payload);
         if (!parsed.success) throw new Error("Nexus returned invalid deployment history.");
-        if (active) setCodingDeployment(parsed.data.deployments[0] ?? null);
+        if (active) {
+          const deployment = parsed.data.deployments[0] ?? null;
+          setCodingDeployment(deployment);
+          if (deployment) setDeploymentKind(deployment.kind);
+        }
       } catch (loadError) {
         if (active) setDeploymentError(loadError instanceof Error ? loadError.message : "Deployment status could not be loaded.");
       }
@@ -543,6 +569,7 @@ export function CodingChatPanel() {
         if (!parsed.success) throw new Error("Nexus returned invalid deployment status.");
         if (active) {
           setCodingDeployment(parsed.data.deployment);
+          setDeploymentKind(parsed.data.deployment.kind);
           setDeploymentError(null);
         }
       } catch (pollError) {
@@ -593,6 +620,7 @@ export function CodingChatPanel() {
     setWorkspaceRevisionId(snapshot.workspace.currentRevisionId);
     setWorkspaceParentRevisionId(snapshot.revision.parentRevisionId);
     setCodingDeployment(null);
+    setDeploymentEnvironmentText("");
     setDeploymentError(null);
     setSelectedFileName(snapshot.revision.files[0]?.name ?? null);
     setFiles(snapshot.revision.files);
@@ -2023,13 +2051,27 @@ export function CodingChatPanel() {
           >
             Preview
           </button>
+          <label className="sr-only" htmlFor="coding-deployment-kind">Hosting type</label>
+          <select
+            id="coding-deployment-kind"
+            value={deploymentKind}
+            onChange={(event) => {
+              const selected = CodingDeploymentKindSchema.safeParse(event.target.value);
+              if (selected.success) setDeploymentKind(selected.data);
+            }}
+            disabled={deploymentBusy || deploymentInProgress || codingDeploymentStatus === "active"}
+            className="min-h-12 max-w-40 rounded-xl border border-cyan-400/30 bg-slate-950 px-2 text-base text-cyan-100 disabled:opacity-50"
+          >
+            <option value="static">Static site</option>
+            <option value="fullstack">Full-stack app</option>
+          </select>
           <button
             type="button"
             onClick={() => void deployCodingWorkspace()}
             disabled={deploymentBusy || deploymentInProgress || !workspaceId || !workspaceRevisionId || !workspaceFilesAreSaved}
             className="min-h-12 shrink-0 rounded-xl bg-cyan-300 px-3 text-xs font-bold text-slate-950 disabled:opacity-40"
           >
-            {deploymentBusy ? "Starting…" : "Deploy"}
+            {deploymentBusy ? "Starting…" : codingDeploymentStatus === "active" ? "Redeploy" : "Deploy"}
           </button>
           <details className="group relative shrink-0">
             <summary className="flex min-h-12 cursor-pointer list-none items-center rounded-xl border border-cyan-400/30 px-3 text-xs font-semibold text-cyan-200 [&::-webkit-details-marker]:hidden">
@@ -2037,16 +2079,35 @@ export function CodingChatPanel() {
               <span className="ml-2 text-[10px] text-cyan-300/70" aria-hidden="true">⌄</span>
             </summary>
             <div className="absolute right-0 top-full z-50 mt-2 max-h-[min(70dvh,36rem)] w-[min(90vw,34rem)] overflow-y-auto rounded-2xl border border-cyan-500/30 bg-slate-950 p-3 shadow-2xl">
-              <p className="text-xs font-semibold text-cyan-200">Direct DigitalOcean deployment</p>
+              <p className="text-xs font-semibold text-cyan-200">EpicGlobal hosting</p>
               <p className="mt-1 text-[10px] leading-4 text-slate-400">
-                Nexus deploys a saved Node.js project revision to App Platform through Container Registry. No GitHub repository is used.
+                Static builds upload only their built files. Full-stack deployments run on your existing EpicGlobal Droplet. Neither path uses GitHub or a container registry.
               </p>
+              {deploymentKind === "fullstack" && (
+                <label className="mt-3 block space-y-2">
+                  <span className="text-xs font-semibold text-slate-200">Runtime variables (optional)</span>
+                  <textarea
+                    value={deploymentEnvironmentText}
+                    onChange={(event) => setDeploymentEnvironmentText(event.target.value)}
+                    disabled={deploymentBusy || deploymentInProgress}
+                    rows={4}
+                    placeholder={"DATABASE_URL=...\nSESSION_SECRET=..."}
+                    className="min-h-24 w-full rounded-xl border border-slate-700 bg-slate-900 p-3 text-base text-slate-100 placeholder:text-slate-600 disabled:opacity-50 lg:min-h-32"
+                    autoComplete="off"
+                    spellCheck={false}
+                  />
+                  <span className="block text-[10px] leading-4 text-slate-400">
+                    One KEY=value per line. Values are sent to the Droplet as runtime secrets and are not saved with your workspace files. Never add a .env file to the project.
+                  </span>
+                </label>
+              )}
               {codingDeployment && (
                 <div className="mt-3 space-y-2 text-xs text-slate-300">
                   <p>
                     <span className="text-slate-500">Status:</span>{" "}
                     {codingDeployment.status}{codingDeployment.phase ? ` · ${codingDeployment.phase}` : ""}
                   </p>
+                  <p><span className="text-slate-500">Hosting:</span> {codingDeployment.kind === "static" ? "Static site" : "Full-stack app"}</p>
                   <p><span className="text-slate-500">Revision:</span> {codingDeployment.revisionId}</p>
                   {codingDeployment.url && (
                     <a
@@ -2058,14 +2119,19 @@ export function CodingChatPanel() {
                       Open deployed site
                     </a>
                   )}
+                  {codingDeployment.status === "deploying" && !codingDeployment.url && (
+                    <p className="text-slate-400">EpicGlobal is applying this release. Wait for completion before cancelling or taking the site offline.</p>
+                  )}
                   {codingDeployment.error && <p role="alert" className="text-rose-200">{codingDeployment.error}</p>}
-                  {(codingDeployment.appId || codingDeployment.runnerJobId) && codingDeployment.status !== "stopped" && (
+                  {(codingDeployment.url || codingDeployment.runnerJobId)
+                    && codingDeployment.status !== "stopped"
+                    && !(codingDeployment.status === "deploying" && !codingDeployment.url) && (
                     <button
                       type="button"
                       onClick={() => void stopCodingDeployment()}
                       className="min-h-12 rounded-xl border border-rose-400/40 px-3 text-xs font-semibold text-rose-200"
                     >
-                      {codingDeployment.appId ? "Delete DigitalOcean app" : "Cancel deployment build"}
+                      {codingDeployment.url ? "Take site offline" : "Cancel deployment"}
                     </button>
                   )}
                   {codingDeployment.logs && (

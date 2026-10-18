@@ -14,7 +14,7 @@ function errorResponse(error: unknown) {
     return NextResponse.json({ error: error.message }, { status: error.status });
   }
   console.error("[coding/deployments] Request failed", error);
-  return NextResponse.json({ error: "DigitalOcean deployment request failed." }, { status: 500 });
+  return NextResponse.json({ error: "Project deployment request failed." }, { status: 500 });
 }
 
 async function parseWorkspaceId(ctx: RouteContext): Promise<string | NextResponse> {
@@ -46,7 +46,7 @@ export async function POST(request: NextRequest, ctx: RouteContext) {
 
   const parsedInput = CodingDeploymentRequestSchema.safeParse(await request.json().catch(() => null));
   if (!parsedInput.success) {
-    return NextResponse.json({ error: "Confirm the deployment and provide a valid saved revision." }, { status: 400 });
+    return NextResponse.json({ error: "Confirm the deployment type and provide a valid saved revision." }, { status: 400 });
   }
 
   try {
@@ -58,7 +58,11 @@ export async function POST(request: NextRequest, ctx: RouteContext) {
         { status: 409 },
       );
     }
-    const deployment = await createCodingDeployment(snapshot);
+    const deployment = await createCodingDeployment(
+      snapshot,
+      parsedInput.data.kind,
+      parsedInput.data.environment,
+    );
     return NextResponse.json({ deployment }, {
       status: 202,
       headers: { "Cache-Control": "no-store, max-age=0" },

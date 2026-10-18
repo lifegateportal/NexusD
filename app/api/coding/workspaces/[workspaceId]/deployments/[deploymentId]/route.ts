@@ -19,7 +19,7 @@ function errorResponse(error: unknown) {
     return NextResponse.json({ error: error.message }, { status: error.status });
   }
   console.error("[coding/deployments/:id] Request failed", error);
-  return NextResponse.json({ error: "DigitalOcean deployment request failed." }, { status: 500 });
+  return NextResponse.json({ error: "Project deployment request failed." }, { status: 500 });
 }
 
 async function parseIdentifiers(ctx: RouteContext) {
@@ -54,7 +54,7 @@ export async function DELETE(request: NextRequest, ctx: RouteContext) {
   if (unavailable) return NextResponse.json({ error: unavailable }, { status: 503 });
   const confirmation = CodingDeploymentDeleteRequestSchema.safeParse(await request.json().catch(() => null));
   if (!confirmation.success || confirmation.data.confirmDeletion !== true) {
-    return NextResponse.json({ error: "Confirm the DigitalOcean app deletion." }, { status: 400 });
+    return NextResponse.json({ error: "Confirm taking the deployed site offline." }, { status: 400 });
   }
   try {
     const deployment = await stopCodingDeployment(identifiers.workspaceId, identifiers.deploymentId);
