@@ -16,6 +16,9 @@ const EnvironmentSchema = z.object({
   // Isolated Nexus Code runner — optional until the sidecar is deployed
   CODING_RUNNER_URL:   z.string().url().optional(),
   CODING_RUNNER_TOKEN: z.string().min(1).optional(),
+  DIGITALOCEAN_API_TOKEN: z.string().min(1).optional(),
+  DIGITALOCEAN_REGISTRY_NAME: z.string().regex(/^[a-z][a-z0-9-]{0,61}[a-z0-9]$/).optional(),
+  DIGITALOCEAN_REGION: z.string().regex(/^[a-z0-9-]{2,20}$/).default("nyc"),
   GITHUB_OAUTH_CLIENT_ID: z.string().min(1).optional(),
   GITHUB_OAUTH_CLIENT_SECRET: z.string().min(1).optional(),
   GITHUB_OAUTH_CALLBACK_URL: z.string().url().optional(),

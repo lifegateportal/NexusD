@@ -7,6 +7,10 @@ import {
 } from "@aws-sdk/client-s3";
 import { env } from "@/lib/env";
 import {
+  CodingDeploymentSchema,
+  type CodingDeployment,
+} from "@/lib/coding-deployment";
+import {
   CodingWorkspaceRevisionSchema,
   CodingWorkspaceSchema,
   codingWorkspaceByteCount,
@@ -21,6 +25,7 @@ import {
 const WORKSPACE_PREFIX = "coding-workspaces/";
 const WORKSPACE_META_SUFFIX = "/workspace.json";
 const REVISION_PREFIX = "/revisions/";
+const DEPLOYMENT_PREFIX = "/deployments/";
 
 type CodingStorage = {
   bucket: string;
@@ -76,6 +81,10 @@ function metaKey(workspaceId: string): string {
 
 function revisionKey(workspaceId: string, revisionId: string): string {
   return `${WORKSPACE_PREFIX}${workspaceId}${REVISION_PREFIX}${revisionId}.json`;
+}
+
+function deploymentKey(workspaceId: string, deploymentId: string): string {
+  return `${WORKSPACE_PREFIX}${workspaceId}${DEPLOYMENT_PREFIX}${deploymentId}.json`;
 }
 
 function isMissingObject(error: unknown): boolean {
@@ -140,6 +149,12 @@ function parseRevision(value: unknown): CodingWorkspaceRevision {
   return parsed.data;
 }
 
+function parseDeployment(value: unknown): CodingDeployment {
+  const parsed = CodingDeploymentSchema.safeParse(value);
+  if (!parsed.success) throw new CodingWorkspaceStorageError("Stored coding deployment data is invalid.");
+  return parsed.data;
+}
+
 async function loadWorkspaceMetadata(storage: CodingStorage, workspaceId: string): Promise<CodingWorkspace | null> {
   const raw = await readJson(storage, metaKey(workspaceId));
   return raw === null ? null : parseWorkspace(raw);
@@ -166,6 +181,48 @@ export async function getCodingWorkspace(workspaceId: string): Promise<CodingWor
   const revision = await loadRevision(storage, workspaceId, workspace.currentRevisionId);
   if (!revision) throw new CodingWorkspaceStorageError("Coding workspace revision is missing.");
   return { workspace, revision };
+}
+
+export async function getCodingDeployment(
+  workspaceId: string,
+  deploymentId: string,
+): Promise<CodingDeployment | null> {
+  const storage = storageConfig();
+  const raw = await readJson(storage, deploymentKey(workspaceId, deploymentId));
+  if (raw === null) return null;
+  const deployment = parseDeployment(raw);
+  if (deployment.workspaceId !== workspaceId || deployment.id !== deploymentId) {
+    throw new CodingWorkspaceStorageError("Stored coding deployment belongs to a different workspace.");
+  }
+  return deployment;
+}
+
+export async function saveCodingDeployment(deployment: CodingDeployment): Promise<void> {
+  const parsed = CodingDeploymentSchema.safeParse(deployment);
+  if (!parsed.success) throw new CodingWorkspaceStorageError("Coding deployment data is invalid.");
+  const storage = storageConfig();
+  await writeJson(storage, deploymentKey(parsed.data.workspaceId, parsed.data.id), parsed.data);
+}
+
+export async function listCodingDeployments(workspaceId: string): Promise<CodingDeployment[]> {
+  const storage = storageConfig();
+  const keys = await listKeys(storage, `${WORKSPACE_PREFIX}${workspaceId}${DEPLOYMENT_PREFIX}`);
+  const settled = await Promise.allSettled(keys.map((key) => readJson(storage, key)));
+  const deployments: CodingDeployment[] = [];
+  for (const result of settled) {
+    if (result.status === "rejected") {
+      console.error("[coding/deployments] Failed to read deployment", result.reason);
+      continue;
+    }
+    if (result.value === null) continue;
+    try {
+      const deployment = parseDeployment(result.value);
+      if (deployment.workspaceId === workspaceId) deployments.push(deployment);
+    } catch (error) {
+      console.error("[coding/deployments] Ignoring invalid deployment data", error);
+    }
+  }
+  return deployments.sort((left, right) => Date.parse(right.createdAt) - Date.parse(left.createdAt)).slice(0, 100);
 }
 
 export async function listCodingWorkspaces(): Promise<CodingWorkspace[]> {

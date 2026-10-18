@@ -36,6 +36,11 @@ import {
   type CodingWorkspaceSnapshot,
 } from "@/lib/coding-workspace";
 import {
+  CodingDeploymentListResponseSchema,
+  CodingDeploymentResponseSchema,
+  type CodingDeployment,
+} from "@/lib/coding-deployment";
+import {
   CodingGitHubPublishResponseSchema,
   CodingGitHubRepositoriesResponseSchema,
 } from "@/lib/coding-github-schema";
@@ -186,6 +191,9 @@ export function CodingChatPanel() {
   const [workspaceRevisionId, setWorkspaceRevisionId] = useState<string | null>(null);
   const [workspaceParentRevisionId, setWorkspaceParentRevisionId] = useState<string | null>(null);
   const [workspaceStatus, setWorkspaceStatus] = useState("Loading workspace");
+  const [codingDeployment, setCodingDeployment] = useState<CodingDeployment | null>(null);
+  const [deploymentBusy, setDeploymentBusy] = useState(false);
+  const [deploymentError, setDeploymentError] = useState<string | null>(null);
   const [githubConnected, setGithubConnected] = useState(false);
   const [githubLogin, setGithubLogin] = useState<string | null>(null);
   const [githubRepositories, setGithubRepositories] = useState<Array<{
@@ -269,6 +277,11 @@ export function CodingChatPanel() {
     () => JSON.stringify(files) === workspaceSyncedFilesRef.current,
     [files, workspaceRevisionId],
   );
+  const codingDeploymentId = codingDeployment?.id;
+  const codingDeploymentStatus = codingDeployment?.status;
+  const deploymentInProgress = codingDeploymentStatus === "queued"
+    || codingDeploymentStatus === "building"
+    || codingDeploymentStatus === "deploying";
 
   const loadGitHubConnection = useCallback(async () => {
     setGithubLoading(true);
@@ -370,6 +383,74 @@ export function CodingChatPanel() {
     }
   }, [githubCommitMessage, selectedGitHubRepository, workspaceFilesAreSaved, workspaceId, workspaceName, workspaceRevisionId]);
 
+  const deployCodingWorkspace = useCallback(async () => {
+    if (!workspaceId || !workspaceRevisionId) {
+      setDeploymentError("Create or open a coding project before deploying.");
+      return;
+    }
+    if (!workspaceFilesAreSaved) {
+      setDeploymentError("Wait for project changes to finish saving before deploying.");
+      return;
+    }
+    if (!window.confirm(
+      `Deploy ${workspaceName} directly to DigitalOcean App Platform? DigitalOcean hosting and Container Registry may incur charges. No GitHub repository is used.`,
+    )) return;
+
+    setDeploymentBusy(true);
+    setDeploymentError(null);
+    try {
+      const response = await fetch(`/api/coding/workspaces/${encodeURIComponent(workspaceId)}/deployments`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "same-origin",
+        body: JSON.stringify({ revisionId: workspaceRevisionId, confirmBilling: true }),
+      });
+      const payload: unknown = await response.json().catch(() => null);
+      if (!response.ok) {
+        const failure = payload as { error?: unknown } | null;
+        throw new Error(typeof failure?.error === "string" ? failure.error : "DigitalOcean deployment could not start.");
+      }
+      const parsed = CodingDeploymentResponseSchema.safeParse(payload);
+      if (!parsed.success) throw new Error("Nexus returned an invalid deployment response.");
+      setCodingDeployment(parsed.data.deployment);
+    } catch (deployError) {
+      setDeploymentError(deployError instanceof Error ? deployError.message : "DigitalOcean deployment could not start.");
+    } finally {
+      setDeploymentBusy(false);
+    }
+  }, [workspaceFilesAreSaved, workspaceId, workspaceName, workspaceRevisionId]);
+
+  const stopCodingDeployment = useCallback(async () => {
+    if (!workspaceId || !codingDeployment) return;
+    if (!window.confirm(
+      codingDeployment.appId
+        ? `Delete ${codingDeployment.appName} from your DigitalOcean account? This will take the deployed site offline.`
+        : "Cancel this DigitalOcean deployment build?",
+    )) return;
+    setDeploymentError(null);
+    try {
+      const response = await fetch(
+        `/api/coding/workspaces/${encodeURIComponent(workspaceId)}/deployments/${encodeURIComponent(codingDeployment.id)}`,
+        {
+          method: "DELETE",
+          headers: { "Content-Type": "application/json" },
+          credentials: "same-origin",
+          body: JSON.stringify({ confirmDeletion: true }),
+        },
+      );
+      const payload: unknown = await response.json().catch(() => null);
+      if (!response.ok) {
+        const failure = payload as { error?: unknown } | null;
+        throw new Error(typeof failure?.error === "string" ? failure.error : "DigitalOcean app could not be deleted.");
+      }
+      const parsed = CodingDeploymentResponseSchema.safeParse(payload);
+      if (!parsed.success) throw new Error("Nexus returned an invalid deployment response.");
+      setCodingDeployment(parsed.data.deployment);
+    } catch (deleteError) {
+      setDeploymentError(deleteError instanceof Error ? deleteError.message : "DigitalOcean app could not be deleted.");
+    }
+  }, [codingDeployment, workspaceId]);
+
   const disconnectGitHub = useCallback(async () => {
     setGithubLoading(true);
     setGithubError(null);
@@ -405,6 +486,79 @@ export function CodingChatPanel() {
   }, [loadGitHubConnection]);
 
   useEffect(() => {
+    if (!workspaceId) {
+      setCodingDeployment(null);
+      setDeploymentError(null);
+      return;
+    }
+    let active = true;
+    setCodingDeployment(null);
+    setDeploymentError(null);
+    void (async () => {
+      try {
+        const response = await fetch(
+          `/api/coding/workspaces/${encodeURIComponent(workspaceId)}/deployments`,
+          { cache: "no-store", credentials: "same-origin" },
+        );
+        const payload: unknown = await response.json().catch(() => null);
+        if (!response.ok) {
+          const failure = payload as { error?: unknown } | null;
+          throw new Error(typeof failure?.error === "string" ? failure.error : "Deployment status could not be loaded.");
+        }
+        const parsed = CodingDeploymentListResponseSchema.safeParse(payload);
+        if (!parsed.success) throw new Error("Nexus returned invalid deployment history.");
+        if (active) setCodingDeployment(parsed.data.deployments[0] ?? null);
+      } catch (loadError) {
+        if (active) setDeploymentError(loadError instanceof Error ? loadError.message : "Deployment status could not be loaded.");
+      }
+    })();
+    return () => {
+      active = false;
+    };
+  }, [workspaceId]);
+
+  useEffect(() => {
+    if (
+      !workspaceId
+      || !codingDeploymentId
+      || !codingDeploymentStatus
+      || codingDeploymentStatus === "active"
+      || codingDeploymentStatus === "failed"
+      || codingDeploymentStatus === "stopped"
+    ) return;
+    let active = true;
+    let timer: number | undefined;
+    const poll = async () => {
+      try {
+        const response = await fetch(
+          `/api/coding/workspaces/${encodeURIComponent(workspaceId)}/deployments/${encodeURIComponent(codingDeploymentId)}`,
+          { cache: "no-store", credentials: "same-origin" },
+        );
+        const payload: unknown = await response.json().catch(() => null);
+        if (!response.ok) {
+          const failure = payload as { error?: unknown } | null;
+          throw new Error(typeof failure?.error === "string" ? failure.error : "Deployment status could not be loaded.");
+        }
+        const parsed = CodingDeploymentResponseSchema.safeParse(payload);
+        if (!parsed.success) throw new Error("Nexus returned invalid deployment status.");
+        if (active) {
+          setCodingDeployment(parsed.data.deployment);
+          setDeploymentError(null);
+        }
+      } catch (pollError) {
+        if (active) setDeploymentError(pollError instanceof Error ? pollError.message : "Deployment status could not be loaded.");
+      } finally {
+        if (active) timer = window.setTimeout(poll, 4000);
+      }
+    };
+    timer = window.setTimeout(poll, 1500);
+    return () => {
+      active = false;
+      if (timer !== undefined) window.clearTimeout(timer);
+    };
+  }, [codingDeploymentId, codingDeploymentStatus, workspaceId]);
+
+  useEffect(() => {
     if (selectedFileName && files.some((file) => file.name === selectedFileName)) return;
     setSelectedFileName(files[0]?.name ?? null);
   }, [files, selectedFileName]);
@@ -438,6 +592,8 @@ export function CodingChatPanel() {
     setWorkspaceName(snapshot.workspace.name);
     setWorkspaceRevisionId(snapshot.workspace.currentRevisionId);
     setWorkspaceParentRevisionId(snapshot.revision.parentRevisionId);
+    setCodingDeployment(null);
+    setDeploymentError(null);
     setSelectedFileName(snapshot.revision.files[0]?.name ?? null);
     setFiles(snapshot.revision.files);
     setLivePreview(null);
@@ -1867,6 +2023,61 @@ export function CodingChatPanel() {
           >
             Preview
           </button>
+          <button
+            type="button"
+            onClick={() => void deployCodingWorkspace()}
+            disabled={deploymentBusy || deploymentInProgress || !workspaceId || !workspaceRevisionId || !workspaceFilesAreSaved}
+            className="min-h-12 shrink-0 rounded-xl bg-cyan-300 px-3 text-xs font-bold text-slate-950 disabled:opacity-40"
+          >
+            {deploymentBusy ? "Starting…" : "Deploy"}
+          </button>
+          <details className="group relative shrink-0">
+            <summary className="flex min-h-12 cursor-pointer list-none items-center rounded-xl border border-cyan-400/30 px-3 text-xs font-semibold text-cyan-200 [&::-webkit-details-marker]:hidden">
+              {codingDeployment ? `Deployment · ${codingDeployment.status}` : "Deployment status"}
+              <span className="ml-2 text-[10px] text-cyan-300/70" aria-hidden="true">⌄</span>
+            </summary>
+            <div className="absolute right-0 top-full z-50 mt-2 max-h-[min(70dvh,36rem)] w-[min(90vw,34rem)] overflow-y-auto rounded-2xl border border-cyan-500/30 bg-slate-950 p-3 shadow-2xl">
+              <p className="text-xs font-semibold text-cyan-200">Direct DigitalOcean deployment</p>
+              <p className="mt-1 text-[10px] leading-4 text-slate-400">
+                Nexus deploys a saved Node.js project revision to App Platform through Container Registry. No GitHub repository is used.
+              </p>
+              {codingDeployment && (
+                <div className="mt-3 space-y-2 text-xs text-slate-300">
+                  <p>
+                    <span className="text-slate-500">Status:</span>{" "}
+                    {codingDeployment.status}{codingDeployment.phase ? ` · ${codingDeployment.phase}` : ""}
+                  </p>
+                  <p><span className="text-slate-500">Revision:</span> {codingDeployment.revisionId}</p>
+                  {codingDeployment.url && (
+                    <a
+                      href={codingDeployment.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex min-h-12 items-center text-cyan-200 underline"
+                    >
+                      Open deployed site
+                    </a>
+                  )}
+                  {codingDeployment.error && <p role="alert" className="text-rose-200">{codingDeployment.error}</p>}
+                  {(codingDeployment.appId || codingDeployment.runnerJobId) && codingDeployment.status !== "stopped" && (
+                    <button
+                      type="button"
+                      onClick={() => void stopCodingDeployment()}
+                      className="min-h-12 rounded-xl border border-rose-400/40 px-3 text-xs font-semibold text-rose-200"
+                    >
+                      {codingDeployment.appId ? "Delete DigitalOcean app" : "Cancel deployment build"}
+                    </button>
+                  )}
+                  {codingDeployment.logs && (
+                    <pre className="max-h-[30dvh] overflow-auto rounded-xl border border-slate-800 bg-slate-900 p-3 text-[10px] leading-4 text-slate-300">
+                      {codingDeployment.logs}
+                    </pre>
+                  )}
+                </div>
+              )}
+              {deploymentError && <p role="alert" className="mt-3 text-xs text-rose-200">{deploymentError}</p>}
+            </div>
+          </details>
           <details className="group relative shrink-0">
             <summary className="flex min-h-12 cursor-pointer list-none items-center rounded-xl border border-violet-400/30 px-3 text-xs font-semibold text-violet-200 [&::-webkit-details-marker]:hidden">
               Export / GitHub

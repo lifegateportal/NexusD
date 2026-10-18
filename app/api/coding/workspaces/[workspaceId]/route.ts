@@ -3,6 +3,7 @@ import { CodingWorkspaceIdSchema } from "@/lib/coding-workspace";
 import {
   deleteCodingWorkspace,
   getCodingWorkspace,
+  listCodingDeployments,
   CodingWorkspaceStorageError,
 } from "@/lib/coding-workspace-storage";
 
@@ -44,6 +45,21 @@ export async function DELETE(_request: NextRequest, ctx: RouteContext) {
   const workspaceId = await parseWorkspaceId(ctx);
   if (workspaceId instanceof NextResponse) return workspaceId;
   try {
+    const deployments = await listCodingDeployments(workspaceId);
+    const attachedApp = deployments.find((deployment) => (
+      deployment.status !== "stopped"
+      && (
+        Boolean(deployment.appId)
+        || deployment.status === "queued"
+        || deployment.status === "building"
+      )
+    ));
+    if (attachedApp) {
+      return NextResponse.json(
+        { error: "Cancel the deployment build or delete its DigitalOcean app before deleting this coding project." },
+        { status: 409 },
+      );
+    }
     await deleteCodingWorkspace(workspaceId);
     return NextResponse.json({ ok: true });
   } catch (error) {

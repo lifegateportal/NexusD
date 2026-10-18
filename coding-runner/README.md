@@ -69,3 +69,26 @@ browser requests through the authenticated sidecar. Stop previews with
 retention period. Network access is intentionally required for this feature so
 the sidecar can reach the preview port, and should only be enabled for trusted
 projects.
+
+## DigitalOcean image builds
+
+Nexus Code can send a saved Node.js revision to `POST /deployments`. The runner
+builds an AMD64 image with a generated Node 22 Dockerfile, pushes it to the
+configured DigitalOcean Container Registry, and exposes bounded build logs at
+`GET /deployments/{buildId}`. Projects must include a root `package.json` with
+a `start` script. `.env` files are rejected and excluded from the build context.
+
+The runner receives short-lived registry credentials for each build. It does
+not receive the long-lived DigitalOcean API token; Nexus uses that token to
+request the registry credentials and to create or update the App Platform app.
+The build executes project npm install/build scripts inside Docker's build
+environment. Run this service on a dedicated, patched host and keep its
+authenticated API private. The runner has access to the host Docker socket,
+which is equivalent to host-level administrative access; do not use a shared
+host containing unrelated workloads or secrets.
+
+Image builds are limited by `CODING_RUNNER_BUILD_TIMEOUT_MS` and
+`CODING_RUNNER_MAX_CONCURRENT_BUILDS`; default build concurrency is one.
+Configure host-level CPU, memory, and disk limits for the dedicated Docker
+daemon that runs the builder. The runner cannot enforce those limits on the
+daemon's BuildKit workers with the Docker CLI.

@@ -10,6 +10,7 @@ const SANDBOX_IMAGE = process.env.CODING_RUNNER_IMAGE?.trim() || "nexus-coding-s
 const WORK_ROOT = resolve(process.env.CODING_RUNNER_WORK_ROOT || "/var/lib/nexus-runner");
 const HOST_WORK_ROOT = resolve(process.env.CODING_RUNNER_HOST_WORK_ROOT || WORK_ROOT);
 const MAX_BODY_BYTES = positiveInteger(process.env.CODING_RUNNER_MAX_BODY_BYTES, 8_000_000);
+const MAX_BUILD_BODY_BYTES = positiveInteger(process.env.CODING_RUNNER_MAX_BUILD_BODY_BYTES, 24_000_000);
 const MAX_RUNS = positiveInteger(process.env.CODING_RUNNER_MAX_RUNS, 100);
 const MAX_CONCURRENT_RUNS = positiveInteger(process.env.CODING_RUNNER_MAX_CONCURRENT, 2);
 const RUN_TIMEOUT_MS = positiveInteger(process.env.CODING_RUNNER_TIMEOUT_MS, 120_000);
@@ -21,6 +22,9 @@ const RUN_RETENTION_MS = positiveInteger(process.env.CODING_RUNNER_RETENTION_MS,
 const PREVIEW_RETENTION_MS = positiveInteger(process.env.CODING_RUNNER_PREVIEW_RETENTION_MS, 1_800_000);
 const MAX_PREVIEWS = positiveInteger(process.env.CODING_RUNNER_MAX_PREVIEWS, 4);
 const PREVIEW_START_TIMEOUT_MS = positiveInteger(process.env.CODING_RUNNER_PREVIEW_START_TIMEOUT_MS, 30_000);
+const MAX_BUILDS = positiveInteger(process.env.CODING_RUNNER_MAX_BUILDS, 40);
+const MAX_CONCURRENT_BUILDS = positiveInteger(process.env.CODING_RUNNER_MAX_CONCURRENT_BUILDS, 1);
+const BUILD_TIMEOUT_MS = positiveInteger(process.env.CODING_RUNNER_BUILD_TIMEOUT_MS, 600_000);
 
 if (!RUNNER_TOKEN) {
   throw new Error("CODING_RUNNER_TOKEN must be configured.");
@@ -28,8 +32,11 @@ if (!RUNNER_TOKEN) {
 
 const jobs = new Map();
 const previews = new Map();
+const builds = new Map();
 const pending = [];
+const pendingBuilds = [];
 let activeRuns = 0;
+let activeBuilds = 0;
 
 function positiveInteger(value, fallback) {
   const parsed = Number.parseInt(value ?? "", 10);
@@ -128,9 +135,9 @@ function parseRunRequest(value) {
   };
 }
 
-async function readJson(request) {
+async function readJson(request, maxBodyBytes = MAX_BODY_BYTES) {
   const declaredLength = Number.parseInt(request.headers["content-length"] || "", 10);
-  if (Number.isFinite(declaredLength) && declaredLength > MAX_BODY_BYTES) {
+  if (Number.isFinite(declaredLength) && declaredLength > maxBodyBytes) {
     throw new Error("Coding run request is too large.");
   }
 
@@ -138,7 +145,7 @@ async function readJson(request) {
   let size = 0;
   for await (const chunk of request) {
     size += chunk.length;
-    if (size > MAX_BODY_BYTES) throw new Error("Coding run request is too large.");
+    if (size > maxBodyBytes) throw new Error("Coding request is too large.");
     chunks.push(chunk);
   }
   try {
@@ -299,6 +306,224 @@ function parsePreviewRequest(value) {
   };
 }
 
+function parseBuildRequest(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("Invalid coding deployment build request.");
+  }
+  const input = value;
+  const deploymentId = typeof input.id === "string" ? input.id : "";
+  if (!/^dep-[a-z0-9-]{36}$/.test(deploymentId)) throw new Error("Invalid deployment id.");
+  const registry = typeof input.registry === "string" ? input.registry : "";
+  if (!/^[a-z][a-z0-9-]{0,61}[a-z0-9]$/.test(registry)) throw new Error("Invalid DigitalOcean registry name.");
+  const repository = typeof input.repository === "string" ? input.repository : "";
+  if (!/^[a-z][a-z0-9-]{0,61}[a-z0-9]$/.test(repository)) throw new Error("Invalid image repository.");
+  const tag = typeof input.tag === "string" ? input.tag : "";
+  if (!/^[a-z0-9][a-z0-9_.-]{0,127}$/.test(tag)) throw new Error("Invalid image tag.");
+  const dockerConfig = typeof input.dockerConfig === "string" ? input.dockerConfig : "";
+  if (dockerConfig.length === 0 || dockerConfig.length > 50_000) {
+    throw new Error("DigitalOcean Container Registry credentials are invalid.");
+  }
+  let parsedDockerConfig;
+  try {
+    parsedDockerConfig = JSON.parse(dockerConfig);
+  } catch {
+    throw new Error("DigitalOcean Container Registry credentials are invalid.");
+  }
+  const registryAuth = parsedDockerConfig?.auths?.["registry.digitalocean.com"];
+  if (!registryAuth || typeof registryAuth !== "object") {
+    throw new Error("DigitalOcean Container Registry credentials are invalid.");
+  }
+  const files = input.files;
+  if (!Array.isArray(files) || files.length > 200) throw new Error("A deployment can contain no more than 200 files.");
+  const names = new Set();
+  let totalBytes = 0;
+  const validatedFiles = [];
+  for (const file of files) {
+    if (!file || typeof file !== "object" || Array.isArray(file)) throw new Error("Invalid coding file.");
+    const name = relativeFilePath(file.name);
+    if (names.has(name)) throw new Error(`Duplicate coding file: ${name}`);
+    names.add(name);
+    if (/^\.env(?:$|\.(?!example$))/i.test(name) || name.includes("/.env")) {
+      throw new Error("Remove .env secrets from the project before deploying.");
+    }
+    if (typeof file.content !== "string" || file.content.length > 500_000) {
+      throw new Error(`Coding file ${name} is too large.`);
+    }
+    totalBytes += Buffer.byteLength(file.content, "utf8");
+    if (totalBytes > 4_000_000) throw new Error("Coding files are too large to deploy.");
+    validatedFiles.push({ name, content: file.content });
+  }
+  const packageFile = validatedFiles.find((file) => file.name === "package.json");
+  if (!packageFile) throw new Error("Deploy currently supports Node.js projects with a root package.json.");
+  let packageManifest;
+  try {
+    packageManifest = JSON.parse(packageFile.content);
+  } catch {
+    throw new Error("The project root package.json is not valid JSON.");
+  }
+  if (typeof packageManifest?.scripts?.start !== "string" || !packageManifest.scripts.start.trim()) {
+    throw new Error("Add a start script to package.json before deploying.");
+  }
+
+  return {
+    id: deploymentId,
+    workspaceId: workspaceId(input.workspaceId),
+    revisionId: revisionId(input.revisionId),
+    registry,
+    repository,
+    tag,
+    dockerConfig,
+    files: validatedFiles,
+  };
+}
+
+function buildPayload(build) {
+  return {
+    id: build.id,
+    deploymentId: build.request.id,
+    status: build.status,
+    image: build.status === "completed" ? build.image : null,
+    createdAt: build.createdAt,
+    updatedAt: build.updatedAt,
+  };
+}
+
+function appendBuildLog(build, chunk) {
+  if (build.logsTruncated) return;
+  const text = chunk.toString("utf8");
+  const remaining = MAX_LOG_BYTES - build.logs.length;
+  if (remaining <= 0) {
+    build.logsTruncated = true;
+    return;
+  }
+  if (text.length <= remaining) {
+    build.logs += text;
+    return;
+  }
+  const marker = "\n[runner] log output truncated\n";
+  if (remaining <= marker.length) {
+    build.logs += marker.slice(0, remaining);
+    build.logsTruncated = true;
+    return;
+  }
+  let bounded = text.slice(0, Math.max(0, remaining - marker.length));
+  if (bounded.length > 0 && /[\uD800-\uDBFF]$/.test(bounded)) bounded = bounded.slice(0, -1);
+  build.logs += `${bounded}${marker}`;
+  build.logsTruncated = true;
+}
+
+function runBuildCommand(build, args, options = {}) {
+  return new Promise((resolveCommand, rejectCommand) => {
+    const { input, ...spawnOptions } = options;
+    const child = spawn("docker", args, {
+      ...spawnOptions,
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+    build.process = child;
+    child.stdout.on("data", (chunk) => appendBuildLog(build, chunk));
+    child.stderr.on("data", (chunk) => appendBuildLog(build, chunk));
+    let timedOut = false;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      child.kill("SIGTERM");
+      setTimeout(() => child.kill("SIGKILL"), 5_000).unref();
+    }, BUILD_TIMEOUT_MS);
+    child.once("error", (error) => {
+      clearTimeout(timer);
+      rejectCommand(error);
+    });
+    child.once("close", (code, signal) => {
+      clearTimeout(timer);
+      build.process = undefined;
+      if (timedOut) rejectCommand(new Error(`Image build exceeded ${BUILD_TIMEOUT_MS}ms.`));
+      else if (code === 0) resolveCommand();
+      else rejectCommand(new Error(signal ? `Docker was terminated by ${signal}.` : `Docker exited with code ${code ?? 1}.`));
+    });
+    if (typeof input === "string") {
+      child.stdin.end(input);
+    } else {
+      child.stdin.end();
+    }
+  });
+}
+
+async function executeBuild(build) {
+  activeBuilds += 1;
+  build.status = "building";
+  build.updatedAt = new Date().toISOString();
+  let directory;
+  let dockerConfigDirectory;
+  try {
+    directory = await prepareWorkspace(build.request.files);
+    await writeFile(join(directory, ".dockerignore"), [
+      "node_modules",
+      ".git",
+      ".next",
+      ".env",
+      ".env.*",
+      "!.env.example",
+    ].join("\n"));
+    dockerConfigDirectory = await mkdtemp(join("/tmp", "nexus-do-registry-"));
+    await chmod(dockerConfigDirectory, 0o700);
+    await writeFile(join(dockerConfigDirectory, "config.json"), build.request.dockerConfig, { mode: 0o600 });
+    if (build.cancelled) throw new Error("Deployment build was cancelled.");
+    const image = `registry.digitalocean.com/${build.request.registry}/${build.request.repository}:${build.request.tag}`;
+    const dockerfile = [
+      "FROM node:22-alpine AS build",
+      "WORKDIR /app",
+      "COPY package*.json ./",
+      "RUN if [ -f package-lock.json ]; then npm ci --no-audit --no-fund; else npm install --no-audit --no-fund; fi",
+      "COPY . .",
+      "RUN npm run build --if-present",
+      "FROM node:22-alpine",
+      "WORKDIR /app",
+      "ENV NODE_ENV=production PORT=8080",
+      "COPY --from=build /app /app",
+      "EXPOSE 8080",
+      'CMD ["npm", "run", "start"]',
+      "",
+    ].join("\n");
+    const dockerOptions = { env: { ...process.env, DOCKER_CONFIG: dockerConfigDirectory } };
+    appendBuildLog(build, `[runner] Building ${image}\n`);
+    await runBuildCommand(build, [
+      "build",
+      "--platform", "linux/amd64",
+      "--progress=plain",
+      "--shm-size", "64m",
+      "--ulimit", "nproc=256:256",
+      "--tag", image,
+      "--file", "-",
+      directory,
+    ], { ...dockerOptions, input: dockerfile });
+    if (build.cancelled) throw new Error("Deployment build was cancelled.");
+    appendBuildLog(build, "[runner] Pushing image to DigitalOcean Container Registry\n");
+    await runBuildCommand(build, ["push", image], dockerOptions);
+    build.image = image;
+    build.status = "completed";
+    appendBuildLog(build, "[runner] Image build and push completed\n");
+  } catch (error) {
+    build.status = "failed";
+    build.error = build.cancelled
+      ? "Deployment build was cancelled."
+      : error instanceof Error ? error.message : "Image build failed.";
+    appendBuildLog(build, `\n[runner] ${build.error}\n`);
+  } finally {
+    if (directory) await rm(directory, { recursive: true, force: true });
+    if (dockerConfigDirectory) await rm(dockerConfigDirectory, { recursive: true, force: true });
+    build.request.dockerConfig = "";
+    build.updatedAt = new Date().toISOString();
+    activeBuilds -= 1;
+    build.process = undefined;
+  }
+}
+
+function drainBuildQueue() {
+  while (activeBuilds < MAX_CONCURRENT_BUILDS && pendingBuilds.length > 0) {
+    const build = pendingBuilds.shift();
+    if (build) void executeBuild(build);
+  }
+}
+
 async function killContainer(job) {
   await new Promise((resolveKill) => {
     const killer = spawn("docker", ["kill", `nexus-coding-${job.id}`], {
@@ -438,6 +663,15 @@ function pruneJobs() {
   }
 }
 
+function pruneBuilds() {
+  const cutoff = Date.now() - RUN_RETENTION_MS;
+  for (const [id, build] of builds) {
+    if (build.status !== "queued" && build.status !== "building" && Date.parse(build.updatedAt) < cutoff) {
+      builds.delete(id);
+    }
+  }
+}
+
 function prunePreviews() {
   const cutoff = Date.now() - PREVIEW_RETENTION_MS;
   for (const [id, preview] of previews) {
@@ -474,6 +708,8 @@ async function handle(request, response) {
       ok: true,
       activeRuns,
       queuedRuns: pending.length,
+      activeBuilds,
+      queuedBuilds: pendingBuilds.length,
       image: SANDBOX_IMAGE,
     });
   }
@@ -535,6 +771,58 @@ async function handle(request, response) {
       preview.updatedAt = new Date().toISOString();
     });
     return json(response, 202, previewPayload(preview));
+  }
+
+  if (request.method === "POST" && url.pathname === "/deployments") {
+    pruneBuilds();
+    if (builds.size >= MAX_BUILDS) return json(response, 429, { error: "The deployment build queue is full." });
+    let requestBody;
+    try {
+      requestBody = parseBuildRequest(await readJson(request, MAX_BUILD_BODY_BYTES));
+    } catch (error) {
+      return json(response, 400, { error: error instanceof Error ? error.message : "Invalid deployment build request." });
+    }
+    const now = new Date().toISOString();
+    const build = {
+      id: `build-${randomUUID()}`,
+      request: requestBody,
+      status: "queued",
+      image: null,
+      error: null,
+      createdAt: now,
+      updatedAt: now,
+      logs: "",
+      logsTruncated: false,
+      process: undefined,
+      cancelled: false,
+    };
+    builds.set(build.id, build);
+    pendingBuilds.push(build);
+    drainBuildQueue();
+    return json(response, 202, { build: buildPayload(build), logs: build.logs, error: build.error });
+  }
+
+  const buildMatch = url.pathname.match(/^\/deployments\/(build-[a-z0-9-]+)$/);
+  if (request.method === "GET" && buildMatch) {
+    const build = builds.get(buildMatch[1]);
+    if (!build) return json(response, 404, { error: "Deployment build not found." });
+    return json(response, 200, { build: buildPayload(build), logs: build.logs, error: build.error });
+  }
+  if (request.method === "DELETE" && buildMatch) {
+    const build = builds.get(buildMatch[1]);
+    if (!build) return json(response, 404, { error: "Deployment build not found." });
+    if (build.status === "queued") {
+      const queueIndex = pendingBuilds.indexOf(build);
+      if (queueIndex >= 0) pendingBuilds.splice(queueIndex, 1);
+      build.status = "failed";
+      build.error = "Deployment build was cancelled.";
+      build.request.dockerConfig = "";
+      build.updatedAt = new Date().toISOString();
+    } else if (build.status === "building") {
+      build.cancelled = true;
+      build.process?.kill("SIGTERM");
+    }
+    return json(response, 200, { build: buildPayload(build), logs: build.logs, error: build.error });
   }
 
   const runMatch = url.pathname.match(/^\/runs\/(run-[a-z0-9-]+)$/);
