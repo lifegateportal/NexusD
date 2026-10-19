@@ -43,6 +43,7 @@ import {
   type CodingDeploymentKind,
   type CodingDeployment,
 } from "@/lib/coding-deployment";
+import { buildCodingStaticArtifact } from "@/lib/coding-static-build";
 import {
   CodingGitHubPublishResponseSchema,
   CodingGitHubRepositoriesResponseSchema,
@@ -198,6 +199,10 @@ export function CodingChatPanel() {
   const [deploymentKind, setDeploymentKind] = useState<CodingDeploymentKind>("static");
   const [deploymentEnvironmentText, setDeploymentEnvironmentText] = useState("");
   const [deploymentBusy, setDeploymentBusy] = useState(false);
+  const [deploymentUploadStarted, setDeploymentUploadStarted] = useState(false);
+  const [fullstackDeploymentAvailable, setFullstackDeploymentAvailable] = useState(false);
+  const [deploymentProgress, setDeploymentProgress] = useState<string | null>(null);
+  const [deploymentBuildLogs, setDeploymentBuildLogs] = useState("");
   const [deploymentError, setDeploymentError] = useState<string | null>(null);
   const [githubConnected, setGithubConnected] = useState(false);
   const [githubLogin, setGithubLogin] = useState<string | null>(null);
@@ -242,6 +247,7 @@ export function CodingChatPanel() {
   const [voiceStatus, setVoiceStatus] = useState<CodingVoiceStatus>("off");
   const [voiceError, setVoiceError] = useState<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
+  const staticDeploymentAbortRef = useRef<AbortController | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const folderInputRef = useRef<HTMLInputElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -413,22 +419,58 @@ export function CodingChatPanel() {
     )) return;
 
     setDeploymentBusy(true);
+    setDeploymentUploadStarted(false);
     setDeploymentError(null);
+    setDeploymentProgress(null);
+    setDeploymentBuildLogs("");
+    let staticAbortController: AbortController | null = null;
+    let staticUploadStarted = false;
     try {
-      const response = await fetch(`/api/coding/workspaces/${encodeURIComponent(workspaceId)}/deployments`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        credentials: "same-origin",
-        body: JSON.stringify({
-          revisionId: workspaceRevisionId,
-          kind: deploymentKind,
-          environment,
-          confirmDeployment: true,
-        }),
-      });
+      let response: Response;
+      if (deploymentKind === "static") {
+        staticAbortController = new AbortController();
+        staticDeploymentAbortRef.current = staticAbortController;
+        const artifact = await buildCodingStaticArtifact(files, {
+          signal: staticAbortController.signal,
+          onProgress: setDeploymentProgress,
+          onOutput: (chunk) => setDeploymentBuildLogs((current) => `${current}${chunk}`.slice(-12_000)),
+        });
+        setDeploymentProgress("Uploading the built site to EpicGlobal...");
+        setDeploymentUploadStarted(true);
+        staticUploadStarted = true;
+        staticDeploymentAbortRef.current = null;
+        response = await fetch(
+          `/api/coding/workspaces/${encodeURIComponent(workspaceId)}/deployments/static`,
+          {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/zip",
+              "x-coding-revision-id": workspaceRevisionId,
+            },
+            credentials: "same-origin",
+            body: artifact,
+          },
+        );
+      } else {
+        response = await fetch(`/api/coding/workspaces/${encodeURIComponent(workspaceId)}/deployments`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          credentials: "same-origin",
+          body: JSON.stringify({
+            revisionId: workspaceRevisionId,
+            kind: deploymentKind,
+            environment,
+            confirmDeployment: true,
+          }),
+        });
+      }
       const payload: unknown = await response.json().catch(() => null);
       if (!response.ok) {
         const failure = payload as { error?: unknown } | null;
+        const failedDeployment = CodingDeploymentResponseSchema.safeParse({
+          deployment: (failure as { deployment?: unknown } | null)?.deployment,
+        });
+        if (failedDeployment.success) setCodingDeployment(failedDeployment.data.deployment);
         throw new Error(typeof failure?.error === "string" ? failure.error : "Project deployment could not start.");
       }
       const parsed = CodingDeploymentResponseSchema.safeParse(payload);
@@ -437,10 +479,32 @@ export function CodingChatPanel() {
       setDeploymentKind(parsed.data.deployment.kind);
     } catch (deployError) {
       setDeploymentError(deployError instanceof Error ? deployError.message : "Project deployment could not start.");
+      if (staticUploadStarted && workspaceId) {
+        try {
+          const statusResponse = await fetch(
+            `/api/coding/workspaces/${encodeURIComponent(workspaceId)}/deployments`,
+            { cache: "no-store", credentials: "same-origin" },
+          );
+          const statusPayload: unknown = await statusResponse.json().catch(() => null);
+          const deployments = CodingDeploymentListResponseSchema.safeParse(statusPayload);
+          if (!statusResponse.ok || !deployments.success) {
+            throw new Error("Deployment status could not be refreshed after the upload.");
+          }
+          setCodingDeployment(deployments.data.deployments[0] ?? null);
+          setFullstackDeploymentAvailable(deployments.data.capabilities.fullstack);
+        } catch (refreshError) {
+          console.error("[coding/deployments] Could not refresh status after static upload", refreshError);
+        }
+      }
     } finally {
+      if (staticDeploymentAbortRef.current === staticAbortController) {
+        staticDeploymentAbortRef.current = null;
+      }
       setDeploymentBusy(false);
+      setDeploymentUploadStarted(false);
+      setDeploymentProgress(null);
     }
-  }, [deploymentEnvironmentText, deploymentKind, workspaceFilesAreSaved, workspaceId, workspaceName, workspaceRevisionId]);
+  }, [deploymentEnvironmentText, deploymentKind, files, workspaceFilesAreSaved, workspaceId, workspaceName, workspaceRevisionId]);
 
   const stopCodingDeployment = useCallback(async () => {
     if (!workspaceId || !codingDeployment) return;
@@ -511,11 +575,13 @@ export function CodingChatPanel() {
     if (!workspaceId) {
       setCodingDeployment(null);
       setDeploymentError(null);
+      setFullstackDeploymentAvailable(false);
       return;
     }
     let active = true;
     setCodingDeployment(null);
     setDeploymentError(null);
+    setFullstackDeploymentAvailable(false);
     void (async () => {
       try {
         const response = await fetch(
@@ -533,6 +599,7 @@ export function CodingChatPanel() {
           const deployment = parsed.data.deployments[0] ?? null;
           setCodingDeployment(deployment);
           if (deployment) setDeploymentKind(deployment.kind);
+          setFullstackDeploymentAvailable(parsed.data.capabilities.fullstack);
         }
       } catch (loadError) {
         if (active) setDeploymentError(loadError instanceof Error ? loadError.message : "Deployment status could not be loaded.");
@@ -596,6 +663,7 @@ export function CodingChatPanel() {
 
   useEffect(() => () => {
     webContainerGenerationRef.current += 1;
+    staticDeploymentAbortRef.current?.abort();
     webContainerUnsubscribeRef.current?.();
     webContainerProcessesRef.current.forEach((process) => process.kill());
     webContainerProcessesRef.current.clear();
@@ -2063,16 +2131,31 @@ export function CodingChatPanel() {
             className="min-h-12 max-w-40 rounded-xl border border-cyan-400/30 bg-slate-950 px-2 text-base text-cyan-100 disabled:opacity-50"
           >
             <option value="static">Static site</option>
-            <option value="fullstack">Full-stack app</option>
+            <option value="fullstack" disabled={!fullstackDeploymentAvailable}>
+              {fullstackDeploymentAvailable ? "Full-stack app" : "Full-stack app (paused)"}
+            </option>
           </select>
           <button
             type="button"
             onClick={() => void deployCodingWorkspace()}
-            disabled={deploymentBusy || deploymentInProgress || !workspaceId || !workspaceRevisionId || !workspaceFilesAreSaved}
+            disabled={deploymentBusy || deploymentInProgress || (deploymentKind === "fullstack" && !fullstackDeploymentAvailable) || !workspaceId || !workspaceRevisionId || !workspaceFilesAreSaved}
             className="min-h-12 shrink-0 rounded-xl bg-cyan-300 px-3 text-xs font-bold text-slate-950 disabled:opacity-40"
           >
-            {deploymentBusy ? "Starting…" : codingDeploymentStatus === "active" ? "Redeploy" : "Deploy"}
+            {deploymentBusy
+              ? deploymentKind === "static"
+                ? deploymentUploadStarted ? "Uploading…" : "Building…"
+                : "Starting…"
+              : codingDeploymentStatus === "active" ? "Redeploy" : "Deploy"}
           </button>
+          {deploymentBusy && deploymentKind === "static" && !deploymentUploadStarted && (
+            <button
+              type="button"
+              onClick={() => staticDeploymentAbortRef.current?.abort()}
+              className="min-h-12 shrink-0 rounded-xl border border-rose-400/40 px-3 text-xs font-semibold text-rose-200 lg:px-4"
+            >
+              Cancel
+            </button>
+          )}
           <details className="group relative shrink-0">
             <summary className="flex min-h-12 cursor-pointer list-none items-center rounded-xl border border-cyan-400/30 px-3 text-xs font-semibold text-cyan-200 [&::-webkit-details-marker]:hidden">
               {codingDeployment ? `Deployment · ${codingDeployment.status}` : "Deployment status"}
@@ -2081,8 +2164,11 @@ export function CodingChatPanel() {
             <div className="absolute right-0 top-full z-50 mt-2 max-h-[min(70dvh,36rem)] w-[min(90vw,34rem)] overflow-y-auto rounded-2xl border border-cyan-500/30 bg-slate-950 p-3 shadow-2xl">
               <p className="text-xs font-semibold text-cyan-200">EpicGlobal hosting</p>
               <p className="mt-1 text-[10px] leading-4 text-slate-400">
-                Static builds upload only their built files. Full-stack deployments run on your existing EpicGlobal Droplet. Neither path uses GitHub or a container registry.
+                Static builds run in this browser and upload only the built files. Full-stack hosting is paused until the EpicGlobal Droplet has more capacity. No GitHub repository or container registry is used.
               </p>
+              {deploymentKind === "fullstack" && !fullstackDeploymentAvailable && (
+                <p className="mt-2 text-xs text-amber-200">Full-stack deployments are paused to protect the existing EpicGlobal websites.</p>
+              )}
               {deploymentKind === "fullstack" && (
                 <label className="mt-3 block space-y-2">
                   <span className="text-xs font-semibold text-slate-200">Runtime variables (optional)</span>
@@ -2119,13 +2205,13 @@ export function CodingChatPanel() {
                       Open deployed site
                     </a>
                   )}
-                  {codingDeployment.status === "deploying" && !codingDeployment.url && (
+                  {codingDeployment.status === "deploying" && !codingDeployment.url && codingDeployment.kind === "fullstack" && (
                     <p className="text-slate-400">EpicGlobal is applying this release. Wait for completion before cancelling or taking the site offline.</p>
                   )}
                   {codingDeployment.error && <p role="alert" className="text-rose-200">{codingDeployment.error}</p>}
-                  {(codingDeployment.url || codingDeployment.runnerJobId)
+                  {(codingDeployment.url || codingDeployment.runnerJobId || (codingDeployment.kind === "static" && deploymentInProgress))
                     && codingDeployment.status !== "stopped"
-                    && !(codingDeployment.status === "deploying" && !codingDeployment.url) && (
+                    && !(codingDeployment.status === "deploying" && !codingDeployment.url && codingDeployment.kind === "fullstack") && (
                     <button
                       type="button"
                       onClick={() => void stopCodingDeployment()}
@@ -2137,6 +2223,16 @@ export function CodingChatPanel() {
                   {codingDeployment.logs && (
                     <pre className="max-h-[30dvh] overflow-auto rounded-xl border border-slate-800 bg-slate-900 p-3 text-[10px] leading-4 text-slate-300">
                       {codingDeployment.logs}
+                    </pre>
+                  )}
+                </div>
+              )}
+              {(deploymentBusy || deploymentBuildLogs) && (
+                <div className="mt-3 space-y-2">
+                  {deploymentProgress && <p className="text-xs text-cyan-100 lg:text-sm" aria-live="polite">{deploymentProgress}</p>}
+                  {deploymentBuildLogs && (
+                    <pre className="max-h-[30dvh] overflow-auto rounded-xl border border-slate-800 bg-slate-900 p-3 text-[10px] leading-4 text-slate-300 lg:max-h-[35dvh]">
+                      {deploymentBuildLogs}
                     </pre>
                   )}
                 </div>

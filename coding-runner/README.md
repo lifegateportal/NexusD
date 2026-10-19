@@ -77,12 +77,14 @@ retention period. Network access is intentionally required for this feature so
 the sidecar can reach the preview port, and should only be enabled for trusted
 projects.
 
-## EpicGlobal deployments
+## EpicGlobal full-stack deployments
 
-Nexus Code sends a saved revision to `POST /deployments`. Static projects are
-built inside the isolated sandbox and only the built ZIP is uploaded to
-EpicGlobal. Full-stack Node.js projects are packaged and sent over SSH to the
-Droplet's forced-command deploy agent. The agent is maintained here at
+Static projects are built in the user's browser WebContainer and the resulting
+bounded ZIP is relayed by the Nexus server to EpicGlobal; static hosting does
+not use this runner. Full-stack Node.js projects are sent to this runner and
+forwarded over SSH to the Droplet's forced-command deploy agent. Full-stack
+hosting is paused by default until the EpicGlobal Droplet has enough capacity.
+The agent is maintained here at
 `epicglobal-droplet-agent.mjs`; the setup procedure and required Nexus server
 configuration are in the
 [EpicGlobal deployment guide](../docs/nexus-code-epicglobal-deployments.md).
@@ -103,9 +105,10 @@ account or forward this key into project builds. Verify and pin the Droplet host
 key. The runner receives the EpicGlobal orchestrator API key only with a
 deployment request and does not expose it to the sandbox or the project.
 
-Both static builds and full-stack source packages are limited to a 4 MB source
-revision. Full-stack builds run on the Droplet under a per-project unprivileged
-account; the installed systemd service has memory, CPU, and task limits.
+Workspace source revisions are limited to 4 MB. Static artifacts are limited
+to 25 MB compressed and 50 MB unpacked. Full-stack builds run on the Droplet
+under a per-project unprivileged account; the installed systemd service has
+memory, CPU, and task limits.
 Deployment jobs are serialized by default and bounded by
 `CODING_RUNNER_BUILD_TIMEOUT_MS` (30 minutes by default). Keep the authenticated
 runner API private and operate it on a dedicated host: it has access to the

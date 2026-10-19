@@ -6,10 +6,14 @@ DigitalOcean App Platform service.
 
 ## Supported deployment types
 
-- **Static site:** Nexus builds the saved revision in the isolated runner,
-  packages only the build output, then uploads it through EpicGlobal's existing
-  protected `/api/orchestrator/upload` endpoint. The source tree is not sent to
-  that endpoint. Built ZIP files must remain below EpicGlobal's 100 MB limit.
+- **Static site:** Nexus builds the saved revision in the browser's WebContainer
+  (or packages plain HTML/CSS/JS directly), then sends a bounded ZIP of the
+  published files through the Nexus server to EpicGlobal's protected
+  `/api/orchestrator/upload` endpoint. The EpicGlobal API key stays on the
+  server; the project source and build dependencies are not sent to EpicGlobal.
+  Browser builds currently use npm and support `dist`, `build`, `out`, and
+  `public` output folders. The ZIP limit is 25 MB and unpacked output is limited
+  to 50 MB.
 - **Full-stack app:** Nexus sends the saved Node.js project to a restricted
   SSH deploy agent on the Droplet. The agent builds it as a dedicated,
   unprivileged Linux account, runs it in a resource-limited systemd service,
@@ -17,14 +21,40 @@ DigitalOcean App Platform service.
   to rebuild Caddy routes through its protected repair endpoint. Updates use a
   second release and port before switching the public route.
 
-Both types use a project URL under `epicglobal.app`. The full-stack project must
-have a root `package.json` with a `scripts.start` command. Its server must read
-`PORT` and listen on `0.0.0.0`. Optional runtime variables can be entered in
-Nexus Code as `KEY=value` lines; Nexus does not save these values in workspace
-files. Do not include `.env` files. Runtime variables are provided to the
-application process, not to its build scripts.
+Both types use a project URL under `epicglobal.app`. Static build scripts run on
+the user's device, so Nexus Code must be opened in a secure, cross-origin-
+isolated browser tab with WebContainer support. Plain static files do not need
+WebContainers. The full-stack project must have a root `package.json` with a
+`scripts.start` command. Its server must read `PORT` and listen on `0.0.0.0`.
+Optional runtime variables can be entered in Nexus Code as `KEY=value` lines;
+Nexus does not save these values in workspace files. Do not include `.env`
+files. Runtime variables are provided to the application process, not to its
+build scripts.
 
 ## Nexus server configuration
+
+Static hosting does not need a coding runner, Docker, SSH access, a new Droplet,
+or a GitHub repository. Set the following in the server-side Nexus environment:
+
+```text
+EPICGLOBAL_API_URL=https://api.epicglobal.app
+EPICGLOBAL_ORCHESTRATOR_API_KEY=your-EpicGlobal-orchestrator-key
+AUTH_PASSWORD=your-Nexus-login-password
+AUTH_COOKIE_SECRET=a-unique-random-secret-at-least-16-characters
+```
+
+The EpicGlobal key is used only by the Nexus server. Do not put it in browser
+code, workspace files, or a `.env` file.
+
+Full-stack deployment is paused by default to protect the existing Droplet.
+After upgrading the Droplet and separately configuring the restricted host
+agent, enable it explicitly and configure the isolated runner:
+
+```text
+CODING_FULLSTACK_ENABLED=true
+CODING_RUNNER_URL=http://<runner-private-ip>:8090
+CODING_RUNNER_TOKEN=the-same-token-configured-on-the-runner
+```
 
 Run the coding runner on a dedicated host because it requires Docker socket
 access. For a separate DigitalOcean Droplet, place it in the same region and
@@ -34,31 +64,17 @@ Nexus/EpicGlobal server's private address. The runner compose configuration
 uses localhost by default; set `CODING_RUNNER_BIND_IP` to the private address
 on the runner host. Do not expose port `8090` publicly.
 
-Set `CODING_RUNNER_URL` on the Nexus server to
-`http://<runner-private-ip>:8090`. The runner bearer token protects its API in
-addition to the private network restriction.
-
-Set the following in the server-side Nexus environment:
-
-```text
-EPICGLOBAL_API_URL=https://api.epicglobal.app
-EPICGLOBAL_ORCHESTRATOR_API_KEY=your-EpicGlobal-orchestrator-key
-AUTH_PASSWORD=your-Nexus-login-password
-AUTH_COOKIE_SECRET=a-unique-random-secret-at-least-16-characters
-CODING_RUNNER_URL=http://<runner-private-ip>:8090
-CODING_RUNNER_TOKEN=the-same-token-configured-on-the-runner
-```
-
 The API key must be one accepted by EpicGlobal's protected
-`/api/orchestrator/*` endpoints. Keep it server-side; it is passed only to the
-runner for the current deployment and is not included in project files or
-browser responses.
+`/api/orchestrator/*` endpoints. Keep it server-side: Nexus uses it directly
+for static uploads and deletion, and passes it to the runner only for enabled
+full-stack deployments. It is never included in project files or browser
+responses.
 
 ## One-time Droplet setup for full-stack hosting
 
-Static hosting does not require SSH setup. Full-stack hosting needs the
-restricted host-side agent below; it is not installed automatically, and a
-deployment cannot run until this setup is complete.
+Static hosting does not require SSH setup. Full-stack hosting is paused until
+the Droplet has sufficient capacity and needs the restricted host-side agent
+below; it is not installed automatically.
 
 1. Confirm the Droplet already has the EpicGlobal wildcard DNS and Caddy
    configuration needed for `*.epicglobal.app`. Install system-wide Node.js,
@@ -129,10 +145,11 @@ deployment cannot run until this setup is complete.
    Verify the host-key fingerprint through a trusted channel before using it;
    do not trust an unverified `ssh-keyscan` result. Keep the runner's
    authenticated API private and restart it after configuring the key.
-6. Restart Nexus and the runner. In Nexus Code, wait for the saved revision,
-   select **Static site** or **Full-stack app**, and choose **Deploy**. Nexus
-   shows the build/deployment logs and resulting public URL. Use **Take site
-   offline** to remove a deployment.
+6. Restart Nexus and the runner. After full-stack hosting is explicitly
+   enabled, select **Full-stack app** in Nexus Code. Static sites can be
+   published independently by selecting **Static site** and choosing
+   **Deploy**; the browser builds and sends only the static artifact.
+   **Take site offline** removes the hosted project.
 
 ## Limits and operating notes
 
@@ -141,6 +158,12 @@ deployment cannot run until this setup is complete.
 - Full-stack releases are built under per-project unprivileged accounts. The
   running systemd service is limited to 512 MB memory, 100% of one CPU, and
   128 tasks. Droplet-level capacity and networking still apply.
+- Static artifacts are capped at 25 MB compressed and 50 MB unpacked to bound
+  memory and protect the shared host. The Nexus server validates archive paths,
+  file types, and the root `index.html` before relaying the ZIP to EpicGlobal.
+- If the Nexus virtual host is behind Nginx, its Nexus-only configuration must
+  accept request bodies up to 26 MB and allow at least 360 seconds for the
+  upload route. Do not change the EpicGlobal virtual host's limits for Nexus.
 - Runner deployment jobs time out after 30 minutes by default. Each Droplet
   install, build, and prune command is independently limited to 8 minutes.
 - Configure the Droplet firewall to allow inbound SSH and web traffic only
@@ -148,10 +171,14 @@ deployment cannot run until this setup is complete.
   backend ports for Caddy; those ports should not be open to the public
   internet.
 - Static deployments use EpicGlobal's existing upload API, which replaces the
-  old static files before finishing the Caddy update; EpicGlobal does not offer
-  atomic static rollback through this endpoint.
+  target project's old static files before finishing the Caddy update;
+  EpicGlobal does not offer atomic static rollback through this endpoint.
+  Other EpicGlobal projects are not intentionally restarted, but the existing
+  upload API is responsible for applying the target site's update.
 - The host agent uses EpicGlobal's existing registry and repair API to build
   Caddy routes. Do not run the EpicGlobal cleanup endpoint while Nexus sites
   are active.
-- No deployment has been tested against your live Droplet yet. Configure the
-  server-side key, runner SSH settings, and the one-time host agent first.
+- No deployment has been tested against your live Droplet yet. Static
+  publishing needs only the Nexus server-side API key. Runner SSH settings and
+  the one-time host agent are needed only if full-stack hosting is later
+  enabled.

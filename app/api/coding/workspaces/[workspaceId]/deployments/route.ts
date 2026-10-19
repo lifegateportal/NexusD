@@ -1,6 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import { CodingDeploymentRequestSchema } from "@/lib/coding-deployment";
-import { CodingDeploymentError, codingDeploymentConfigurationError, createCodingDeployment, listWorkspaceCodingDeployments } from "@/lib/coding-deployment-service";
+import {
+  CodingDeploymentError,
+  codingDeploymentConfigurationError,
+  codingFullstackDeploymentAvailable,
+  createCodingDeployment,
+  listWorkspaceCodingDeployments,
+} from "@/lib/coding-deployment-service";
 import { CodingWorkspaceIdSchema } from "@/lib/coding-workspace";
 import { CodingWorkspaceStorageError, getCodingWorkspace } from "@/lib/coding-workspace-storage";
 
@@ -10,7 +16,13 @@ export const maxDuration = 30;
 type RouteContext = { params: Promise<{ workspaceId: string }> };
 
 function errorResponse(error: unknown) {
-  if (error instanceof CodingDeploymentError || error instanceof CodingWorkspaceStorageError) {
+  if (error instanceof CodingDeploymentError) {
+    return NextResponse.json({
+      error: error.message,
+      ...(error.deployment ? { deployment: error.deployment } : {}),
+    }, { status: error.status });
+  }
+  if (error instanceof CodingWorkspaceStorageError) {
     return NextResponse.json({ error: error.message }, { status: error.status });
   }
   console.error("[coding/deployments] Request failed", error);
@@ -32,7 +44,10 @@ export async function GET(_request: NextRequest, ctx: RouteContext) {
   if (unavailable) return NextResponse.json({ error: unavailable }, { status: 503 });
   try {
     const deployments = await listWorkspaceCodingDeployments(workspaceId);
-    return NextResponse.json({ deployments }, { headers: { "Cache-Control": "no-store, max-age=0" } });
+    return NextResponse.json({
+      deployments,
+      capabilities: { fullstack: codingFullstackDeploymentAvailable() },
+    }, { headers: { "Cache-Control": "no-store, max-age=0" } });
   } catch (error) {
     return errorResponse(error);
   }
@@ -41,13 +56,16 @@ export async function GET(_request: NextRequest, ctx: RouteContext) {
 export async function POST(request: NextRequest, ctx: RouteContext) {
   const workspaceId = await parseWorkspaceId(ctx);
   if (workspaceId instanceof NextResponse) return workspaceId;
-  const unavailable = codingDeploymentConfigurationError();
-  if (unavailable) return NextResponse.json({ error: unavailable }, { status: 503 });
 
   const parsedInput = CodingDeploymentRequestSchema.safeParse(await request.json().catch(() => null));
   if (!parsedInput.success) {
     return NextResponse.json({ error: "Confirm the deployment type and provide a valid saved revision." }, { status: 400 });
   }
+  if (parsedInput.data.kind !== "fullstack") {
+    return NextResponse.json({ error: "Static deployments must use the browser-built artifact endpoint." }, { status: 400 });
+  }
+  const unavailable = codingDeploymentConfigurationError("fullstack");
+  if (unavailable) return NextResponse.json({ error: unavailable }, { status: 503 });
 
   try {
     const snapshot = await getCodingWorkspace(workspaceId);

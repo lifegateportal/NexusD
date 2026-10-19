@@ -86,8 +86,13 @@ export const CodingDeploymentResponseSchema = z.object({
   deployment: CodingDeploymentSchema,
 }).strict();
 
+export const CodingDeploymentCapabilitiesSchema = z.object({
+  fullstack: z.boolean(),
+}).strict();
+
 export const CodingDeploymentListResponseSchema = z.object({
   deployments: z.array(CodingDeploymentSchema).max(100),
+  capabilities: CodingDeploymentCapabilitiesSchema.default({ fullstack: false }),
 }).strict();
 
 export const CodingBuildRequestSchema = z.object({
