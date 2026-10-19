@@ -31,6 +31,43 @@ Nexus does not save these values in workspace files. Do not include `.env`
 files. Runtime variables are provided to the application process, not to its
 build scripts.
 
+## React apps with AI and cloud storage
+
+React frontends can be deployed as static files, but private AI credentials and
+privileged storage operations need a server endpoint. For those projects,
+generate a Node app that serves the React build and its API routes from the
+same origin, then choose **Full-stack app** when full-stack hosting is enabled.
+Use each project's own provider credentials; never reuse Nexus's AI or R2
+credentials.
+
+Keep provider secrets in server-side `process.env` and list only placeholder
+variable names in `.env.example`. Enter real values in the deployment
+runtime-variable field. Do not use `VITE_*`, `REACT_APP_*`, or `NEXT_PUBLIC_*`
+for secrets: build-time browser variables are visible to site visitors.
+Runtime variables are not supplied to build scripts.
+
+Recommended patterns:
+
+| Integration | Server-side credentials and browser flow |
+| --- | --- |
+| OpenAI | `OPENAI_API_KEY`; call OpenAI from a validated Node API route. |
+| Anthropic Claude | `ANTHROPIC_API_KEY`; call Anthropic from a validated Node API route. |
+| Google Gemini | `GOOGLE_GENERATIVE_AI_API_KEY`; call Gemini from a validated Node API route. |
+| DeepSeek | `DEEPSEEK_API_KEY`; call DeepSeek from a validated Node API route. |
+| OpenAI-compatible API | `OPENAI_COMPATIBLE_API_KEY` and `OPENAI_COMPATIBLE_BASE_URL`; configure the base URL on the server, never accept an arbitrary URL from the browser. |
+| Cloudflare Workers AI | `CLOUDFLARE_ACCOUNT_ID` and `CLOUDFLARE_API_TOKEN`; call Workers AI from a Node API route. |
+| Cloudflare R2 | `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, and `R2_BUCKET_NAME`; return short-lived, scoped signed upload URLs and send file bytes directly from the browser to R2. |
+| AWS S3 | `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_REGION`, and `S3_BUCKET_NAME`; use short-lived, scoped signed upload URLs. |
+| Supabase Storage | Use the anon key only with authenticated client access and RLS. Keep `SUPABASE_SERVICE_ROLE_KEY` server-side if the server creates signed upload URLs. |
+| Firebase Storage | Use the browser SDK with user authentication and restrictive Storage Rules. Never expose a Firebase Admin service-account credential. |
+
+Validate upload size, content type, and user authorization before issuing an
+upload token or signed URL. Generate object keys on the server instead of
+accepting arbitrary bucket paths from the browser. Use provider-side rules and
+least-privilege credentials. Static hosting remains suitable when the project
+uses only documented browser-safe credentials and enforces access with provider
+authentication and rules.
+
 ## Nexus server configuration
 
 Static hosting does not need a coding runner, Docker, SSH access, a new Droplet,
@@ -46,15 +83,19 @@ AUTH_COOKIE_SECRET=a-unique-random-secret-at-least-16-characters
 The EpicGlobal key is used only by the Nexus server. Do not put it in browser
 code, workspace files, or a `.env` file.
 
-Full-stack deployment is paused by default to protect the existing Droplet.
-After upgrading the Droplet and separately configuring the restricted host
-agent, enable it explicitly and configure the isolated runner:
+Full-stack deployment becomes available when the EpicGlobal key and isolated
+runner are configured. It uses the existing Droplet and shares its resources
+with your other sites. Keep a resource margin before deploying another Node
+service; the server-side switch below can explicitly pause full-stack hosting:
 
 ```text
-CODING_FULLSTACK_ENABLED=true
+CODING_FULLSTACK_ENABLED=false  # optional emergency/maintenance pause
 CODING_RUNNER_URL=http://<runner-private-ip>:8090
 CODING_RUNNER_TOKEN=the-same-token-configured-on-the-runner
 ```
+
+If `CODING_FULLSTACK_ENABLED` is unset, it defaults to enabled; set it to
+`false` and restart Nexus to pause full-stack deployments.
 
 Run the coding runner on a dedicated host because it requires Docker socket
 access. For a separate DigitalOcean Droplet, place it in the same region and
@@ -72,9 +113,10 @@ responses.
 
 ## One-time Droplet setup for full-stack hosting
 
-Static hosting does not require SSH setup. Full-stack hosting is paused until
-the Droplet has sufficient capacity and needs the restricted host-side agent
-below; it is not installed automatically.
+Static hosting does not require SSH setup. Full-stack hosting requires the
+restricted host-side agent below; it is not installed automatically. Each
+deployed service is limited to 512 MB memory and one CPU, but all services
+still share the Droplet's overall resources.
 
 1. Confirm the Droplet already has the EpicGlobal wildcard DNS and Caddy
    configuration needed for `*.epicglobal.app`. Install system-wide Node.js,
@@ -145,10 +187,11 @@ below; it is not installed automatically.
    Verify the host-key fingerprint through a trusted channel before using it;
    do not trust an unverified `ssh-keyscan` result. Keep the runner's
    authenticated API private and restart it after configuring the key.
-6. Restart Nexus and the runner. After full-stack hosting is explicitly
-   enabled, select **Full-stack app** in Nexus Code. Static sites can be
-   published independently by selecting **Static site** and choosing
-   **Deploy**; the browser builds and sends only the static artifact.
+6. Restart Nexus and the runner. Once the EpicGlobal key and private runner
+   configuration are present, select **Full-stack app** in Nexus Code unless
+   `CODING_FULLSTACK_ENABLED=false` is set. Static sites can be published
+   independently by selecting **Static site** and choosing **Deploy**; the
+   browser builds and sends only the static artifact.
    **Take site offline** removes the hosted project.
 
 ## Limits and operating notes

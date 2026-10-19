@@ -16,7 +16,7 @@ const EnvironmentSchema = z.object({
   // Isolated Nexus Code runner — optional until the sidecar is deployed
   CODING_RUNNER_URL:   z.string().url().optional(),
   CODING_RUNNER_TOKEN: z.string().min(1).optional(),
-  CODING_FULLSTACK_ENABLED: z.enum(["true", "false"]).default("false").transform((value) => value === "true"),
+  CODING_FULLSTACK_ENABLED: z.enum(["true", "false"]).default("true").transform((value) => value === "true"),
   EPICGLOBAL_API_URL: z.string().url().default("https://api.epicglobal.app"),
   EPICGLOBAL_ORCHESTRATOR_API_KEY: z.string().min(1).optional(),
   GITHUB_OAUTH_CLIENT_ID: z.string().min(1).optional(),

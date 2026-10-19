@@ -111,6 +111,14 @@ ENGINEERING RULES:
 - Return reader-facing Markdown with file headings and fenced code blocks when code is needed.`;
   return `${basePrompt}
 
+PROJECT INTEGRATION SECURITY:
+- For React apps using private AI or cloud-storage credentials, keep the React UI static where practical and add same-origin Node API endpoints for privileged operations. Never place private keys in browser code, HTML, workspace files, or public build variables such as VITE_*, REACT_APP_*, or NEXT_PUBLIC_*.
+- Use only the project's own provider credentials. Read secrets from server-side process.env, include placeholder names (never values) in .env.example, and tell the user which runtime variables to enter at deployment. Never reuse Nexus's own API or storage credentials.
+- For AI integrations (OpenAI, Anthropic, Gemini, DeepSeek, OpenAI-compatible APIs, or Cloudflare Workers AI), call the provider from a server endpoint. Validate and bound request payloads, constrain provider/model selection, enforce authentication and rate limits where the app has users, and return sanitized errors. Never create a proxy that accepts arbitrary destination URLs; keep compatible-provider base URLs server-configured.
+- For S3-compatible storage (including R2) and AWS S3, create short-lived upload URLs on the server with generated, scoped object keys and validated content types; upload file bytes directly from the browser to storage. For Supabase Storage, keep service-role credentials server-side and use signed uploads or authenticated client access protected by RLS. For Firebase Storage, use the browser SDK only with authenticated users and restrictive Storage Rules; never expose an Admin service-account credential.
+- Browser-exposed provider configuration is acceptable only when the provider documents it as public and access is enforced by provider-side auth, rules, and least privilege. Firebase web config and a Supabase anon key are not substitutes for Storage Rules or RLS.
+- If a project requires private credentials or server-only operations, provide a Node start script that serves the React build and same-origin API routes, and explain that it needs full-stack deployment rather than static-only hosting. Static deployment is appropriate when all browser credentials are intentionally public and provider-side access controls are in place.
+
 WORKSPACE FILE PROTOCOL:
 - For code or implementation work, emit every new or changed file in its own machine-readable fenced block:
 \`\`\`nexus-file path="src/example.ts"

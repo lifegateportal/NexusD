@@ -55,7 +55,7 @@ export function codingDeploymentConfigurationError(kind?: CodingDeploymentKind):
     return "Configure the EpicGlobal orchestrator API key on the Nexus server.";
   }
   if (kind === "fullstack" && !env.CODING_FULLSTACK_ENABLED) {
-    return "Full-stack deployment is paused until the EpicGlobal Droplet has enough capacity.";
+    return "Full-stack deployment is disabled by CODING_FULLSTACK_ENABLED=false.";
   }
   if (kind === "fullstack" && (!env.CODING_RUNNER_URL || !env.CODING_RUNNER_TOKEN)) {
     return "The isolated coding runner is not configured for full-stack deployments.";

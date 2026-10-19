@@ -82,9 +82,10 @@ projects.
 Static projects are built in the user's browser WebContainer and the resulting
 bounded ZIP is relayed by the Nexus server to EpicGlobal; static hosting does
 not use this runner. Full-stack Node.js projects are sent to this runner and
-forwarded over SSH to the Droplet's forced-command deploy agent. Full-stack
-hosting is paused by default until the EpicGlobal Droplet has enough capacity.
-The agent is maintained here at
+forwarded over SSH to the Droplet's forced-command deploy agent. They run on
+the existing EpicGlobal Droplet and share its CPU and memory with other sites;
+keep the full-stack feature paused with `CODING_FULLSTACK_ENABLED=false` if the
+host lacks headroom. The agent is maintained here at
 `epicglobal-droplet-agent.mjs`; the setup procedure and required Nexus server
 configuration are in the
 [EpicGlobal deployment guide](../docs/nexus-code-epicglobal-deployments.md).

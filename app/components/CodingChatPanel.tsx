@@ -2132,7 +2132,7 @@ export function CodingChatPanel() {
           >
             <option value="static">Static site</option>
             <option value="fullstack" disabled={!fullstackDeploymentAvailable}>
-              {fullstackDeploymentAvailable ? "Full-stack app" : "Full-stack app (paused)"}
+              {fullstackDeploymentAvailable ? "Full-stack app" : "Full-stack app (unavailable)"}
             </option>
           </select>
           <button
@@ -2164,10 +2164,10 @@ export function CodingChatPanel() {
             <div className="absolute right-0 top-full z-50 mt-2 max-h-[min(70dvh,36rem)] w-[min(90vw,34rem)] overflow-y-auto rounded-2xl border border-cyan-500/30 bg-slate-950 p-3 shadow-2xl">
               <p className="text-xs font-semibold text-cyan-200">EpicGlobal hosting</p>
               <p className="mt-1 text-[10px] leading-4 text-slate-400">
-                Static builds run in this browser and upload only the built files. Full-stack hosting is paused until the EpicGlobal Droplet has more capacity. No GitHub repository or container registry is used.
+                Static builds run in this browser and upload only built files. Full-stack apps run on your existing EpicGlobal Droplet and share its resources; they require the private runner and server credentials. Neither path uses GitHub or a container registry.
               </p>
               {deploymentKind === "fullstack" && !fullstackDeploymentAvailable && (
-                <p className="mt-2 text-xs text-amber-200">Full-stack deployments are paused to protect the existing EpicGlobal websites.</p>
+                <p className="mt-2 text-xs text-amber-200">Full-stack deployment is unavailable until the server has the EpicGlobal key and private runner configured, and it is not explicitly disabled.</p>
               )}
               {deploymentKind === "fullstack" && (
                 <label className="mt-3 block space-y-2">
@@ -2177,13 +2177,13 @@ export function CodingChatPanel() {
                     onChange={(event) => setDeploymentEnvironmentText(event.target.value)}
                     disabled={deploymentBusy || deploymentInProgress}
                     rows={4}
-                    placeholder={"DATABASE_URL=...\nSESSION_SECRET=..."}
+                    placeholder={"OPENAI_API_KEY=...\nR2_ACCESS_KEY_ID=..."}
                     className="min-h-24 w-full rounded-xl border border-slate-700 bg-slate-900 p-3 text-base text-slate-100 placeholder:text-slate-600 disabled:opacity-50 lg:min-h-32"
                     autoComplete="off"
                     spellCheck={false}
                   />
                   <span className="block text-[10px] leading-4 text-slate-400">
-                    One KEY=value per line. Values are sent to the Droplet as runtime secrets and are not saved with your workspace files. Never add a .env file to the project.
+                    Use the names from .env.example, one KEY=value per line. Values become server-only runtime secrets and are not saved with workspace files. Never use VITE_, REACT_APP_, or NEXT_PUBLIC_ names for secrets or add a .env file.
                   </span>
                 </label>
               )}
