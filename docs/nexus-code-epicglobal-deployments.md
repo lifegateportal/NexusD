@@ -31,6 +31,19 @@ Nexus does not save these values in workspace files. Do not include `.env`
 files. Runtime variables are provided to the application process, not to its
 build scripts.
 
+Nexus Code's explorer can create a device-local root `.env.local` for the
+browser WebContainer preview. Its contents stay in that browser's local
+storage (not encrypted); they are excluded from workspace revisions, assistant
+requests, project ZIPs, GitHub publishing, and both deployment types. This
+file is for local preview only. Never put a private key in a browser-facing
+variable such as `VITE_*`, `REACT_APP_*`, or `NEXT_PUBLIC_*`; use full-stack
+deployment runtime variables for private server-side credentials.
+
+Explorer ZIP uploads create a separate project; folder imports merge into the
+open project. Imports support up to 200 UTF-8 text files and 4 MB of source,
+not binary assets. ZIP downloads contain shared workspace files only and
+exclude device-local `.env.local`.
+
 ## React apps with AI and cloud storage
 
 React frontends can be deployed as static files, but private AI credentials and

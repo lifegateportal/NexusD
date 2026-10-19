@@ -2,7 +2,7 @@ import type { FileSystemTree, WebContainer } from "@webcontainer/api";
 import { z } from "zod";
 import { CodingWorkspaceFileSchema } from "@/lib/coding-workspace";
 
-const CodingWebContainerFilesSchema = z.array(CodingWorkspaceFileSchema).max(200).superRefine((files, context) => {
+const CodingWebContainerFilesSchema = z.array(CodingWorkspaceFileSchema).max(201).superRefine((files, context) => {
   const names = new Set<string>();
   let totalBytes = 0;
   for (const [index, file] of files.entries()) {
@@ -15,11 +15,11 @@ const CodingWebContainerFilesSchema = z.array(CodingWorkspaceFileSchema).max(200
     }
     names.add(file.name);
     totalBytes += new TextEncoder().encode(file.content).byteLength;
-    if (totalBytes > 4_000_000) {
+    if (totalBytes > 4_500_000) {
       context.addIssue({
         code: z.ZodIssueCode.custom,
         path: [index, "content"],
-        message: "Workspace files are too large. Keep the total under 4 million bytes.",
+        message: "Workspace and device-local files are too large. Keep the total under 4.5 million bytes.",
       });
       return;
     }

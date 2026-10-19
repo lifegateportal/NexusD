@@ -28,11 +28,15 @@ import {
   CodingPreviewSchema,
   CodingWorkspaceSchema,
   CodingWorkspaceSnapshotSchema,
+  CodingWorkspaceFileSchema,
   codingLanguageFromName,
+  codingWorkspaceByteCount,
   extractCodingFiles,
+  normalizeCodingFilePath,
   type CodingAgentEvent,
   type CodingPreview,
   type CodingWorkspace,
+  type CodingWorkspaceFile,
   type CodingWorkspaceSnapshot,
 } from "@/lib/coding-workspace";
 import {
@@ -48,7 +52,12 @@ import {
   CodingGitHubPublishResponseSchema,
   CodingGitHubRepositoriesResponseSchema,
 } from "@/lib/coding-github-schema";
-import { createCodingWorkspaceZip } from "@/lib/coding-zip";
+import { createCodingWorkspaceZip, readCodingWorkspaceZip } from "@/lib/coding-zip";
+import {
+  deleteCodingLocalEnvironment,
+  loadCodingLocalEnvironment,
+  saveCodingLocalEnvironment,
+} from "@/lib/coding-local-env";
 import {
   bootCodingWebContainer,
   CodingWebContainerCommandSchema,
@@ -67,6 +76,40 @@ const STORAGE_KEY = "nexus-coding-chat";
 const VOICE_STORAGE_KEY = "nexus-coding-voice-mode";
 const MAX_FILE_SIZE = 500_000;
 const MAX_FILES = 200;
+const MAX_WORKSPACE_BYTES = 4_000_000;
+const LOCAL_ENV_FILE_NAME = ".env.local";
+
+function isPrivateEnvironmentFile(name: string): boolean {
+  const baseName = name.replaceAll("\\", "/").split("/").at(-1) ?? name;
+  return /^\.env(?:$|\.)/i.test(baseName) && baseName !== ".env.example";
+}
+
+function ensureLocalEnvironmentGitignore(files: CodingFile[]): CodingFile[] {
+  const gitignoreIndex = files.findIndex((file) => file.name === ".gitignore");
+  const existing = gitignoreIndex >= 0 ? files[gitignoreIndex] : null;
+  if (existing?.content.split(/\r?\n/).some((line) => line.trim() === LOCAL_ENV_FILE_NAME)) {
+    return files;
+  }
+
+  const content = existing
+    ? `${existing.content}${existing.content && !existing.content.endsWith("\n") ? "\n" : ""}${LOCAL_ENV_FILE_NAME}\n`
+    : `${LOCAL_ENV_FILE_NAME}\n`;
+  const parsed = CodingWorkspaceFileSchema.safeParse({
+    name: ".gitignore",
+    content,
+    language: "text",
+  });
+  if (!parsed.success) return files;
+
+  const updated = [...files];
+  if (gitignoreIndex >= 0) updated[gitignoreIndex] = parsed.data;
+  else {
+    if (files.length >= MAX_FILES) return files;
+    updated.push(parsed.data);
+  }
+  if (codingWorkspaceByteCount(updated) > MAX_WORKSPACE_BYTES) return files;
+  return updated;
+}
 
 type CodingTreeNode = {
   name: string;
@@ -219,6 +262,9 @@ export function CodingChatPanel() {
   const [githubNotice, setGithubNotice] = useState<string | null>(null);
   const [githubCommitUrl, setGithubCommitUrl] = useState<string | null>(null);
   const [zipExporting, setZipExporting] = useState(false);
+  const [zipImporting, setZipImporting] = useState(false);
+  const [localEnvironmentContent, setLocalEnvironmentContent] = useState<string | null>(null);
+  const [localEnvironmentWorkspaceId, setLocalEnvironmentWorkspaceId] = useState<string | null>(null);
   const [input, setInput] = useState("");
   const [attachedFileNames, setAttachedFileNames] = useState<string[]>([]);
   const [mode, setMode] = useState<CodingMode>("ask");
@@ -250,6 +296,7 @@ export function CodingChatPanel() {
   const staticDeploymentAbortRef = useRef<AbortController | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const folderInputRef = useRef<HTMLInputElement>(null);
+  const zipImportInputRef = useRef<HTMLInputElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const voiceModeRef = useRef(false);
   const voiceRecognitionRef = useRef<CodingVoiceRecognition | null>(null);
@@ -267,6 +314,7 @@ export function CodingChatPanel() {
   const workspaceChangeReasonRef = useRef("Manual workspace edit");
   const workspaceChangeSourceRef = useRef<"user" | "agent" | "import">("user");
   const workspaceSaveQueueRef = useRef(Promise.resolve());
+  const workspaceSaveTimerRef = useRef<number | null>(null);
   const webContainerRuntimeRef = useRef<WebContainer | null>(null);
   const webContainerProcessesRef = useRef(new Set<WebContainerProcess>());
   const webContainerPreviewProcessRef = useRef<WebContainerProcess | null>(null);
@@ -276,10 +324,25 @@ export function CodingChatPanel() {
   const webContainerSyncedFilesRef = useRef<Set<string>>(new Set());
   const webContainerSyncQueueRef = useRef(Promise.resolve());
   const webContainerTerminalRef = useRef<HTMLPreElement>(null);
-  const fileTree = useMemo(() => buildCodingTree(files), [files]);
+  const localEnvironmentFile = useMemo<CodingFile | null>(() => (
+    workspaceId
+    && localEnvironmentWorkspaceId === workspaceId
+    && localEnvironmentContent !== null
+      ? {
+          name: LOCAL_ENV_FILE_NAME,
+          content: localEnvironmentContent,
+          language: "dotenv",
+        }
+      : null
+  ), [localEnvironmentContent, localEnvironmentWorkspaceId, workspaceId]);
+  const editorFiles = useMemo(() => {
+    const sharedFiles = files.filter((file) => file.name !== LOCAL_ENV_FILE_NAME);
+    return localEnvironmentFile ? [...sharedFiles, localEnvironmentFile] : sharedFiles;
+  }, [files, localEnvironmentFile]);
+  const fileTree = useMemo(() => buildCodingTree(editorFiles), [editorFiles]);
   const selectedFile = useMemo(
-    () => files.find((file) => file.name === selectedFileName) ?? null,
-    [files, selectedFileName],
+    () => editorFiles.find((file) => file.name === selectedFileName) ?? null,
+    [editorFiles, selectedFileName],
   );
   const selectedFileIsHtml = selectedFile?.language === "html"
     || /\.(?:html?|xhtml)$/i.test(selectedFile?.name ?? "");
@@ -333,6 +396,7 @@ export function CodingChatPanel() {
     setZipExporting(true);
     setGithubError(null);
     setGithubNotice(null);
+    setError(null);
     try {
       const { blob, filename } = await createCodingWorkspaceZip(files, workspaceName);
       const url = URL.createObjectURL(blob);
@@ -346,7 +410,9 @@ export function CodingChatPanel() {
       window.setTimeout(() => URL.revokeObjectURL(url), 1000);
       setGithubNotice(`${filename} is ready to download.`);
     } catch (exportError) {
-      setGithubError(exportError instanceof Error ? exportError.message : "ZIP export failed.");
+      const message = exportError instanceof Error ? exportError.message : "ZIP export failed.";
+      setGithubError(message);
+      setError(message);
     } finally {
       setZipExporting(false);
     }
@@ -653,9 +719,27 @@ export function CodingChatPanel() {
   }, [codingDeploymentId, codingDeploymentStatus, workspaceId]);
 
   useEffect(() => {
-    if (selectedFileName && files.some((file) => file.name === selectedFileName)) return;
-    setSelectedFileName(files[0]?.name ?? null);
-  }, [files, selectedFileName]);
+    if (selectedFileName && editorFiles.some((file) => file.name === selectedFileName)) return;
+    setSelectedFileName(editorFiles[0]?.name ?? null);
+  }, [editorFiles, selectedFileName]);
+
+  useEffect(() => {
+    if (!workspaceId) {
+      setLocalEnvironmentWorkspaceId(null);
+      setLocalEnvironmentContent(null);
+      return;
+    }
+    try {
+      setLocalEnvironmentContent(loadCodingLocalEnvironment(workspaceId));
+      setLocalEnvironmentWorkspaceId(workspaceId);
+    } catch (localEnvironmentError) {
+      setLocalEnvironmentContent(null);
+      setLocalEnvironmentWorkspaceId(workspaceId);
+      setError(localEnvironmentError instanceof Error
+        ? localEnvironmentError.message
+        : "Device-local .env.local could not be loaded.");
+    }
+  }, [workspaceId]);
 
   useEffect(() => {
     folderInputRef.current?.setAttribute("webkitdirectory", "");
@@ -678,7 +762,31 @@ export function CodingChatPanel() {
     if (terminal) terminal.scrollTop = terminal.scrollHeight;
   }, [webContainerLogs]);
 
+  const isolateWorkspaceFiles = useCallback((
+    targetWorkspaceId: string,
+    revisionFiles: CodingWorkspaceFile[],
+  ): CodingWorkspaceFile[] => {
+    const legacyLocalEnvironment = revisionFiles.find((file) => file.name === LOCAL_ENV_FILE_NAME);
+    const sharedFiles = revisionFiles.filter((file) => file.name !== LOCAL_ENV_FILE_NAME);
+    if (!legacyLocalEnvironment) return sharedFiles;
+
+    let content = legacyLocalEnvironment.content;
+    try {
+      const saved = loadCodingLocalEnvironment(targetWorkspaceId);
+      if (saved === null) saveCodingLocalEnvironment(targetWorkspaceId, content);
+      else content = saved;
+    } catch (localEnvironmentError) {
+      setError(localEnvironmentError instanceof Error
+        ? localEnvironmentError.message
+        : "Legacy .env.local could not be moved to this browser.");
+    }
+    setLocalEnvironmentWorkspaceId(targetWorkspaceId);
+    setLocalEnvironmentContent(content);
+    return ensureLocalEnvironmentGitignore(sharedFiles);
+  }, []);
+
   const applyWorkspaceSnapshot = useCallback((snapshot: CodingWorkspaceSnapshot) => {
+    const nextFiles = isolateWorkspaceFiles(snapshot.workspace.id, snapshot.revision.files);
     workspaceReadyRef.current = false;
     workspaceIdRef.current = snapshot.workspace.id;
     workspaceRevisionRef.current = snapshot.workspace.currentRevisionId;
@@ -690,13 +798,27 @@ export function CodingChatPanel() {
     setCodingDeployment(null);
     setDeploymentEnvironmentText("");
     setDeploymentError(null);
-    setSelectedFileName(snapshot.revision.files[0]?.name ?? null);
-    setFiles(snapshot.revision.files);
+    setSelectedFileName(nextFiles[0]?.name ?? (legacyLocalEnvironment ? LOCAL_ENV_FILE_NAME : null));
+    setFiles(nextFiles);
+    if (legacyLocalEnvironment) {
+      let content = legacyLocalEnvironment.content;
+      try {
+        const saved = loadCodingLocalEnvironment(snapshot.workspace.id);
+        if (saved === null) saveCodingLocalEnvironment(snapshot.workspace.id, content);
+        else content = saved;
+      } catch (localEnvironmentError) {
+        setError(localEnvironmentError instanceof Error
+          ? localEnvironmentError.message
+          : "Legacy .env.local could not be moved to this browser.");
+      }
+      setLocalEnvironmentWorkspaceId(snapshot.workspace.id);
+      setLocalEnvironmentContent(content);
+    }
     setLivePreview(null);
     setPreviewUrl("");
     workspaceReadyRef.current = true;
     setWorkspaceStatus("Saved");
-  }, []);
+  }, [isolateWorkspaceFiles]);
 
   useEffect(() => {
     try {
@@ -859,6 +981,13 @@ export function CodingChatPanel() {
       const payload = await response.json().catch(() => null) as { error?: unknown } | null;
       if (!response.ok) {
         throw new Error(typeof payload?.error === "string" ? payload.error : "Project could not be deleted.");
+      }
+      try {
+        deleteCodingLocalEnvironment(workspaceId);
+      } catch (localEnvironmentError) {
+        setError(localEnvironmentError instanceof Error
+          ? localEnvironmentError.message
+          : "Device-local .env.local could not be removed.");
       }
       const remaining = workspaces.filter((workspace) => workspace.id !== workspaceId);
       setWorkspaces(remaining);
@@ -1293,7 +1422,10 @@ export function CodingChatPanel() {
             workspaceSyncedFilesRef.current = JSON.stringify(parsedCurrent.data.revision.files);
             setWorkspaceRevisionId(parsedCurrent.data.workspace.currentRevisionId);
             setWorkspaceParentRevisionId(parsedCurrent.data.revision.parentRevisionId);
-            setFiles(parsedCurrent.data.revision.files);
+            setFiles(isolateWorkspaceFiles(
+              parsedCurrent.data.workspace.id,
+              parsedCurrent.data.revision.files,
+            ));
           }
           throw new Error(typeof conflict?.error === "string"
             ? conflict.error
@@ -1323,43 +1455,137 @@ export function CodingChatPanel() {
     workspaceSaveQueueRef.current = workspaceSaveQueueRef.current
       .catch(() => undefined)
       .then(operation);
-  }, [workspaceId]);
+  }, [isolateWorkspaceFiles, workspaceId]);
+
+  const flushWorkspaceSave = useCallback(async () => {
+    if (!workspaceId || !workspaceReadyRef.current) return;
+    if (workspaceSaveTimerRef.current !== null) {
+      window.clearTimeout(workspaceSaveTimerRef.current);
+      workspaceSaveTimerRef.current = null;
+    }
+    const signature = JSON.stringify(files);
+    if (signature !== workspaceSyncedFilesRef.current) {
+      queueWorkspaceSave(
+        files,
+        workspaceChangeReasonRef.current,
+        workspaceChangeSourceRef.current,
+      );
+    }
+    await workspaceSaveQueueRef.current;
+    if (signature !== workspaceSyncedFilesRef.current) {
+      throw new Error("The current project changes could not be saved.");
+    }
+  }, [files, queueWorkspaceSave, workspaceId]);
 
   useEffect(() => {
     if (!workspaceId || !workspaceReadyRef.current) return;
     const signature = JSON.stringify(files);
     if (signature === workspaceSyncedFilesRef.current) return;
     const timer = window.setTimeout(() => {
+      if (workspaceSaveTimerRef.current === timer) workspaceSaveTimerRef.current = null;
       queueWorkspaceSave(
         files,
         workspaceChangeReasonRef.current,
         workspaceChangeSourceRef.current,
       );
     }, 800);
-    return () => window.clearTimeout(timer);
+    workspaceSaveTimerRef.current = timer;
+    return () => {
+      window.clearTimeout(timer);
+      if (workspaceSaveTimerRef.current === timer) workspaceSaveTimerRef.current = null;
+    };
   }, [files, queueWorkspaceSave, workspaceId]);
 
   const addFiles = useCallback(async (selected: FileList | null, attachToChat = false) => {
     if (!selected) return;
-    const incoming = Array.from(selected);
-    if (files.length + incoming.length > MAX_FILES) {
-      setError(`This workspace supports no more than ${MAX_FILES} source files.`);
-      return;
-    }
     const nextFiles: CodingFile[] = [];
-    for (const file of incoming) {
+    let localEnvironment: string | null = null;
+    let warning: string | null = null;
+    for (const file of Array.from(selected)) {
       if (file.size > MAX_FILE_SIZE) {
-        setError(`${file.name} is too large. Keep each source file under 500 KB.`);
+        warning = `${file.name} is too large. Keep each source file under 500 KB.`;
         continue;
       }
-      const fileName = file.webkitRelativePath || file.name;
-      nextFiles.push({
-        name: fileName,
-        content: await file.text(),
-        language: codingLanguageFromName(fileName),
+      const sourcePath = file.webkitRelativePath
+        ? file.webkitRelativePath.replaceAll("\\", "/").split("/").slice(1).join("/")
+        : file.name;
+      const normalizedPath = normalizeCodingFilePath(sourcePath);
+      if (!normalizedPath || normalizedPath !== sourcePath.replaceAll("\\", "/")) {
+        warning = `${file.name} has an invalid project-relative path and was skipped.`;
+        continue;
+      }
+      if (normalizedPath.split("/").some((segment) => [
+        ".git", ".next", ".turbo", ".cache", "node_modules", "coverage", "dist", "build",
+      ].includes(segment))) continue;
+      if (isPrivateEnvironmentFile(normalizedPath) && normalizedPath !== LOCAL_ENV_FILE_NAME) {
+        warning = `${normalizedPath} was skipped. Only .env.local can be kept as a device-local environment file.`;
+        continue;
+      }
+      if (normalizedPath === LOCAL_ENV_FILE_NAME && attachToChat) {
+        warning = ".env.local cannot be attached to chat. Import it from the project explorer to keep it device-local.";
+        continue;
+      }
+      let content: string;
+      try {
+        content = new TextDecoder("utf-8", { fatal: true }).decode(await file.arrayBuffer());
+      } catch {
+        warning = `${normalizedPath} is not UTF-8 text and was skipped.`;
+        continue;
+      }
+      const parsed = CodingWorkspaceFileSchema.safeParse({
+        name: normalizedPath,
+        content,
+        language: codingLanguageFromName(normalizedPath),
       });
+      if (!parsed.success) {
+        warning = parsed.error.issues[0]?.message ?? `${normalizedPath} is invalid.`;
+        continue;
+      }
+      if (normalizedPath === LOCAL_ENV_FILE_NAME) {
+        if (localEnvironment !== null) {
+          warning = "Only one root .env.local can be imported at a time.";
+          continue;
+        }
+        localEnvironment = parsed.data.content;
+      } else {
+        nextFiles.push(parsed.data);
+      }
     }
+
+    let mergedFiles = files;
     if (nextFiles.length > 0) {
+      const merged = new Map(files.map((file) => [file.name, file]));
+      for (const file of nextFiles) merged.set(file.name, file);
+      mergedFiles = Array.from(merged.values());
+      if (mergedFiles.length > MAX_FILES) {
+        setError(`This workspace supports no more than ${MAX_FILES} source files.`);
+        return;
+      }
+      if (codingWorkspaceByteCount(mergedFiles) > MAX_WORKSPACE_BYTES) {
+        setError("The imported source files exceed the 4 MB workspace limit.");
+        return;
+      }
+    }
+
+    if (localEnvironment !== null) {
+      if (!workspaceId) {
+        warning = "Create or open a project before importing its device-local .env.local.";
+      } else {
+        try {
+          saveCodingLocalEnvironment(workspaceId, localEnvironment);
+          setLocalEnvironmentWorkspaceId(workspaceId);
+          setLocalEnvironmentContent(localEnvironment);
+          mergedFiles = ensureLocalEnvironmentGitignore(mergedFiles);
+        } catch (localEnvironmentError) {
+          setError(localEnvironmentError instanceof Error
+            ? localEnvironmentError.message
+            : "Device-local .env.local could not be saved.");
+          return;
+        }
+      }
+    }
+
+    if (nextFiles.length > 0 || (localEnvironment !== null && workspaceId)) {
       if (attachToChat) {
         setAttachedFileNames((current) => Array.from(new Set([
           ...current,
@@ -1368,27 +1594,55 @@ export function CodingChatPanel() {
       }
       workspaceChangeReasonRef.current = "Imported source files";
       workspaceChangeSourceRef.current = "import";
-      setFiles((current) => {
-        const merged = new Map(current.map((file) => [file.name, file]));
-        for (const file of nextFiles) merged.set(file.name, file);
-        return Array.from(merged.values()).slice(0, MAX_FILES);
-      });
-      setSelectedFileName(nextFiles[0].name);
-      setError(null);
+      setFiles(mergedFiles);
+      setSelectedFileName(nextFiles[0]?.name ?? LOCAL_ENV_FILE_NAME);
     }
-  }, [files.length]);
+    setError(warning);
+  }, [files, workspaceId]);
 
   const updateSelectedFile = useCallback((content: string) => {
     if (!selectedFileName) return;
+    if (selectedFileName === LOCAL_ENV_FILE_NAME) {
+      if (!workspaceId) {
+        setError("Open a project before editing device-local .env.local.");
+        return;
+      }
+      try {
+        saveCodingLocalEnvironment(workspaceId, content);
+        setLocalEnvironmentWorkspaceId(workspaceId);
+        setLocalEnvironmentContent(content);
+        setError(null);
+      } catch (localEnvironmentError) {
+        setError(localEnvironmentError instanceof Error
+          ? localEnvironmentError.message
+          : "Device-local .env.local could not be saved.");
+      }
+      return;
+    }
+    const nextFiles = files.map((file) => (
+      file.name === selectedFileName ? { ...file, content } : file
+    ));
+    const selected = nextFiles.find((file) => file.name === selectedFileName);
+    if (!selected || !CodingWorkspaceFileSchema.safeParse(selected).success) {
+      setError("Keep each project source file under 500 KB.");
+      return;
+    }
+    if (codingWorkspaceByteCount(nextFiles) > MAX_WORKSPACE_BYTES) {
+      setError("The edited project exceeds the 4 MB workspace limit.");
+      return;
+    }
     workspaceChangeReasonRef.current = `Edited ${selectedFileName}`;
     workspaceChangeSourceRef.current = "user";
-    setFiles((current) => current.map((file) => (
-      file.name === selectedFileName ? { ...file, content } : file
-    )));
-  }, [selectedFileName]);
+    setFiles(nextFiles);
+    setError(null);
+  }, [files, selectedFileName, workspaceId]);
 
   const syncGeneratedFiles = useCallback((content: string) => {
-    const generatedFiles = extractCodingFiles(content);
+    const extractedFiles = extractCodingFiles(content);
+    const generatedFiles = extractedFiles.filter((file) => !isPrivateEnvironmentFile(file.name));
+    if (generatedFiles.length !== extractedFiles.length) {
+      setError("Environment files were not added to the shared workspace. Create .env.local in the explorer to keep values on this device.");
+    }
     if (generatedFiles.length === 0) return;
     workspaceChangeReasonRef.current = "Nexus Code generated files";
     workspaceChangeSourceRef.current = "agent";
@@ -1405,6 +1659,161 @@ export function CodingChatPanel() {
       return changed ? Array.from(merged.values()).slice(0, MAX_FILES) : current;
     });
   }, []);
+
+  const createWorkspaceFile = useCallback((defaultPath = "src/new-file.tsx") => {
+    const enteredPath = window.prompt("New project-relative file path", defaultPath);
+    if (enteredPath === null) return;
+    const normalizedPath = normalizeCodingFilePath(enteredPath);
+    if (!normalizedPath || normalizedPath !== enteredPath.trim().replaceAll("\\", "/")) {
+      setError("Enter a relative path without empty, . or .. path segments.");
+      return;
+    }
+    if (isPrivateEnvironmentFile(normalizedPath) && normalizedPath !== LOCAL_ENV_FILE_NAME) {
+      setError("Only .env.local can be created as a device-local environment file.");
+      return;
+    }
+    if (!workspaceId) {
+      setError("Create or open a project before adding files.");
+      return;
+    }
+    if (editorFiles.some((file) => (
+      file.name === normalizedPath
+      || file.name.startsWith(`${normalizedPath}/`)
+      || normalizedPath.startsWith(`${file.name}/`)
+    ))) {
+      setError(`A file or folder already exists at ${normalizedPath}.`);
+      return;
+    }
+
+    if (normalizedPath === LOCAL_ENV_FILE_NAME) {
+      try {
+        saveCodingLocalEnvironment(workspaceId, "");
+        setLocalEnvironmentWorkspaceId(workspaceId);
+        setLocalEnvironmentContent("");
+        setFiles(ensureLocalEnvironmentGitignore(files));
+        setSelectedFileName(LOCAL_ENV_FILE_NAME);
+        setCodingSurface("editor");
+        setError(null);
+      } catch (localEnvironmentError) {
+        setError(localEnvironmentError instanceof Error
+          ? localEnvironmentError.message
+          : "Device-local .env.local could not be created.");
+      }
+      return;
+    }
+
+    if (files.length >= MAX_FILES) {
+      setError(`This workspace supports no more than ${MAX_FILES} source files.`);
+      return;
+    }
+    const parsed = CodingWorkspaceFileSchema.safeParse({
+      name: normalizedPath,
+      content: "",
+      language: codingLanguageFromName(normalizedPath),
+    });
+    if (!parsed.success) {
+      setError(parsed.error.issues[0]?.message ?? "The new file path is invalid.");
+      return;
+    }
+    workspaceChangeReasonRef.current = `Created ${normalizedPath}`;
+    workspaceChangeSourceRef.current = "user";
+    setFiles([...files, parsed.data]);
+    setSelectedFileName(normalizedPath);
+    setCodingSurface("editor");
+    setError(null);
+  }, [editorFiles, files, workspaceId]);
+
+  const deleteWorkspacePath = useCallback((path: string, kind: CodingTreeNode["kind"]) => {
+    const removedNames = new Set(editorFiles
+      .filter((file) => kind === "folder" ? file.name.startsWith(`${path}/`) : file.name === path)
+      .map((file) => file.name));
+    if (removedNames.size === 0) return;
+    const count = removedNames.size;
+    if (!window.confirm(`Delete ${kind === "folder" ? `folder "${path}" and ${count} file${count === 1 ? "" : "s"}` : `"${path}"`}?`)) {
+      return;
+    }
+    if (removedNames.has(LOCAL_ENV_FILE_NAME) && workspaceId) {
+      try {
+        deleteCodingLocalEnvironment(workspaceId);
+      } catch (localEnvironmentError) {
+        setError(localEnvironmentError instanceof Error
+          ? localEnvironmentError.message
+          : "Device-local .env.local could not be deleted.");
+        return;
+      }
+      setLocalEnvironmentContent(null);
+      setLocalEnvironmentWorkspaceId(workspaceId);
+    }
+    const remainingFiles = files.filter((file) => !removedNames.has(file.name));
+    const nextSelected = remainingFiles[0]?.name ?? null;
+    setSelectedFileName((current) => current && removedNames.has(current) ? nextSelected : current);
+    if (removedNames.size > 0 && Array.from(removedNames).some((name) => name !== LOCAL_ENV_FILE_NAME)) {
+      workspaceChangeReasonRef.current = `Deleted ${path}`;
+      workspaceChangeSourceRef.current = "user";
+      setFiles(remainingFiles);
+    }
+    setError(null);
+  }, [editorFiles, files, workspaceId]);
+
+  const importWorkspaceZip = useCallback(async (file: File | null) => {
+    if (!file || zipImporting) return;
+    setZipImporting(true);
+    setError(null);
+    try {
+      const imported = await readCodingWorkspaceZip(file);
+      await flushWorkspaceSave();
+      const projectName = file.name.replace(/\.zip$/i, "").trim().slice(0, 80) || "Imported Nexus Project";
+      const projectFiles: CodingWorkspaceFile[] = imported.localEnvironment === null
+        ? imported.files
+        : ensureLocalEnvironmentGitignore(imported.files);
+      const response = await fetch("/api/coding/workspaces", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "same-origin",
+        body: JSON.stringify({ name: projectName, files: projectFiles }),
+      });
+      const payload: unknown = await response.json().catch(() => null);
+      if (!response.ok) {
+        const failure = payload as { error?: unknown } | null;
+        throw new Error(typeof failure?.error === "string" ? failure.error : "The ZIP project could not be imported.");
+      }
+      const parsed = CodingWorkspaceSnapshotSchema.safeParse(payload);
+      if (!parsed.success) throw new Error("The imported project response was invalid.");
+
+      let environmentError: string | null = null;
+      if (imported.localEnvironment !== null) {
+        try {
+          saveCodingLocalEnvironment(parsed.data.workspace.id, imported.localEnvironment);
+        } catch (localEnvironmentError) {
+          environmentError = localEnvironmentError instanceof Error
+            ? localEnvironmentError.message
+            : "Device-local .env.local could not be saved.";
+        }
+      }
+      setWorkspaces((current) => [
+        parsed.data.workspace,
+        ...current.filter((workspace) => workspace.id !== parsed.data.workspace.id),
+      ]);
+      applyWorkspaceSnapshot(parsed.data);
+      if (imported.localEnvironment !== null) {
+        setLocalEnvironmentWorkspaceId(parsed.data.workspace.id);
+        setLocalEnvironmentContent(imported.localEnvironment);
+      }
+      resetProjectConversation();
+      setStatus("Ready");
+      setWorkspaceStatus("Project imported");
+      setError(environmentError);
+    } catch (importError) {
+      setError(importError instanceof Error ? importError.message : "The ZIP project could not be imported.");
+    } finally {
+      setZipImporting(false);
+    }
+  }, [
+    applyWorkspaceSnapshot,
+    flushWorkspaceSave,
+    resetProjectConversation,
+    zipImporting,
+  ]);
 
   const undoWorkspace = useCallback(async () => {
     if (!workspaceId || !workspaceParentRevisionId || loading) return;
@@ -1429,13 +1838,13 @@ export function CodingChatPanel() {
       workspaceChangeSourceRef.current = "user";
       setWorkspaceRevisionId(parsed.data.workspace.currentRevisionId);
       setWorkspaceParentRevisionId(parsed.data.revision.parentRevisionId);
-      setFiles(parsed.data.revision.files);
+      setFiles(isolateWorkspaceFiles(parsed.data.workspace.id, parsed.data.revision.files));
       setWorkspaceStatus("Saved");
     } catch (undoError) {
       setWorkspaceStatus("Needs attention");
       setError(undoError instanceof Error ? undoError.message : "Workspace undo failed.");
     }
-  }, [loading, workspaceId, workspaceParentRevisionId]);
+  }, [isolateWorkspaceFiles, loading, workspaceId, workspaceParentRevisionId]);
 
   const openPreview = useCallback(() => {
     const candidate = previewUrlDraft.trim();
@@ -1553,15 +1962,15 @@ export function CodingChatPanel() {
       setWebContainerNeedsTopLevel(false);
       const runtime = await bootCodingWebContainer((stage) => appendTerminalLine(`[boot] ${stage}`));
       if (generation !== webContainerGenerationRef.current) return;
-      appendTerminalLine(`[fs] Mounting ${files.length} project files...`);
+      appendTerminalLine(`[fs] Mounting ${editorFiles.length} project files...`);
       await withCodingWebContainerTimeout(
-        runtime.mount(createCodingWebContainerFileTree(files)),
+        runtime.mount(createCodingWebContainerFileTree(editorFiles)),
         45_000,
         "Mounting the project timed out after 45 seconds.",
       );
       if (generation !== webContainerGenerationRef.current) return;
       webContainerRuntimeRef.current = runtime;
-      webContainerSyncedFilesRef.current = new Set(files.map((file) => file.name));
+      webContainerSyncedFilesRef.current = new Set(editorFiles.map((file) => file.name));
       appendTerminalLine("[fs] Project files mounted.");
 
       const readyUnsubscribe = runtime.on("server-ready", (port, url) => {
@@ -1605,7 +2014,7 @@ export function CodingChatPanel() {
       webContainerProcessesRef.current.forEach((process) => process.kill());
       webContainerProcessesRef.current.clear();
     }
-  }, [files, livePreview, stopWebContainerPreview, webContainerReloadRequired, webContainerStatus, workspaceId, workspaceRevisionId]);
+  }, [editorFiles, livePreview, stopWebContainerPreview, webContainerReloadRequired, webContainerStatus, workspaceId, workspaceRevisionId]);
 
   const runWebContainerCommand = useCallback(async () => {
     const runtime = webContainerRuntimeRef.current;
@@ -1700,12 +2109,12 @@ export function CodingChatPanel() {
   useEffect(() => {
     if (webContainerStatus !== "ready" && webContainerStatus !== "running" && webContainerStatus !== "installing") return;
     let cancelled = false;
-    const nextFileNames = new Set(files.map((file) => file.name));
+    const nextFileNames = new Set(editorFiles.map((file) => file.name));
     webContainerSyncQueueRef.current = webContainerSyncQueueRef.current
       .catch(() => undefined)
       .then(async () => {
         if (cancelled) return;
-        const tree = createCodingWebContainerFileTree(files);
+        const tree = createCodingWebContainerFileTree(editorFiles);
         const runtime = await bootCodingWebContainer();
         if (cancelled) return;
         for (const oldFileName of webContainerSyncedFilesRef.current) {
@@ -1724,7 +2133,7 @@ export function CodingChatPanel() {
     return () => {
       cancelled = true;
     };
-  }, [files, webContainerStatus]);
+  }, [editorFiles, webContainerStatus]);
 
   const startLivePreview = useCallback(async () => {
     await stopWebContainerPreview();
@@ -2016,29 +2425,55 @@ export function CodingChatPanel() {
 
   const renderTreeNodes = (nodes: CodingTreeNode[], depth = 0): React.ReactNode[] => nodes.flatMap((node) => {
     const row = node.kind === "file" ? (
-      <button
-        key={node.path}
-        type="button"
-        onClick={() => {
-          setSelectedFileName(node.path);
-          setCodingSurface("editor");
-          setShowFiles(false);
-          setShowPreview(false);
-        }}
-        className={`flex min-h-12 w-full items-center gap-2 rounded-lg px-2 text-left text-xs ${selectedFileName === node.path ? "bg-cyan-500/15 text-cyan-200" : "text-slate-400 hover:bg-slate-800/70 hover:text-slate-200"}`}
-        style={{ paddingLeft: `${8 + depth * 14}px` }}
-      >
-        <span className="shrink-0 font-mono text-[10px] text-cyan-400">{node.name.includes(".") ? "{" : "·"}</span>
-        <span className="min-w-0 truncate">{node.name}</span>
-      </button>
+      <div key={node.path} className="flex min-h-12 items-center gap-1">
+        <button
+          type="button"
+          onClick={() => {
+            setSelectedFileName(node.path);
+            setCodingSurface("editor");
+            setShowFiles(false);
+            setShowPreview(false);
+          }}
+          className={`flex min-h-12 min-w-0 flex-1 items-center gap-2 rounded-lg px-2 text-left text-xs ${selectedFileName === node.path ? "bg-cyan-500/15 text-cyan-200" : "text-slate-400 hover:bg-slate-800/70 hover:text-slate-200"}`}
+          style={{ paddingLeft: `${8 + depth * 14}px` }}
+        >
+          <span className="shrink-0 font-mono text-[10px] text-cyan-400">{node.name.includes(".") ? "{" : "·"}</span>
+          <span className="min-w-0 truncate">{node.name}</span>
+          {node.path === LOCAL_ENV_FILE_NAME && (
+            <span className="shrink-0 rounded bg-emerald-500/10 px-1.5 py-0.5 text-[9px] font-bold uppercase text-emerald-300">local</span>
+          )}
+        </button>
+        <button
+          type="button"
+          onClick={() => deleteWorkspacePath(node.path, "file")}
+          className="min-h-12 min-w-12 shrink-0 rounded-lg text-base text-slate-500"
+          aria-label={`Delete ${node.path}`}
+          title={`Delete ${node.path}`}
+        >
+          ×
+        </button>
+      </div>
     ) : (
       <div key={node.path}>
         <div
-          className="flex min-h-10 items-center gap-2 px-2 text-[10px] font-bold uppercase tracking-widest text-slate-500"
-          style={{ paddingLeft: `${8 + depth * 14}px` }}
+          className="flex min-h-12 items-center gap-1"
         >
-          <span className="text-amber-300">▾</span>
-          <span className="truncate">{node.name}</span>
+          <div
+            className="flex min-h-12 min-w-0 flex-1 items-center gap-2 px-2 text-[10px] font-bold uppercase tracking-widest text-slate-500"
+            style={{ paddingLeft: `${8 + depth * 14}px` }}
+          >
+            <span className="text-amber-300">▾</span>
+            <span className="truncate">{node.name}</span>
+          </div>
+          <button
+            type="button"
+            onClick={() => deleteWorkspacePath(node.path, "folder")}
+            className="min-h-12 min-w-12 shrink-0 rounded-lg text-base text-slate-500"
+            aria-label={`Delete folder ${node.path}`}
+            title={`Delete folder ${node.path}`}
+          >
+            ×
+          </button>
         </div>
         {renderTreeNodes(node.children, depth + 1)}
       </div>
@@ -2343,7 +2778,7 @@ export function CodingChatPanel() {
               ×
             </button>
           </div>
-          <div className="flex shrink-0 gap-2 border-b border-slate-800 p-3">
+          <div className="grid shrink-0 grid-cols-2 gap-2 border-b border-slate-800 p-3">
             <input
               ref={folderInputRef}
               type="file"
@@ -2354,10 +2789,55 @@ export function CodingChatPanel() {
                 event.target.value = "";
               }}
             />
-            <button type="button" onClick={() => folderInputRef.current?.click()} className="min-h-12 w-full rounded-xl bg-cyan-400 px-3 text-xs font-bold text-slate-950">
+            <input
+              ref={zipImportInputRef}
+              type="file"
+              accept=".zip,application/zip"
+              className="hidden"
+              onChange={(event) => {
+                void importWorkspaceZip(event.target.files?.[0] ?? null);
+                event.target.value = "";
+              }}
+            />
+            <button type="button" onClick={() => folderInputRef.current?.click()} className="min-h-12 rounded-xl bg-cyan-400 px-3 text-xs font-bold text-slate-950">
               Open folder
             </button>
+            <button
+              type="button"
+              onClick={() => createWorkspaceFile()}
+              disabled={!workspaceId}
+              className="min-h-12 rounded-xl border border-slate-700 px-3 text-xs font-bold text-slate-200 disabled:opacity-40"
+            >
+              New file
+            </button>
+            <button
+              type="button"
+              onClick={() => createWorkspaceFile(LOCAL_ENV_FILE_NAME)}
+              disabled={!workspaceId}
+              className="min-h-12 rounded-xl border border-emerald-500/30 px-3 text-xs font-bold text-emerald-200 disabled:opacity-40"
+            >
+              New .env.local
+            </button>
+            <button
+              type="button"
+              onClick={() => zipImportInputRef.current?.click()}
+              disabled={zipImporting}
+              className="min-h-12 rounded-xl border border-slate-700 px-3 text-xs font-bold text-slate-200 disabled:opacity-40"
+            >
+              {zipImporting ? "Uploading…" : "Upload ZIP"}
+            </button>
+            <button
+              type="button"
+              onClick={() => void exportWorkspaceZip()}
+              disabled={zipExporting || files.length === 0}
+              className="min-h-12 rounded-xl border border-violet-400/30 px-3 text-xs font-bold text-violet-200 disabled:opacity-40"
+            >
+              {zipExporting ? "Preparing…" : "Download ZIP"}
+            </button>
           </div>
+          <p className="shrink-0 border-b border-slate-800 px-3 py-2 text-[10px] leading-4 text-slate-500">
+            Upload ZIP creates a new project; Open folder merges here. Imports support UTF-8 source files up to 4 MB, not binary assets. Device-local .env.local stays in browser storage (not encrypted) and is excluded from sync, AI, ZIPs, GitHub, and deployment. Browser-facing values are not private secrets.
+          </p>
           <div className="min-h-0 flex-1 overflow-y-auto p-2" style={{ WebkitOverflowScrolling: "touch" }}>
             {fileTree.length > 0 ? renderTreeNodes(fileTree) : (
               <div className="rounded-xl border border-dashed border-slate-700 p-4 text-xs leading-5 text-slate-500">
