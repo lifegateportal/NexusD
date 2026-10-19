@@ -26,6 +26,18 @@ application process, not to its build scripts.
 
 ## Nexus server configuration
 
+Run the coding runner on a dedicated host because it requires Docker socket
+access. For a separate DigitalOcean Droplet, place it in the same region and
+VPC as the Nexus/EpicGlobal server. Bind runner port `8090` to the runner's
+private VPC address only, and allow inbound TCP `8090` only from the
+Nexus/EpicGlobal server's private address. The runner compose configuration
+uses localhost by default; set `CODING_RUNNER_BIND_IP` to the private address
+on the runner host. Do not expose port `8090` publicly.
+
+Set `CODING_RUNNER_URL` on the Nexus server to
+`http://<runner-private-ip>:8090`. The runner bearer token protects its API in
+addition to the private network restriction.
+
 Set the following in the server-side Nexus environment:
 
 ```text
@@ -33,7 +45,7 @@ EPICGLOBAL_API_URL=https://api.epicglobal.app
 EPICGLOBAL_ORCHESTRATOR_API_KEY=your-EpicGlobal-orchestrator-key
 AUTH_PASSWORD=your-Nexus-login-password
 AUTH_COOKIE_SECRET=a-unique-random-secret-at-least-16-characters
-CODING_RUNNER_URL=https://your-private-runner-endpoint
+CODING_RUNNER_URL=http://<runner-private-ip>:8090
 CODING_RUNNER_TOKEN=the-same-token-configured-on-the-runner
 ```
 

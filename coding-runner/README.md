@@ -40,6 +40,7 @@ enabled for trusted tasks.
 ```bash
 export CODING_RUNNER_TOKEN="$(openssl rand -hex 32)"
 export CODING_RUNNER_HOST_WORK_ROOT="$PWD/coding-runner/.runner-work"
+export CODING_RUNNER_BIND_IP=127.0.0.1
 mkdir -p "$CODING_RUNNER_HOST_WORK_ROOT"
 docker compose -f coding-runner/docker-compose.yml build
 docker compose -f coding-runner/docker-compose.yml up -d
@@ -57,6 +58,12 @@ Check readiness:
 ```bash
 curl http://127.0.0.1:8090/healthz
 ```
+
+For a runner on a separate host, set `CODING_RUNNER_BIND_IP` to that host's
+private VPC address and allow inbound TCP port `8090` only from the Nexus
+server's private address. Set `CODING_RUNNER_URL` on the Nexus server to
+`http://<runner-private-ip>:8090`. Do not bind the runner to its public
+interface or expose port `8090` publicly.
 
 `POST /runs` returns a queued `CodingRun`. Poll `GET /runs/{runId}` with the
 same bearer token to read status and bounded logs.

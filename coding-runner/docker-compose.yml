@@ -30,7 +30,7 @@ services:
       CODING_DEPLOY_SSH_PRIVATE_KEY_BASE64: ${CODING_DEPLOY_SSH_PRIVATE_KEY_BASE64:-}
       CODING_DEPLOY_SSH_KNOWN_HOSTS: ${CODING_DEPLOY_SSH_KNOWN_HOSTS:-}
     ports:
-      - "127.0.0.1:8090:8090"
+      - "${CODING_RUNNER_BIND_IP:-127.0.0.1}:8090:8090"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - ${CODING_RUNNER_HOST_WORK_ROOT:?Set CODING_RUNNER_HOST_WORK_ROOT to an absolute host path}:/var/lib/nexus-runner
