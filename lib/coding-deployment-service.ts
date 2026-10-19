@@ -78,15 +78,27 @@ async function runnerRequest(path: string, init: RequestInit = {}, timeoutMs = 2
   if (!env.CODING_RUNNER_URL || !env.CODING_RUNNER_TOKEN) {
     throw new CodingDeploymentError("The isolated coding runner is not configured.", 503);
   }
-  const response = await fetch(runnerUrl(path), {
-    ...init,
-    headers: {
+  let response: Response;
+  try {
+    response = await fetch(runnerUrl(path), {
+      ...init,
+      headers: {
       Authorization: `Bearer ${env.CODING_RUNNER_TOKEN}`,
-      ...(init.body ? { "Content-Type": "application/json" } : {}),
-      ...init.headers,
-    },
-    signal: AbortSignal.timeout(timeoutMs),
-  });
+        ...(init.body ? { "Content-Type": "application/json" } : {}),
+        ...init.headers,
+      },
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+  } catch (error) {
+    const timedOut = error instanceof Error && error.name === "TimeoutError";
+    console.error("[coding/deployments] Could not reach the isolated runner", error);
+    throw new CodingDeploymentError(
+      timedOut
+        ? "The isolated coding runner timed out. Check that it is online and reachable from the Nexus server."
+        : "Nexus could not reach the isolated coding runner. Verify CODING_RUNNER_URL and the runner's network access from the Nexus server.",
+      timedOut ? 504 : 503,
+    );
+  }
   const payload: unknown = await response.json().catch(() => null);
   if (!response.ok) {
     const parsedError = z.object({ error: z.string().max(1000).optional() }).passthrough().safeParse(payload);
@@ -104,8 +116,11 @@ function isEnvironmentFile(name: string): boolean {
   return name.split("/").some((segment) => /^\.env(?:$|\.(?!example$))/i.test(segment));
 }
 
-function projectFilesError(snapshot: CodingWorkspaceSnapshot, kind: CodingDeploymentKind): string | null {
-  const files = snapshot.revision.files;
+function deploymentSourceFiles(snapshot: CodingWorkspaceSnapshot) {
+  return snapshot.revision.files.filter((file) => file.name !== ".env.local");
+}
+
+function projectFilesError(files: CodingWorkspaceSnapshot["revision"]["files"], kind: CodingDeploymentKind): string | null {
   if (files.some((file) => isEnvironmentFile(file.name))) {
     return "Remove .env secrets from the project before deploying.";
   }
@@ -206,7 +221,8 @@ async function createDeploymentRecord(
   environment: Record<string, string>,
   status: CodingDeployment["status"],
 ): Promise<CodingDeployment> {
-  const projectError = projectFilesError(snapshot, kind);
+  const files = deploymentSourceFiles(snapshot);
+  const projectError = projectFilesError(files, kind);
   if (projectError) throw new CodingDeploymentError(projectError, 400);
   const parsedEnvironment = CodingDeploymentEnvironmentSchema.safeParse(environment);
   if (!parsedEnvironment.success) throw new CodingDeploymentError("Runtime environment variables are invalid.", 400);
@@ -288,7 +304,7 @@ async function createCodingDeploymentUnlocked(
         environment: parsedEnvironment.data,
         epicGlobalApiUrl: env.EPICGLOBAL_API_URL,
         epicGlobalApiKey: env.EPICGLOBAL_ORCHESTRATOR_API_KEY,
-        files: snapshot.revision.files,
+        files: deploymentSourceFiles(snapshot),
       }),
     });
     const parsed = CodingBuildResponseSchema.safeParse(payload);
@@ -308,14 +324,17 @@ async function createCodingDeploymentUnlocked(
     if (next.status === "active") await markPreviousDeploymentsStopped(snapshot.workspace.id, next);
     return next;
   } catch (error) {
+    const failureMessage = error instanceof Error ? error.message : "Deployment could not be started.";
+    const failureStatus = error instanceof CodingDeploymentError ? error.status : 502;
     const failed = updateDeployment(deployment, {
       status: "failed",
-      error: error instanceof Error ? error.message : "Deployment could not be started.",
+      error: failureMessage,
     });
     await saveCodingDeployment(failed);
-    if (error instanceof CodingDeploymentError) throw error;
-    console.error("[coding/deployments] Could not start deployment", error);
-    throw new CodingDeploymentError("Deployment could not be started.", 502);
+    if (!(error instanceof CodingDeploymentError)) {
+      console.error("[coding/deployments] Could not start deployment", error);
+    }
+    throw new CodingDeploymentError(failureMessage, failureStatus, failed);
   }
 }
 

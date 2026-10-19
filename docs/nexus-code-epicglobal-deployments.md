@@ -26,6 +26,9 @@ the user's device, so Nexus Code must be opened in a secure, cross-origin-
 isolated browser tab with WebContainer support. Plain static files do not need
 WebContainers. The full-stack project must have a root `package.json` with a
 `scripts.start` command. Its server must read `PORT` and listen on `0.0.0.0`.
+For a React project, use **Static site** if it is browser-only. Choose
+**Full-stack app** when the React build is served by a Node.js server that also
+provides API routes or other server-side operations.
 Optional runtime variables can be entered in Nexus Code as `KEY=value` lines;
 Nexus does not save these values in workspace files. Do not include `.env`
 files. Runtime variables are provided to the application process, not to its
@@ -114,6 +117,9 @@ CODING_RUNNER_TOKEN=the-same-token-configured-on-the-runner
 
 If `CODING_FULLSTACK_ENABLED` is unset, it defaults to enabled; set it to
 `false` and restart Nexus to pause full-stack deployments.
+If a deployment says Nexus could not reach the isolated runner, check that
+`CODING_RUNNER_URL` is reachable from the Nexus server and that the runner
+service is online; a configured URL alone does not verify network connectivity.
 
 Run the coding runner on a dedicated host because it requires Docker socket
 access. For a separate DigitalOcean Droplet, place it in the same region and

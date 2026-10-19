@@ -261,11 +261,21 @@ async function readRegistry(registryPath) {
 }
 
 async function callRepair(apiBase, apiKey) {
-  const response = await fetch(`${apiBase}/api/orchestrator/repair`, {
-    method: "POST",
-    headers: { "x-api-key": apiKey },
-    signal: AbortSignal.timeout(20_000),
-  });
+  let response;
+  try {
+    response = await fetch(`${apiBase}/api/orchestrator/repair`, {
+      method: "POST",
+      headers: { "x-api-key": apiKey },
+      signal: AbortSignal.timeout(20_000),
+    });
+  } catch (error) {
+    const timedOut = error instanceof Error && error.name === "TimeoutError";
+    throw new Error(
+      timedOut
+        ? "EpicGlobal's route-repair API timed out when called from the Droplet."
+        : "The Droplet could not reach EpicGlobal's route-repair API. Check the configured API URL and outbound network access.",
+    );
+  }
   const payload = await response.json().catch(() => null);
   if (!response.ok || !payload?.success) {
     throw new Error(typeof payload?.error === "string" ? payload.error : "EpicGlobal could not rebuild its Caddy routes.");

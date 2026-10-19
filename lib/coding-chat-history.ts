@@ -38,9 +38,28 @@ function createThreadId(): string {
 }
 
 export function codingChatThreadTitle(messages: CodingStoredMessage[]): string {
-  const firstUserMessage = messages.find((message) => message.role === "user");
-  if (!firstUserMessage) return "New chat";
-  return firstUserMessage.content.replace(/\s+/g, " ").trim().slice(0, 120) || "New chat";
+  const prompts = messages
+    .filter((message) => message.role === "user")
+    .map((message) => message.content
+      .replace(/```[\s\S]*?```/g, " ")
+      .replace(/~~~[\s\S]*?~~~/g, " ")
+      .replace(/!\[([^\]]*)\]\([^)]+\)/g, " ")
+      .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
+      .replace(/^\s{0,3}#{1,6}\s*/gm, "")
+      .replace(/^\s*(?:[-*+]\s+|\d+[.)]\s+|>\s?)/gm, "")
+      .replace(/^\s*\|.*\|\s*$/gm, " ")
+      .replace(/(\*\*|__|~~|`)/g, "")
+      .replace(/<[^>]+>/g, " ")
+      .replace(/\s+/g, " ")
+      .trim()
+      .replace(/^(?:task|request|goal|context|requirements?|prompt)\s*[:.-]?\s*/i, ""))
+    .filter((prompt) => prompt && !/^(?:hi|hello|hey|good morning|good afternoon|good evening)[!.? ]*$/i.test(prompt));
+  const prompt = prompts[0];
+  if (!prompt) return "New chat";
+  const firstSentence = prompt.split(/(?<=[.!?])\s+/u, 1)[0] || prompt;
+  if (firstSentence.length <= 80) return firstSentence;
+  const shortened = firstSentence.slice(0, 77).replace(/\s+\S*$/, "").trim();
+  return `${shortened || firstSentence.slice(0, 77).trimEnd()}...`;
 }
 
 export function createCodingChatThread(
@@ -82,7 +101,15 @@ export function loadCodingChatHistory(
       parseJson(raw, "Saved chat history for this project is invalid."),
     );
     if (!parsed.success) throw new Error("Saved chat history for this project is invalid.");
-    return parsed.data;
+    const titledThreads = parsed.data.threads.map((thread) => ({
+      ...thread,
+      title: codingChatThreadTitle(thread.messages),
+    }));
+    const history = CodingChatHistorySchema.parse({
+      ...parsed.data,
+      threads: titledThreads,
+    });
+    return history;
   }
 
   const now = new Date().toISOString();

@@ -2773,7 +2773,7 @@ export function CodingChatPanel() {
             <div className="absolute right-0 top-full z-50 mt-2 max-h-[min(70dvh,36rem)] w-[min(90vw,34rem)] overflow-y-auto rounded-2xl border border-cyan-500/30 bg-slate-950 p-3 shadow-2xl">
               <p className="text-xs font-semibold text-cyan-200">EpicGlobal hosting</p>
               <p className="mt-1 text-[10px] leading-4 text-slate-400">
-                Static builds run in this browser and upload only built files. Full-stack apps run on your existing EpicGlobal Droplet and share its resources; they require the private runner and server credentials. Neither path uses GitHub or a container registry.
+                Static is for browser-only React apps. Full-stack runs a Node.js server (including React apps with server APIs) on your EpicGlobal Droplet; its package.json needs a start script and the server must listen on PORT at 0.0.0.0. Full-stack also needs the private runner and server credentials. Neither path uses GitHub or a container registry.
               </p>
               {deploymentKind === "fullstack" && !fullstackDeploymentAvailable && (
                 <p className="mt-2 text-xs text-amber-200">Full-stack deployment is unavailable until the server has the EpicGlobal key and private runner configured, and it is not explicitly disabled.</p>
@@ -3071,13 +3071,9 @@ export function CodingChatPanel() {
                   </div>
                   <div className="grid gap-2" aria-label="Saved chats">
                     {chatThreads.map((thread) => {
-                      const threadMessages = thread.id === activeChatThreadId ? messages : thread.messages;
                       const title = thread.title === "New chat"
-                        ? codingChatThreadTitle(threadMessages)
+                        ? codingChatThreadTitle(thread.messages)
                         : thread.title;
-                      const preview = [...threadMessages]
-                        .reverse()
-                        .find((message) => message.role !== "system")?.content ?? "No messages yet.";
                       const updatedAt = Number.isFinite(Date.parse(thread.updatedAt))
                         ? new Date(thread.updatedAt).toLocaleString()
                         : "";
@@ -3095,7 +3091,6 @@ export function CodingChatPanel() {
                               {thread.id === activeChatThreadId ? "Current" : updatedAt}
                             </span>
                           </span>
-                          <span className="mt-1 block line-clamp-2 text-xs leading-5 text-slate-500">{preview}</span>
                         </button>
                       );
                     })}
