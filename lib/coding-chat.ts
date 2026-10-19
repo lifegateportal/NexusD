@@ -66,6 +66,41 @@ export const CodingStoredMessageSchema = z.object({
 
 export type CodingStoredMessage = z.infer<typeof CodingStoredMessageSchema>;
 
+export const CodingChatThreadSchema = z.object({
+  id: z.string().min(1).max(100),
+  title: z.string().trim().min(1).max(120),
+  messages: z.array(CodingStoredMessageSchema).max(80),
+  createdAt: z.string().max(100),
+  updatedAt: z.string().max(100),
+}).strict();
+
+export type CodingChatThread = z.infer<typeof CodingChatThreadSchema>;
+
+export const CodingChatHistorySchema = z.object({
+  version: z.literal(1),
+  activeThreadId: z.string().min(1).max(100),
+  threads: z.array(CodingChatThreadSchema).min(1).max(20),
+  updatedAt: z.string().max(100),
+}).strict().superRefine((history, context) => {
+  const threadIds = new Set(history.threads.map((thread) => thread.id));
+  if (threadIds.size !== history.threads.length) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["threads"],
+      message: "Chat history thread ids must be unique.",
+    });
+  }
+  if (!threadIds.has(history.activeThreadId)) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["activeThreadId"],
+      message: "The active chat thread must exist in history.",
+    });
+  }
+});
+
+export type CodingChatHistory = z.infer<typeof CodingChatHistorySchema>;
+
 export const CodingChatArchiveSchema = z.object({
   messages: z.array(CodingStoredMessageSchema),
   updatedAt: z.string(),

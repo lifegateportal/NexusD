@@ -4,14 +4,21 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { pickVoice } from "@/lib/audio-player-context";
 import {
   CodingAgentSchema,
-  CodingChatArchiveSchema,
   CodingModeSchema,
   CODING_MODE_LABELS,
   type CodingAgent,
+  type CodingChatThread,
   type CodingFile,
   type CodingMode,
   type CodingStoredMessage,
 } from "@/lib/coding-chat";
+import {
+  codingChatThreadTitle,
+  createCodingChatThread,
+  deleteCodingChatHistory,
+  loadCodingChatHistory,
+  saveCodingChatHistory,
+} from "@/lib/coding-chat-history";
 import {
   buildCodingGreetingResponse,
   buildCodingSpokenResponse,
@@ -72,7 +79,6 @@ import {
 } from "@/lib/coding-webcontainer";
 import type { Unsubscribe, WebContainer, WebContainerProcess } from "@webcontainer/api";
 
-const STORAGE_KEY = "nexus-coding-chat";
 const VOICE_STORAGE_KEY = "nexus-coding-voice-mode";
 const MAX_FILE_SIZE = 500_000;
 const MAX_FILES = 200;
@@ -231,6 +237,10 @@ function renderAssistantContent(content: string) {
 
 export function CodingChatPanel() {
   const [messages, setMessages] = useState<CodingStoredMessage[]>([INITIAL_MESSAGE]);
+  const [chatThreads, setChatThreads] = useState<CodingChatThread[]>([]);
+  const [activeChatThreadId, setActiveChatThreadId] = useState<string | null>(null);
+  const [chatHistoryWorkspaceId, setChatHistoryWorkspaceId] = useState<string | null>(null);
+  const [showChatHistory, setShowChatHistory] = useState(false);
   const [files, setFiles] = useState<CodingFile[]>([]);
   const [workspaces, setWorkspaces] = useState<CodingWorkspace[]>([]);
   const [workspaceId, setWorkspaceId] = useState<string | null>(null);
@@ -315,6 +325,7 @@ export function CodingChatPanel() {
   const workspaceChangeSourceRef = useRef<"user" | "agent" | "import">("user");
   const workspaceSaveQueueRef = useRef(Promise.resolve());
   const workspaceSaveTimerRef = useRef<number | null>(null);
+  const savedChatHistorySignatureRef = useRef("");
   const webContainerRuntimeRef = useRef<WebContainer | null>(null);
   const webContainerProcessesRef = useRef(new Set<WebContainerProcess>());
   const webContainerPreviewProcessRef = useRef<WebContainerProcess | null>(null);
@@ -786,6 +797,9 @@ export function CodingChatPanel() {
   }, []);
 
   const applyWorkspaceSnapshot = useCallback((snapshot: CodingWorkspaceSnapshot) => {
+    const hasLocalEnvironment = snapshot.revision.files.some(
+      (file) => file.name === LOCAL_ENV_FILE_NAME,
+    );
     const nextFiles = isolateWorkspaceFiles(snapshot.workspace.id, snapshot.revision.files);
     workspaceReadyRef.current = false;
     workspaceIdRef.current = snapshot.workspace.id;
@@ -798,22 +812,8 @@ export function CodingChatPanel() {
     setCodingDeployment(null);
     setDeploymentEnvironmentText("");
     setDeploymentError(null);
-    setSelectedFileName(nextFiles[0]?.name ?? (legacyLocalEnvironment ? LOCAL_ENV_FILE_NAME : null));
+    setSelectedFileName(nextFiles[0]?.name ?? (hasLocalEnvironment ? LOCAL_ENV_FILE_NAME : null));
     setFiles(nextFiles);
-    if (legacyLocalEnvironment) {
-      let content = legacyLocalEnvironment.content;
-      try {
-        const saved = loadCodingLocalEnvironment(snapshot.workspace.id);
-        if (saved === null) saveCodingLocalEnvironment(snapshot.workspace.id, content);
-        else content = saved;
-      } catch (localEnvironmentError) {
-        setError(localEnvironmentError instanceof Error
-          ? localEnvironmentError.message
-          : "Legacy .env.local could not be moved to this browser.");
-      }
-      setLocalEnvironmentWorkspaceId(snapshot.workspace.id);
-      setLocalEnvironmentContent(content);
-    }
     setLivePreview(null);
     setPreviewUrl("");
     workspaceReadyRef.current = true;
@@ -821,15 +821,45 @@ export function CodingChatPanel() {
   }, [isolateWorkspaceFiles]);
 
   useEffect(() => {
-    try {
-      const raw = localStorage.getItem(STORAGE_KEY);
-      if (!raw) return;
-      const parsed = CodingChatArchiveSchema.safeParse(JSON.parse(raw) as unknown);
-      if (parsed.success && parsed.data.messages.length > 0) setMessages(parsed.data.messages);
-    } catch {
-      setError("Saved coding conversation could not be loaded.");
+    savedChatHistorySignatureRef.current = "";
+    setShowChatHistory(false);
+    if (!workspaceId) {
+      setChatThreads([]);
+      setActiveChatThreadId(null);
+      setChatHistoryWorkspaceId(null);
+      setMessages([{ ...INITIAL_MESSAGE, createdAt: new Date().toISOString() }]);
+      return;
     }
-  }, []);
+
+    setChatHistoryWorkspaceId(null);
+    try {
+      const history = loadCodingChatHistory(workspaceId, {
+        ...INITIAL_MESSAGE,
+        createdAt: new Date().toISOString(),
+      });
+      const activeThread = history.threads.find((thread) => thread.id === history.activeThreadId);
+      if (!activeThread) throw new Error("The active chat could not be found in project history.");
+      setChatThreads(history.threads);
+      setActiveChatThreadId(history.activeThreadId);
+      setMessages(activeThread.messages);
+      setChatHistoryWorkspaceId(workspaceId);
+    } catch (historyError) {
+      const freshThread = createCodingChatThread([
+        { ...INITIAL_MESSAGE, createdAt: new Date().toISOString() },
+      ]);
+      setChatThreads([freshThread]);
+      setActiveChatThreadId(freshThread.id);
+      setMessages(freshThread.messages);
+      setChatHistoryWorkspaceId(workspaceId);
+      savedChatHistorySignatureRef.current = JSON.stringify({
+        activeThreadId: freshThread.id,
+        threads: [freshThread],
+      });
+      setError(historyError instanceof Error
+        ? historyError.message
+        : "Project chat history could not be loaded.");
+    }
+  }, [workspaceId]);
 
   useEffect(() => {
     let active = true;
@@ -968,7 +998,7 @@ export function CodingChatPanel() {
   const deleteWorkspace = useCallback(async () => {
     if (!workspaceId || loading) return;
     const projectName = workspaceName || "this project";
-    if (!window.confirm(`Delete "${projectName}" permanently? All files and revisions will be removed.`)) return;
+    if (!window.confirm(`Delete "${projectName}" permanently? All files, revisions, and this browser's project chat history will be removed.`)) return;
     await workspaceSaveQueueRef.current.catch(() => undefined);
     workspaceReadyRef.current = false;
     setWorkspaceStatus("Deleting project");
@@ -988,6 +1018,13 @@ export function CodingChatPanel() {
         setError(localEnvironmentError instanceof Error
           ? localEnvironmentError.message
           : "Device-local .env.local could not be removed.");
+      }
+      try {
+        deleteCodingChatHistory(workspaceId);
+      } catch (historyError) {
+        setError(historyError instanceof Error
+          ? historyError.message
+          : "Project chat history could not be removed.");
       }
       const remaining = workspaces.filter((workspace) => workspace.id !== workspaceId);
       setWorkspaces(remaining);
@@ -1346,25 +1383,152 @@ export function CodingChatPanel() {
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: loading ? "auto" : "smooth" });
-    try {
-      const archive = CodingChatArchiveSchema.parse({
-        messages: messages.slice(-80),
-        updatedAt: new Date().toISOString(),
-      });
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(archive));
-    } catch {
-      setError("Coding conversation could not be saved locally.");
-    }
   }, [codingSurface, loading, messages]);
 
-  const clearConversation = useCallback(() => {
+  useEffect(() => {
+    if (!workspaceId || chatHistoryWorkspaceId !== workspaceId || !activeChatThreadId) return;
+    const activeThread = chatThreads.find((thread) => thread.id === activeChatThreadId);
+    if (!activeThread) return;
+
+    const nextMessages = messages.slice(-80);
+    const messagesChanged = JSON.stringify(activeThread.messages) !== JSON.stringify(nextMessages);
+    const nextTitle = activeThread.title === "New chat"
+      ? codingChatThreadTitle(nextMessages)
+      : activeThread.title;
+    const titleChanged = nextTitle !== activeThread.title;
+    const now = new Date().toISOString();
+    const nextActiveThread = messagesChanged || titleChanged
+      ? {
+          ...activeThread,
+          title: nextTitle,
+          messages: nextMessages,
+          updatedAt: now,
+        }
+      : activeThread;
+    const nextThreads = [
+      nextActiveThread,
+      ...chatThreads.filter((thread) => thread.id !== activeChatThreadId),
+    ]
+      .sort((left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt))
+      .slice(0, 20);
+    const signature = JSON.stringify({
+      activeThreadId: activeChatThreadId,
+      threads: nextThreads,
+    });
+
+    if (signature !== savedChatHistorySignatureRef.current) {
+      try {
+        saveCodingChatHistory(workspaceId, {
+          version: 1,
+          activeThreadId: activeChatThreadId,
+          threads: nextThreads,
+          updatedAt: now,
+        });
+        savedChatHistorySignatureRef.current = signature;
+      } catch (historyError) {
+        setError(historyError instanceof Error
+          ? historyError.message
+          : "Project chat history could not be saved.");
+      }
+    }
+    if (JSON.stringify(nextThreads) !== JSON.stringify(chatThreads)) {
+      setChatThreads(nextThreads);
+    }
+  }, [
+    activeChatThreadId,
+    chatHistoryWorkspaceId,
+    chatThreads,
+    messages,
+    workspaceId,
+  ]);
+
+  const startNewChat = useCallback(() => {
+    if (!workspaceId || chatHistoryWorkspaceId !== workspaceId) {
+      setError("Open a project before starting a new chat.");
+      return;
+    }
     abortRef.current?.abort();
     setLoading(false);
     setStatus("Ready");
-    setError(null);
+    setInput("");
     setAttachedFileNames([]);
-    setMessages([{ ...INITIAL_MESSAGE, createdAt: new Date().toISOString() }]);
-  }, []);
+    setCodingSurface("assistant");
+    setShowFiles(false);
+    setShowPreview(false);
+    setShowChatHistory(false);
+    const now = new Date().toISOString();
+    const currentThread = chatThreads.find((thread) => thread.id === activeChatThreadId);
+    const updatedCurrentThread = currentThread
+      ? {
+          ...currentThread,
+          title: currentThread.title === "New chat"
+            ? codingChatThreadTitle(messages)
+            : currentThread.title,
+          messages: messages.slice(-80),
+          updatedAt: now,
+        }
+      : null;
+    const nextThread = createCodingChatThread([
+      { ...INITIAL_MESSAGE, createdAt: now },
+    ], "New chat", now);
+    const nextThreads = [
+      nextThread,
+      ...(updatedCurrentThread ? [updatedCurrentThread] : []),
+      ...chatThreads.filter((thread) => (
+        thread.id !== activeChatThreadId && thread.id !== nextThread.id
+      )),
+    ].slice(0, 20);
+    const history = {
+      version: 1 as const,
+      activeThreadId: nextThread.id,
+      threads: nextThreads,
+      updatedAt: now,
+    };
+    try {
+      saveCodingChatHistory(workspaceId, history);
+      savedChatHistorySignatureRef.current = JSON.stringify({
+        activeThreadId: history.activeThreadId,
+        threads: history.threads,
+      });
+      setError(null);
+    } catch (historyError) {
+      setError(historyError instanceof Error
+        ? historyError.message
+        : "The new chat could not be saved in project history.");
+    }
+    setChatThreads(nextThreads);
+    setActiveChatThreadId(nextThread.id);
+    setMessages(nextThread.messages);
+  }, [
+    activeChatThreadId,
+    chatHistoryWorkspaceId,
+    chatThreads,
+    messages,
+    workspaceId,
+  ]);
+
+  const openChatThread = useCallback((threadId: string) => {
+    const thread = chatThreads.find((candidate) => candidate.id === threadId);
+    if (!thread) return;
+    abortRef.current?.abort();
+    setLoading(false);
+    setStatus("Ready");
+    setInput("");
+    setAttachedFileNames([]);
+    setActiveChatThreadId(thread.id);
+    setMessages(thread.messages);
+    setShowChatHistory(false);
+    setCodingSurface("assistant");
+    setError(null);
+  }, [chatThreads]);
+
+  const showProjectChatHistory = useCallback(() => {
+    if (chatHistoryWorkspaceId !== workspaceId) return;
+    setCodingSurface("assistant");
+    setShowFiles(false);
+    setShowPreview(false);
+    setShowChatHistory(true);
+  }, [chatHistoryWorkspaceId, workspaceId]);
 
   useEffect(() => {
     let shouldRestore = false;
@@ -2484,9 +2648,9 @@ export function CodingChatPanel() {
   return (
     <section className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl border border-cyan-500/20 bg-slate-950/70 shadow-panel" aria-label="Nexus Code workspace">
       <header className="relative z-20 shrink-0 border-b border-cyan-500/20 bg-slate-950/90 px-3 py-2 backdrop-blur sm:px-4">
-        <div className="flex min-h-12 items-center justify-between gap-2">
+        <div className="flex min-h-12 flex-wrap items-center justify-between gap-2">
           <h1 className="min-w-0 truncate text-base font-bold text-slate-100 sm:text-lg">Nexus Code</h1>
-          <div className="flex shrink-0 items-center gap-1.5">
+          <div className="flex shrink-0 flex-wrap items-center justify-end gap-1.5">
             <div className={`rounded-full border px-2 py-1 text-[10px] font-semibold ${loading ? "border-amber-400/40 text-amber-300" : "border-emerald-400/30 text-emerald-300"}`} aria-live="polite">
               {status}
             </div>
@@ -2500,10 +2664,20 @@ export function CodingChatPanel() {
             </button>
             <button
               type="button"
-              onClick={clearConversation}
-              className="min-h-12 min-w-12 rounded-xl px-2 text-xs font-semibold text-slate-500 hover:bg-slate-800 hover:text-slate-200"
+              onClick={showChatHistory ? () => setShowChatHistory(false) : showProjectChatHistory}
+              disabled={!workspaceId || chatHistoryWorkspaceId !== workspaceId}
+              aria-expanded={showChatHistory}
+              className="min-h-12 rounded-xl border border-slate-700 px-3 text-xs font-semibold text-slate-300 disabled:opacity-40"
             >
-              Clear
+              {showChatHistory ? "Back to chat" : "History"}
+            </button>
+            <button
+              type="button"
+              onClick={startNewChat}
+              disabled={!workspaceId || chatHistoryWorkspaceId !== workspaceId}
+              className="min-h-12 rounded-xl bg-cyan-400 px-3 text-xs font-bold text-slate-950 disabled:opacity-40"
+            >
+              New chat
             </button>
           </div>
         </div>
@@ -2879,34 +3053,88 @@ export function CodingChatPanel() {
           </div>
 
           {codingSurface === "assistant" ? (
-            <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto px-3 py-4 sm:px-5 lg:px-8" style={{ WebkitOverflowScrolling: "touch" }}>
-              <div className={`mx-auto flex min-h-full w-full max-w-5xl flex-col gap-4 ${messages.length === 1 ? "justify-center" : "justify-end"}`}>
-                {messages.map((message) => (
-                  <article
-                    key={message.id}
-                    className={message.role === "user"
-                      ? "max-w-[92%] self-end rounded-2xl border border-cyan-500/30 bg-cyan-500/10 px-4 py-3 text-sm leading-6 text-cyan-50"
-                      : message.role === "system"
-                        ? "rounded-2xl border border-cyan-500/20 bg-cyan-950/20 px-4 py-3 text-sm leading-6 text-slate-300"
-                        : "rounded-2xl border border-slate-800 bg-slate-900/60 px-4 py-4 text-sm leading-6 text-slate-200"}
-                  >
-                    <div className="mb-2 flex items-center justify-between gap-3 text-[10px] font-bold uppercase tracking-widest text-slate-500">
-                      <span>{message.role === "user" ? "You" : message.role === "system" ? "Pipeline" : "Nexus Code"}</span>
-                      {message.fileNames.length > 0 && <span className="truncate text-cyan-400">{message.fileNames.join(", ")}</span>}
+            showChatHistory ? (
+              <div className="min-h-0 flex-1 overflow-y-auto px-3 py-4 sm:px-5 lg:px-8" style={{ WebkitOverflowScrolling: "touch" }}>
+                <div className="mx-auto w-full max-w-4xl">
+                  <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+                    <div>
+                      <h2 className="text-base font-bold text-slate-100">Chat history</h2>
+                      <p className="mt-1 text-xs text-slate-500">Saved in this browser for {workspaceName}</p>
                     </div>
-                    {message.role === "assistant" ? renderAssistantContent(message.content || "Thinking…") : (
-                      <p className="whitespace-pre-wrap">{message.content}</p>
-                    )}
-                  </article>
-                ))}
-                {loading && (
-                  <div className="flex items-center gap-2 text-xs text-slate-500" aria-live="polite">
-                    <span className="h-2 w-2 animate-pulse rounded-full bg-cyan-400" />
-                    DeepSeek is generating a coding response…
+                    <button
+                      type="button"
+                      onClick={startNewChat}
+                      className="min-h-12 rounded-xl bg-cyan-400 px-4 text-xs font-bold text-slate-950"
+                    >
+                      New chat
+                    </button>
                   </div>
-                )}
+                  <div className="grid gap-2" aria-label="Saved chats">
+                    {chatThreads.map((thread) => {
+                      const threadMessages = thread.id === activeChatThreadId ? messages : thread.messages;
+                      const title = thread.title === "New chat"
+                        ? codingChatThreadTitle(threadMessages)
+                        : thread.title;
+                      const preview = [...threadMessages]
+                        .reverse()
+                        .find((message) => message.role !== "system")?.content ?? "No messages yet.";
+                      const updatedAt = Number.isFinite(Date.parse(thread.updatedAt))
+                        ? new Date(thread.updatedAt).toLocaleString()
+                        : "";
+                      return (
+                        <button
+                          key={thread.id}
+                          type="button"
+                          onClick={() => openChatThread(thread.id)}
+                          aria-pressed={thread.id === activeChatThreadId}
+                          className="min-h-16 w-full rounded-xl border border-slate-800 bg-slate-900/60 px-4 py-3 text-left"
+                        >
+                          <span className="flex items-center justify-between gap-3">
+                            <span className="truncate text-sm font-semibold text-slate-200">{title}</span>
+                            <span className="shrink-0 text-[10px] text-slate-500">
+                              {thread.id === activeChatThreadId ? "Current" : updatedAt}
+                            </span>
+                          </span>
+                          <span className="mt-1 block line-clamp-2 text-xs leading-5 text-slate-500">{preview}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                  <p className="mt-4 text-[10px] leading-4 text-slate-600">
+                    Chats are kept separately for each project in this browser. The latest 20 chats are retained.
+                  </p>
+                </div>
               </div>
-            </div>
+            ) : (
+              <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto px-3 py-4 sm:px-5 lg:px-8" style={{ WebkitOverflowScrolling: "touch" }}>
+                <div className={`mx-auto flex min-h-full w-full max-w-5xl flex-col gap-4 ${messages.length === 1 ? "justify-center" : "justify-end"}`}>
+                  {messages.map((message) => (
+                    <article
+                      key={message.id}
+                      className={message.role === "user"
+                        ? "max-w-[92%] self-end rounded-2xl border border-cyan-500/30 bg-cyan-500/10 px-4 py-3 text-sm leading-6 text-cyan-50"
+                        : message.role === "system"
+                          ? "rounded-2xl border border-cyan-500/20 bg-cyan-950/20 px-4 py-3 text-sm leading-6 text-slate-300"
+                          : "rounded-2xl border border-slate-800 bg-slate-900/60 px-4 py-4 text-sm leading-6 text-slate-200"}
+                    >
+                      <div className="mb-2 flex items-center justify-between gap-3 text-[10px] font-bold uppercase tracking-widest text-slate-500">
+                        <span>{message.role === "user" ? "You" : message.role === "system" ? "Pipeline" : "Nexus Code"}</span>
+                        {message.fileNames.length > 0 && <span className="truncate text-cyan-400">{message.fileNames.join(", ")}</span>}
+                      </div>
+                      {message.role === "assistant" ? renderAssistantContent(message.content || "Thinking…") : (
+                        <p className="whitespace-pre-wrap">{message.content}</p>
+                      )}
+                    </article>
+                  ))}
+                  {loading && (
+                    <div className="flex items-center gap-2 text-xs text-slate-500" aria-live="polite">
+                      <span className="h-2 w-2 animate-pulse rounded-full bg-cyan-400" />
+                      DeepSeek is generating a coding response…
+                    </div>
+                  )}
+                </div>
+              </div>
+            )
           ) : (
             <div className="flex min-h-0 flex-1 flex-col overflow-hidden bg-slate-950/60">
               {selectedFile ? (
@@ -2972,20 +3200,21 @@ export function CodingChatPanel() {
             value={input}
             onChange={(event) => setInput(event.target.value)}
             onKeyDown={(event) => {
+              if (showChatHistory) return;
               if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
                 event.preventDefault();
                 void send();
               }
             }}
-            disabled={loading}
+            disabled={loading || showChatHistory}
             rows={2}
-            placeholder="Describe the feature, bug, or code you want Nexus to work on…"
+            placeholder={showChatHistory ? "Choose a chat or start a new one from history…" : "Describe the feature, bug, or code you want Nexus to work on…"}
             className="min-h-16 w-full resize-none border-0 bg-transparent px-2 py-2 text-base leading-6 text-slate-100 placeholder:text-slate-600 focus:outline-none disabled:opacity-50 sm:min-h-20"
           />
           {attachedFileNames.length > 0 && (
             <div className="flex items-center gap-2 overflow-x-auto border-t border-slate-800 px-2 pt-2 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
               {attachedFileNames.map((fileName) => (
-                <button key={fileName} type="button" onClick={() => setAttachedFileNames((current) => current.filter((name) => name !== fileName))} className="min-h-12 max-w-48 shrink-0 truncate rounded-xl border border-cyan-500/25 bg-cyan-500/10 px-3 text-xs text-cyan-200">
+                <button key={fileName} type="button" onClick={() => setAttachedFileNames((current) => current.filter((name) => name !== fileName))} disabled={showChatHistory} className="min-h-12 max-w-48 shrink-0 truncate rounded-xl border border-cyan-500/25 bg-cyan-500/10 px-3 text-xs text-cyan-200 disabled:opacity-40">
                   {fileName} ×
                 </button>
               ))}
@@ -2998,7 +3227,8 @@ export function CodingChatPanel() {
                 key={item}
                 type="button"
                 onClick={() => setMode(CodingModeSchema.parse(item))}
-                className={`min-h-12 shrink-0 rounded-xl border px-3 text-xs font-bold ${mode === item ? "border-cyan-400/50 bg-cyan-500/15 text-cyan-200" : "border-slate-700 bg-slate-950/70 text-slate-400"}`}
+                disabled={showChatHistory}
+                className={`min-h-12 shrink-0 rounded-xl border px-3 text-xs font-bold disabled:opacity-40 ${mode === item ? "border-cyan-400/50 bg-cyan-500/15 text-cyan-200" : "border-slate-700 bg-slate-950/70 text-slate-400"}`}
                 aria-label={`${CODING_MODE_LABELS[item].label} mode`}
               >
                 {CODING_MODE_LABELS[item].label}
@@ -3007,13 +3237,14 @@ export function CodingChatPanel() {
             <select
               value={agent}
               onChange={(event) => setAgent(CodingAgentSchema.parse(event.target.value))}
+              disabled={showChatHistory}
               aria-label="DeepSeek coding model"
-              className="min-h-12 min-w-[6.5rem] shrink-0 rounded-xl border border-slate-700 bg-slate-950/70 px-2 text-base text-slate-300 focus:border-violet-400/60 focus:outline-none"
+              className="min-h-12 min-w-[6.5rem] shrink-0 rounded-xl border border-slate-700 bg-slate-950/70 px-2 text-base text-slate-300 focus:border-violet-400/60 focus:outline-none disabled:opacity-40"
             >
               <option value="deepseek-chat">Chat</option>
               <option value="deepseek-reasoner">R1</option>
             </select>
-            <button type="button" onClick={() => fileInputRef.current?.click()} className="flex min-h-12 min-w-12 shrink-0 items-center justify-center rounded-xl border border-slate-700 bg-slate-950/70 text-lg text-slate-300" aria-label="Attach code">
+            <button type="button" onClick={() => fileInputRef.current?.click()} disabled={showChatHistory} className="flex min-h-12 min-w-12 shrink-0 items-center justify-center rounded-xl border border-slate-700 bg-slate-950/70 text-lg text-slate-300 disabled:opacity-40" aria-label="Attach code">
               +
             </button>
             <button
@@ -3021,9 +3252,10 @@ export function CodingChatPanel() {
               role="switch"
               aria-checked={voiceModeEnabled}
               onClick={toggleVoiceMode}
+              disabled={showChatHistory}
               aria-label={voiceModeEnabled ? "Turn Nexus voice mode off" : "Turn Nexus voice mode on"}
               title={voiceModeEnabled ? voiceStatusLabel(voiceStatus) : "Turn on Nexus voice mode"}
-              className={`relative flex min-h-12 min-w-12 shrink-0 items-center justify-center rounded-xl border text-xs font-semibold ${voiceModeEnabled ? "border-cyan-400/60 bg-cyan-400/15 text-cyan-200" : "border-slate-700 text-slate-400"}`}
+              className={`relative flex min-h-12 min-w-12 shrink-0 items-center justify-center rounded-xl border text-xs font-semibold disabled:opacity-40 ${voiceModeEnabled ? "border-cyan-400/60 bg-cyan-400/15 text-cyan-200" : "border-slate-700 text-slate-400"}`}
             >
               <svg viewBox="0 0 24 24" aria-hidden="true" className="h-5 w-5 fill-none stroke-current stroke-2">
                 <path d="M12 3a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3Z" strokeLinecap="round" strokeLinejoin="round" />
@@ -3036,7 +3268,7 @@ export function CodingChatPanel() {
             <button
               type="button"
               onClick={loading ? stop : () => void send()}
-              disabled={!loading && !input.trim()}
+              disabled={showChatHistory || (!loading && !input.trim())}
               className={`ml-auto min-h-12 shrink-0 rounded-xl px-4 text-sm font-bold ${loading ? "border border-rose-400/40 bg-rose-500/10 text-rose-200" : "bg-cyan-400 text-slate-950 disabled:bg-slate-700 disabled:text-slate-500"}`}
               aria-label={loading ? "Stop response" : "Send coding request"}
             >

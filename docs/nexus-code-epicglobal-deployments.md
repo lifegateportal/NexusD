@@ -39,6 +39,11 @@ file is for local preview only. Never put a private key in a browser-facing
 variable such as `VITE_*`, `REACT_APP_*`, or `NEXT_PUBLIC_*`; use full-stack
 deployment runtime variables for private server-side credentials.
 
+Coding conversations are stored locally by project. Switching projects loads
+that project's active conversation; **New chat** preserves the current thread
+in **History**. The latest 20 threads are retained in this browser, not synced
+to the Nexus server.
+
 Explorer ZIP uploads create a separate project; folder imports merge into the
 open project. Imports support up to 200 UTF-8 text files and 4 MB of source,
 not binary assets. ZIP downloads contain shared workspace files only and
