@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { createElement, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { pickVoice } from "@/lib/audio-player-context";
 import {
   CodingAgentSchema,
@@ -78,6 +78,15 @@ import {
   type CodingWebContainerStatus,
 } from "@/lib/coding-webcontainer";
 import type { Unsubscribe, WebContainer, WebContainerProcess } from "@webcontainer/api";
+
+const MARKDOWN_HEADING_TAGS: Record<number, "h1" | "h2" | "h3" | "h4" | "h5" | "h6"> = {
+  1: "h1",
+  2: "h2",
+  3: "h3",
+  4: "h4",
+  5: "h5",
+  6: "h6",
+};
 
 const VOICE_STORAGE_KEY = "nexus-coding-voice-mode";
 const MAX_FILE_SIZE = 500_000;
@@ -211,27 +220,157 @@ function buildCodingTree(files: CodingFile[]): CodingTreeNode[] {
   return sortNodes(root);
 }
 
-function renderAssistantContent(content: string) {
-  const parts = content.split(/```([^\n]*)\n([\s\S]*?)```/g);
+function renderInlineMarkdown(content: string, keyPrefix: string): React.ReactNode[] {
+  const pattern = /(`[^`\n]+`)|(\*\*[^*\n]+?\*\*)|(__[^_\n]+?__)|(~~[^~\n]+?~~)|(?<!\w)\*([^*\n]+?)\*(?!\w)|(\[([^\]]+)\]\((https?:\/\/[^)\s]+)\))/g;
   const rendered: React.ReactNode[] = [];
-  for (let index = 0; index < parts.length; index += 1) {
-    if (index % 3 === 0) {
-      if (parts[index]) rendered.push(
-        <p key={`text-${index}`} className="whitespace-pre-wrap">{parts[index]}</p>,
+  let cursor = 0;
+  let index = 0;
+  for (const match of content.matchAll(pattern)) {
+    const token = match[0];
+    const start = match.index ?? 0;
+    if (start > cursor) rendered.push(content.slice(cursor, start));
+
+    const key = `${keyPrefix}-${index}`;
+    const [, code, boldAsterisk, boldUnderscore, strike, italic, , linkLabel, linkUrl] = match;
+    if (code) {
+      rendered.push(<code key={key} className="rounded bg-slate-950 px-1 py-0.5 font-mono text-cyan-200">{code.slice(1, -1)}</code>);
+    } else if (boldAsterisk || boldUnderscore) {
+      const value = (boldAsterisk ?? boldUnderscore ?? "").slice(2, -2);
+      rendered.push(<strong key={key} className="font-bold text-slate-100">{renderInlineMarkdown(value, key)}</strong>);
+    } else if (strike) {
+      rendered.push(<del key={key}>{strike.slice(2, -2)}</del>);
+    } else if (italic) {
+      rendered.push(<em key={key}>{renderInlineMarkdown(italic, key)}</em>);
+    } else if (linkLabel && linkUrl) {
+      rendered.push(
+        <a key={key} href={linkUrl} target="_blank" rel="noopener noreferrer" className="text-cyan-300 underline">
+          {linkLabel}
+        </a>,
+      );
+    }
+    cursor = start + token.length;
+    index += 1;
+  }
+  if (cursor < content.length) rendered.push(content.slice(cursor));
+  return rendered.length > 0 ? rendered : [content];
+}
+
+function renderAssistantContent(content: string) {
+  const lines = content.replace(/\r\n?/g, "\n").split("\n");
+  const rendered: React.ReactNode[] = [];
+  let paragraph: string[] = [];
+  let listType: "ul" | "ol" | null = null;
+  let listItems: string[] = [];
+  let blockIndex = 0;
+
+  const flushParagraph = () => {
+    const text = paragraph.join(" ").trim();
+    if (text) {
+      rendered.push(
+        <p key={`paragraph-${blockIndex++}`} className="leading-6 lg:leading-7">
+          {renderInlineMarkdown(text, `paragraph-${blockIndex}`)}
+        </p>,
+      );
+    }
+    paragraph = [];
+  };
+  const flushList = () => {
+    if (!listType || listItems.length === 0) return;
+    const Tag = listType;
+    rendered.push(
+      <Tag
+        key={`list-${blockIndex++}`}
+        className={`${listType === "ol" ? "list-decimal" : "list-disc"} my-2 list-inside space-y-1 pl-2 lg:my-3`}
+      >
+        {listItems.map((item, index) => (
+          <li key={`list-item-${index}`}>{renderInlineMarkdown(item, `list-${blockIndex}-${index}`)}</li>
+        ))}
+      </Tag>,
+    );
+    listType = null;
+    listItems = [];
+  };
+  const flushTextBlocks = () => {
+    flushParagraph();
+    flushList();
+  };
+
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index];
+    const fence = /^\s*(```|~~~)(.*)$/.exec(line);
+    if (fence) {
+      flushTextBlocks();
+      const codeLines: string[] = [];
+      const marker = fence[1];
+      const language = fence[2].trim();
+      while (++index < lines.length && !new RegExp(`^\\s*${marker}`).test(lines[index])) {
+        codeLines.push(lines[index]);
+      }
+      rendered.push(
+        <div key={`code-${blockIndex++}`} className="my-3 overflow-hidden rounded-xl border border-cyan-500/20 bg-slate-950 lg:my-4">
+          <div className="border-b border-slate-800 px-3 py-2 text-[10px] font-semibold uppercase tracking-widest text-cyan-300">
+            {language || "code"}
+          </div>
+          <pre className="max-h-[50dvh] overflow-auto p-3 text-xs leading-5 text-slate-200 lg:max-h-[60dvh] lg:text-sm"><code>{codeLines.join("\n")}</code></pre>
+        </div>,
       );
       continue;
     }
-    if (index % 3 === 1) {
-      rendered.push(
-        <div key={`code-${index}`} className="mt-3 overflow-hidden rounded-xl border border-cyan-500/20 bg-slate-950">
-          <div className="border-b border-slate-800 px-3 py-2 text-[10px] font-semibold uppercase tracking-widest text-cyan-300">
-            {parts[index] || "code"}
-          </div>
-          <pre className="max-h-[50dvh] overflow-auto p-3 text-xs leading-5 text-slate-200"><code>{parts[index + 1]}</code></pre>
-        </div>,
-      );
+
+    const heading = /^ {0,3}(#{1,6})\s+(.+?)\s*#*\s*$/.exec(line);
+    if (heading) {
+      flushTextBlocks();
+      const level = heading[1].length;
+      const Heading = MARKDOWN_HEADING_TAGS[level] ?? "h2";
+      rendered.push(createElement(
+        Heading,
+        {
+          key: `heading-${blockIndex++}`,
+          className: "my-2 text-lg font-bold text-slate-100 sm:text-xl lg:my-3 lg:text-2xl",
+        },
+        renderInlineMarkdown(heading[2], `heading-${blockIndex}`),
+      ));
+      continue;
     }
+
+    const listItem = /^\s*(?:(?:[-*+])\s+|(\d+)[.)]\s+)(.*)$/.exec(line);
+    if (listItem) {
+      flushParagraph();
+      const nextListType = listItem[1] ? "ol" : "ul";
+      if (listType && listType !== nextListType) flushList();
+      listType = nextListType;
+      listItems.push(listItem[2]);
+      continue;
+    }
+
+    if (/^\s*>/.test(line)) {
+      flushTextBlocks();
+      const quoteLines = [line.replace(/^\s*>\s?/, "")];
+      while (index + 1 < lines.length && /^\s*>/.test(lines[index + 1])) {
+        quoteLines.push(lines[++index].replace(/^\s*>\s?/, ""));
+      }
+      rendered.push(
+        <blockquote key={`quote-${blockIndex++}`} className="my-2 border-l-2 border-cyan-500/50 pl-3 text-slate-300 lg:my-3">
+          {renderInlineMarkdown(quoteLines.join(" "), `quote-${blockIndex}`)}
+        </blockquote>,
+      );
+      continue;
+    }
+
+    if (/^\s*(?:-{3,}|\*{3,}|_{3,})\s*$/.test(line)) {
+      flushTextBlocks();
+      rendered.push(<hr key={`rule-${blockIndex++}`} className="my-3 border-slate-700 lg:my-4" />);
+      continue;
+    }
+
+    if (!line.trim()) {
+      flushTextBlocks();
+      continue;
+    }
+    flushList();
+    paragraph.push(line.trim());
   }
+  flushTextBlocks();
   return rendered;
 }
 
