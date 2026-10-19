@@ -10,6 +10,7 @@ import {
   type CodingDeployment,
   type CodingDeploymentKind,
 } from "@/lib/coding-deployment";
+import { createCodingWorkspaceZip } from "@/lib/coding-zip";
 import { env } from "@/lib/env";
 import { validateCodingStaticArtifact } from "@/lib/coding-static-artifact";
 import { isCodingStaticSensitivePath } from "@/lib/coding-static-policy";
@@ -25,6 +26,7 @@ export class CodingDeploymentError extends Error {
     message: string,
     readonly status = 500,
     readonly deployment?: CodingDeployment,
+    readonly logs?: string,
   ) {
     super(message);
     this.name = "CodingDeploymentError";
@@ -57,16 +59,11 @@ export function codingDeploymentConfigurationError(kind?: CodingDeploymentKind):
   if (kind === "fullstack" && !env.CODING_FULLSTACK_ENABLED) {
     return "Full-stack deployment is disabled by CODING_FULLSTACK_ENABLED=false.";
   }
-  if (kind === "fullstack" && (!env.CODING_RUNNER_URL || !env.CODING_RUNNER_TOKEN)) {
-    return "The isolated coding runner is not configured for full-stack deployments.";
-  }
   return null;
 }
 
 export function codingFullstackDeploymentAvailable(): boolean {
   return env.CODING_FULLSTACK_ENABLED
-    && Boolean(env.CODING_RUNNER_URL)
-    && Boolean(env.CODING_RUNNER_TOKEN)
     && Boolean(env.EPICGLOBAL_ORCHESTRATOR_API_KEY);
 }
 
@@ -293,42 +290,17 @@ async function createCodingDeploymentUnlocked(
   const deployment = await createDeploymentRecord(snapshot, kind, parsedEnvironment.data, "queued");
 
   try {
-    const payload = await runnerRequest("/deployments", {
-      method: "POST",
-      body: JSON.stringify({
-        id: deployment.id,
-        workspaceId: deployment.workspaceId,
-        revisionId: deployment.revisionId,
-        kind,
-        projectName: deployment.projectName,
-        environment: parsedEnvironment.data,
-        epicGlobalApiUrl: env.EPICGLOBAL_API_URL,
-        epicGlobalApiKey: env.EPICGLOBAL_ORCHESTRATOR_API_KEY,
-        files: deploymentSourceFiles(snapshot),
-      }),
-    });
-    const parsed = CodingBuildResponseSchema.safeParse(payload);
-    if (!parsed.success) {
-      console.error("[coding/deployments] Runner returned invalid build data", parsed.error.issues);
-      throw new CodingDeploymentError("The isolated runner returned invalid deployment data.", 502);
-    }
-    const next = updateDeployment(deployment, {
-      runnerJobId: parsed.data.build.id,
-      status: statusFromBuild(parsed.data.build.status),
-      phase: parsed.data.build.phase,
-      url: parsed.data.build.url,
-      logs: parsed.data.logs,
-      error: parsed.data.error,
-    });
-    await saveCodingDeployment(next);
-    if (next.status === "active") await markPreviousDeploymentsStopped(snapshot.workspace.id, next);
-    return next;
+    return await uploadFullstackProjectToEpicGlobal(deployment, snapshot, parsedEnvironment.data);
   } catch (error) {
     const failureMessage = error instanceof Error ? error.message : "Deployment could not be started.";
     const failureStatus = error instanceof CodingDeploymentError ? error.status : 502;
     const failed = updateDeployment(deployment, {
       status: "failed",
+      phase: "Failed",
       error: failureMessage,
+      logs: error instanceof CodingDeploymentError && error.logs
+        ? `${error.logs}\n[nexus] Full-stack deployment failed.\n`
+        : `${deployment.logs}[nexus] Full-stack deployment failed.\n`,
     });
     await saveCodingDeployment(failed);
     if (!(error instanceof CodingDeploymentError)) {
@@ -468,7 +440,7 @@ async function uploadStaticArtifact(
   return active;
 }
 
-async function deleteEpicGlobalStaticProject(
+async function deleteEpicGlobalProject(
   projectName: string,
 ): Promise<z.infer<typeof CodingProjectDeleteResponseSchema>> {
   let response: Response;
@@ -554,6 +526,95 @@ export async function deployCodingStaticArtifact(
       })
     ));
   });
+}
+
+async function uploadFullstackProjectToEpicGlobal(
+  deployment: CodingDeployment,
+  snapshot: CodingWorkspaceSnapshot,
+  environment: Record<string, string>,
+): Promise<CodingDeployment> {
+  const archive = await createCodingWorkspaceZip(
+    deploymentSourceFiles(snapshot),
+    deployment.projectName,
+  );
+  const form = new FormData();
+  form.set("projectName", deployment.projectName);
+  form.set("environment", JSON.stringify(environment));
+  form.set("file", archive.blob, archive.filename);
+
+  let response: Response;
+  try {
+    response = await fetch(`${epicGlobalApiBase()}/api/orchestrator/nexus-deploy`, {
+      method: "POST",
+      headers: { "x-api-key": env.EPICGLOBAL_ORCHESTRATOR_API_KEY ?? "" },
+      body: form,
+      redirect: "error",
+      signal: AbortSignal.timeout(12 * 60_000),
+    });
+  } catch (error) {
+    const timedOut = error instanceof Error && error.name === "TimeoutError";
+    console.error("[coding/deployments] Could not reach EpicGlobal full-stack deploy API", error);
+    throw new CodingDeploymentError(
+      timedOut
+        ? "EpicGlobal did not finish the deployment before the request timed out. Check the EpicGlobal deployment history before retrying."
+        : "Nexus could not reach EpicGlobal's full-stack deployment API. Verify EPICGLOBAL_API_URL and network access from the Nexus server.",
+      timedOut ? 504 : 502,
+    );
+  }
+
+  const payload: unknown = await response.json().catch(() => null);
+  const parsed = z.object({
+    success: z.literal(true),
+    projectName: CodingDeploymentSchema.shape.projectName,
+    url: z.string().url(),
+    terminalOutput: z.string().max(2_000_000).optional(),
+  }).passthrough().safeParse(payload);
+  if (!response.ok || !parsed.success) {
+    const errorPayload = z.object({
+      error: z.string().optional(),
+      terminalOutput: z.string().optional(),
+    }).passthrough().safeParse(payload);
+    const message = errorPayload.success && errorPayload.data.error
+      ? errorPayload.data.error.slice(0, 1000)
+      : "EpicGlobal rejected the full-stack project upload.";
+    const logs = errorPayload.success ? errorPayload.data.terminalOutput?.slice(-250_000) : undefined;
+    throw new CodingDeploymentError(
+      message,
+      response.status >= 400 && response.status < 500 ? response.status : 502,
+      undefined,
+      logs,
+    );
+  }
+  if (parsed.data.projectName !== deployment.projectName) {
+    throw new CodingDeploymentError("EpicGlobal returned a deployment for an unexpected project.", 502);
+  }
+
+  const deployedUrl = new URL(parsed.data.url);
+  if (
+    deployedUrl.protocol !== "https:"
+    || deployedUrl.hostname !== `${deployment.projectName}.epicglobal.app`
+    || deployedUrl.username
+    || deployedUrl.password
+    || deployedUrl.port
+    || deployedUrl.pathname !== "/"
+    || deployedUrl.search
+    || deployedUrl.hash
+  ) {
+    throw new CodingDeploymentError("EpicGlobal returned an unexpected full-stack deployment URL.", 502);
+  }
+
+  const terminalOutput = parsed.data.terminalOutput?.slice(-250_000).trim();
+  const active = updateDeployment(deployment, {
+    runnerJobId: null,
+    status: "active",
+    url: deployedUrl.toString(),
+    phase: "Running on EpicGlobal",
+    error: null,
+    logs: `${terminalOutput ? `${terminalOutput}\n` : ""}[nexus] Full-stack app is live at ${deployedUrl.toString()}\n`,
+  });
+  await saveCodingDeployment(active);
+  await markPreviousDeploymentsStopped(deployment.workspaceId, active);
+  return active;
 }
 
 export async function withCodingStaticArtifactRequest<T>(
@@ -658,19 +719,21 @@ async function stopCodingDeploymentUnlocked(
     }
   } else if (!isInProgress && needsRemoteDelete) {
     const payload = deployment.kind === "static"
-      ? await deleteEpicGlobalStaticProject(deployment.projectName)
-      : await runnerRequest(`/projects/${encodeURIComponent(deployment.projectName)}/delete`, {
-        method: "POST",
-        body: JSON.stringify({
-          kind: deployment.kind,
-          epicGlobalApiUrl: env.EPICGLOBAL_API_URL,
-          epicGlobalApiKey: env.EPICGLOBAL_ORCHESTRATOR_API_KEY,
-        }),
-      }, 190_000);
+      ? await deleteEpicGlobalProject(deployment.projectName)
+      : deployment.runnerJobId
+        ? await runnerRequest(`/projects/${encodeURIComponent(deployment.projectName)}/delete`, {
+          method: "POST",
+          body: JSON.stringify({
+            kind: deployment.kind,
+            epicGlobalApiUrl: env.EPICGLOBAL_API_URL,
+            epicGlobalApiKey: env.EPICGLOBAL_ORCHESTRATOR_API_KEY,
+          }),
+        }, 190_000)
+      : await deleteEpicGlobalProject(deployment.projectName);
     const parsed = CodingProjectDeleteResponseSchema.safeParse(payload);
     if (!parsed.success) {
-      console.error("[coding/deployments] Runner returned invalid project deletion data", parsed.error.issues);
-      throw new CodingDeploymentError("The isolated runner returned invalid project deletion data.", 502);
+      console.error("[coding/deployments] Deployment backend returned invalid project deletion data", parsed.error.issues);
+      throw new CodingDeploymentError("The deployment backend returned invalid project deletion data.", 502);
     }
   }
 

@@ -13,7 +13,7 @@ const EnvironmentSchema = z.object({
   // Personal login gate — set both to enable password protection
   AUTH_PASSWORD:       z.string().min(1).optional(),
   AUTH_COOKIE_SECRET:  z.string().min(16).optional(),
-  // Isolated Nexus Code runner — optional until the sidecar is deployed
+  // Isolated runner for terminal and preview features; deployment uses EpicGlobal directly.
   CODING_RUNNER_URL:   z.string().url().optional(),
   CODING_RUNNER_TOKEN: z.string().min(1).optional(),
   CODING_FULLSTACK_ENABLED: z.enum(["true", "false"]).default("true").transform((value) => value === "true"),

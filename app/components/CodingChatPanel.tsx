@@ -311,7 +311,7 @@ function renderAssistantContent(content: string) {
           <div className="border-b border-slate-800 px-3 py-2 text-[10px] font-semibold uppercase tracking-widest text-cyan-300">
             {language || "code"}
           </div>
-          <pre className="max-h-[50dvh] overflow-auto p-3 text-xs leading-5 text-slate-200 lg:max-h-[60dvh] lg:text-sm"><code>{codeLines.join("\n")}</code></pre>
+          <pre className="max-h-[50dvh] overflow-auto p-3 text-sm leading-5 text-slate-200 lg:max-h-[60dvh]"><code>{codeLines.join("\n")}</code></pre>
         </div>,
       );
       continue;
@@ -326,7 +326,7 @@ function renderAssistantContent(content: string) {
         Heading,
         {
           key: `heading-${blockIndex++}`,
-          className: "my-2 text-lg font-bold text-slate-100 sm:text-xl lg:my-3 lg:text-2xl",
+          className: "my-2 text-sm font-bold text-slate-100 lg:my-3",
         },
         renderInlineMarkdown(heading[2], `heading-${blockIndex}`),
       ));
@@ -2892,7 +2892,7 @@ export function CodingChatPanel() {
             {deploymentBusy
               ? deploymentKind === "static"
                 ? deploymentUploadStarted ? "Uploading…" : "Building…"
-                : "Starting…"
+                : "Deploying…"
               : codingDeploymentStatus === "active" ? "Redeploy" : "Deploy"}
           </button>
           {deploymentBusy && deploymentKind === "static" && !deploymentUploadStarted && (
@@ -2912,10 +2912,10 @@ export function CodingChatPanel() {
             <div className="absolute right-0 top-full z-50 mt-2 max-h-[min(70dvh,36rem)] w-[min(90vw,34rem)] overflow-y-auto rounded-2xl border border-cyan-500/30 bg-slate-950 p-3 shadow-2xl">
               <p className="text-xs font-semibold text-cyan-200">EpicGlobal hosting</p>
               <p className="mt-1 text-[10px] leading-4 text-slate-400">
-                Static is for browser-only React apps. Full-stack runs a Node.js server (including React apps with server APIs) on your EpicGlobal Droplet; its package.json needs a start script and the server must listen on PORT at 0.0.0.0. Full-stack also needs the private runner and server credentials. Neither path uses GitHub or a container registry.
+                Static is for browser-only React apps. Full-stack sends source to EpicGlobal, which builds and runs the Node.js server on your existing Droplet; its package.json needs a start script and the server must listen on PORT. Full-stack needs the EpicGlobal API key, but no GitHub repository, Docker, or coding runner. Builds run with the same host permissions as EpicGlobal's existing Git deployments.
               </p>
               {deploymentKind === "fullstack" && !fullstackDeploymentAvailable && (
-                <p className="mt-2 text-xs text-amber-200">Full-stack deployment is unavailable until the server has the EpicGlobal key and private runner configured, and it is not explicitly disabled.</p>
+                <p className="mt-2 text-xs text-amber-200">Full-stack deployment is unavailable until the EpicGlobal API key is configured and full-stack hosting is enabled on the Nexus server.</p>
               )}
               {deploymentKind === "fullstack" && (
                 <label className="mt-3 block space-y-2">
