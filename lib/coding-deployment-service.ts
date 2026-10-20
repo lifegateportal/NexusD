@@ -13,7 +13,7 @@ import {
 import { createCodingWorkspaceZip } from "@/lib/coding-zip";
 import { env } from "@/lib/env";
 import { validateCodingStaticArtifact } from "@/lib/coding-static-artifact";
-import { isCodingStaticSensitivePath } from "@/lib/coding-static-policy";
+import { isCodingEnvironmentFile, isCodingStaticSensitivePath } from "@/lib/coding-static-policy";
 import type { CodingWorkspaceSnapshot } from "@/lib/coding-workspace";
 import {
   getCodingDeployment,
@@ -109,17 +109,17 @@ async function runnerRequest(path: string, init: RequestInit = {}, timeoutMs = 2
   return payload;
 }
 
-function isEnvironmentFile(name: string): boolean {
-  return name.split("/").some((segment) => /^\.env(?:$|\.(?!example$))/i.test(segment));
-}
-
 function deploymentSourceFiles(snapshot: CodingWorkspaceSnapshot) {
-  return snapshot.revision.files.filter((file) => file.name !== ".env.local");
+  return snapshot.revision.files.filter((file) => file.name.replaceAll("\\", "/") !== ".env.local");
 }
 
 function projectFilesError(files: CodingWorkspaceSnapshot["revision"]["files"], kind: CodingDeploymentKind): string | null {
-  if (files.some((file) => isEnvironmentFile(file.name))) {
-    return "Remove .env secrets from the project before deploying.";
+  const environmentFiles = files.filter((file) => isCodingEnvironmentFile(file.name));
+  if (environmentFiles.length > 0) {
+    const listedFiles = environmentFiles.slice(0, 3).map((file) => file.name);
+    const remainingCount = environmentFiles.length - listedFiles.length;
+    const more = remainingCount > 0 ? ` (+${remainingCount} more)` : "";
+    return `Remove .env secrets from the project before deploying. Detected: ${listedFiles.join(", ")}${more}`;
   }
   if (kind === "static") {
     if (files.some((file) => isCodingStaticSensitivePath(file.name))) {

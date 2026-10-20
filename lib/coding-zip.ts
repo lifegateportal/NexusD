@@ -5,6 +5,7 @@ import {
   codingWorkspaceByteCount,
   codingLanguageFromName,
 } from "@/lib/coding-workspace";
+import { isCodingEnvironmentFile } from "@/lib/coding-static-policy";
 
 const MAX_ZIP_IMPORT_SIZE = 25_000_000;
 const MAX_ZIP_ENTRIES = 2_000;
@@ -158,7 +159,7 @@ export async function readCodingWorkspaceZip(file: File): Promise<{
     const name = stripRoot && rootName ? path.slice(rootName.length + 1) : path;
     const baseName = name.split("/").at(-1) ?? name;
     const isLocalEnvironment = name === ".env.local";
-    if (/^\.env(?:$|\.)/i.test(baseName) && baseName !== ".env.example" && !isLocalEnvironment) {
+    if (isCodingEnvironmentFile(baseName) && !isLocalEnvironment) {
       throw new Error(`Remove ${name} from the ZIP. Only .env.local can be imported as a device-local file.`);
     }
     if (isLocalEnvironment && localEnvironment !== null) {

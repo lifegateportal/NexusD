@@ -17,11 +17,17 @@ const STATIC_CREDENTIAL_FILES = new Set([
   "id_rsa",
 ]);
 
+export function isCodingEnvironmentFile(path: string): boolean {
+  return path.split(/[\\/]/).some((segment) => (
+    /^\.env(?:$|\.)/i.test(segment) && !/\.example$/i.test(segment)
+  ));
+}
+
 export function isCodingStaticSensitivePath(path: string): boolean {
   return path.split(/[\\/]/).some((segment) => {
     const normalized = segment.toLowerCase();
     return (
-      /^\.env(?:$|\.(?!example$))/.test(normalized)
+      isCodingEnvironmentFile(segment)
       || STATIC_CREDENTIAL_FILES.has(normalized)
       || /\.(?:jks|p12|pfx|pem|key)$/.test(normalized)
     );
