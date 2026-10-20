@@ -140,6 +140,24 @@ No runner, Docker setup, SSH key, or second Droplet is needed for full-stack
 deployment. The existing coding runner may still be used separately for
 isolated terminal and preview features.
 
+## Full-stack deployment errors
+
+Nexus shows the HTTP status and EpicGlobal's response details in deployment
+status. Common responses:
+
+- **404:** The running EpicGlobal API does not have
+  `/api/orchestrator/nexus-deploy`; deploy and restart EpicGlobal with the
+  direct Nexus deployment endpoint.
+- **401/403:** The API key configured on Nexus does not match
+  EpicGlobal's `ORCHESTRATOR_API_KEY`.
+- **413:** The EpicGlobal API host or a reverse proxy rejected the request
+  size. Nexus source is limited to 4 MB and the ZIP to 8 MB.
+- **400:** EpicGlobal rejected the project archive, runtime variables, or
+  `package.json`; read the error and build output shown in deployment status.
+- **5xx or timeout:** Check the EpicGlobal API logs and deployment history;
+  the API host or an upstream proxy may have timed out while the host built
+  the project.
+
 ## Limits and operating notes
 
 - Full-stack uploads reject `.env` files, unsafe paths, symbolic links, and

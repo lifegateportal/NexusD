@@ -562,7 +562,17 @@ async function uploadFullstackProjectToEpicGlobal(
     );
   }
 
-  const payload: unknown = await response.json().catch(() => null);
+  const responseText = await readEpicGlobalResponse(response);
+  let payload: unknown = null;
+  try {
+    payload = responseText.text ? JSON.parse(responseText.text) as unknown : null;
+  } catch {
+    payload = null;
+  }
+  const errorPayload = z.object({
+    error: z.string().optional(),
+    terminalOutput: z.string().optional(),
+  }).passthrough().safeParse(payload);
   const parsed = z.object({
     success: z.literal(true),
     projectName: CodingDeploymentSchema.shape.projectName,
@@ -570,19 +580,27 @@ async function uploadFullstackProjectToEpicGlobal(
     terminalOutput: z.string().max(2_000_000).optional(),
   }).passthrough().safeParse(payload);
   if (!response.ok || !parsed.success) {
-    const errorPayload = z.object({
-      error: z.string().optional(),
-      terminalOutput: z.string().optional(),
-    }).passthrough().safeParse(payload);
-    const message = errorPayload.success && errorPayload.data.error
-      ? errorPayload.data.error.slice(0, 1000)
-      : "EpicGlobal rejected the full-stack project upload.";
-    const logs = errorPayload.success ? errorPayload.data.terminalOutput?.slice(-250_000) : undefined;
+    const upstreamMessage = errorPayload.success ? errorPayload.data.error?.trim() : "";
+    const message = fullstackUploadFailureMessage(
+      response.status,
+      response.statusText,
+      upstreamMessage,
+      responseText.text,
+    );
+    const upstreamLogs = errorPayload.success ? errorPayload.data.terminalOutput?.trim() : "";
+    const responseExcerpt = upstreamLogs
+      ? upstreamLogs.slice(-250_000)
+      : responseExcerptForLogs(responseText.text, responseText.truncated);
+    const logs = [
+      `[nexus] EpicGlobal POST /api/orchestrator/nexus-deploy returned HTTP ${response.status}${response.statusText ? ` ${response.statusText}` : ""}.`,
+      `Content-Type: ${response.headers.get("content-type") || "not provided"}.`,
+      responseExcerpt || "EpicGlobal returned an empty response body.",
+    ].join("\n");
     throw new CodingDeploymentError(
       message,
       response.status >= 400 && response.status < 500 ? response.status : 502,
       undefined,
-      logs,
+      logs.slice(-250_000),
     );
   }
   if (parsed.data.projectName !== deployment.projectName) {
@@ -615,6 +633,90 @@ async function uploadFullstackProjectToEpicGlobal(
   await saveCodingDeployment(active);
   await markPreviousDeploymentsStopped(deployment.workspaceId, active);
   return active;
+}
+
+async function readEpicGlobalResponse(
+  response: Response,
+  maxBytes = 1_000_000,
+): Promise<{ text: string; truncated: boolean }> {
+  if (!response.body) return { text: "", truncated: false };
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let totalBytes = 0;
+  let truncated = false;
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      const remaining = maxBytes - totalBytes;
+      if (value.byteLength > remaining) {
+        if (remaining > 0) chunks.push(value.subarray(0, remaining));
+        totalBytes += Math.max(remaining, 0);
+        truncated = true;
+        await reader.cancel();
+        break;
+      }
+      chunks.push(value);
+      totalBytes += value.byteLength;
+    }
+  } finally {
+    reader.releaseLock();
+  }
+
+  const bytes = new Uint8Array(totalBytes);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return { text: new TextDecoder().decode(bytes), truncated };
+}
+
+function fullstackUploadFailureMessage(
+  status: number,
+  statusText: string,
+  upstreamMessage: string,
+  responseText: string,
+): string {
+  const httpStatus = `HTTP ${status}${statusText ? ` ${statusText}` : ""}`;
+  if (status === 404) {
+    return `EpicGlobal does not recognize the full-stack upload endpoint (${httpStatus}). Deploy and restart the EpicGlobal API with the Nexus deployment endpoint, then try again.`;
+  }
+  if (status === 401 || status === 403) {
+    return `EpicGlobal rejected the orchestrator API key (${httpStatus}). Check that Nexus's EPICGLOBAL_ORCHESTRATOR_API_KEY matches EpicGlobal's ORCHESTRATOR_API_KEY.`;
+  }
+  if (status === 413) {
+    return `EpicGlobal or its proxy rejected the upload as too large (${httpStatus}). Check the request-body limit on the API host and any reverse proxy.`;
+  }
+  if (status === 429) {
+    return `EpicGlobal is rate-limiting deployment requests (${httpStatus}). Wait for the current deployment to finish, then retry.`;
+  }
+  if (upstreamMessage) {
+    return `EpicGlobal full-stack deployment failed (${httpStatus}): ${upstreamMessage.slice(0, 800)}`;
+  }
+  if (responseText.trim()) {
+    return `EpicGlobal returned an unexpected response (${httpStatus}). See the deployment log for the response details.`;
+  }
+  return `EpicGlobal did not accept the full-stack deployment (${httpStatus}) and returned no error details. Check that its API is online and updated.`;
+}
+
+function responseExcerptForLogs(responseText: string, truncated: boolean): string {
+  const compact = responseText
+    .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, " ")
+    .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, " ")
+    .replace(/<[^>]*>/g, " ")
+    .replace(/&(?:nbsp|#160);/gi, " ")
+    .replace(/&(?:amp|#38);/gi, "&")
+    .replace(/&(?:lt|#60);/gi, "<")
+    .replace(/&(?:gt|#62);/gi, ">")
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;|&apos;/gi, "'")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 1200);
+  if (!compact) return "";
+  return `EpicGlobal response: ${compact}${truncated ? " [response truncated]" : ""}`;
 }
 
 export async function withCodingStaticArtifactRequest<T>(
