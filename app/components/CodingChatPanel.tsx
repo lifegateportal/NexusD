@@ -1661,6 +1661,55 @@ export function CodingChatPanel() {
     setError(null);
   }, [chatThreads]);
 
+  const deleteChatThread = useCallback((threadId: string) => {
+    if (!workspaceId || chatHistoryWorkspaceId !== workspaceId) return;
+    const thread = chatThreads.find((candidate) => candidate.id === threadId);
+    if (!thread) return;
+    const title = thread.title === "New chat"
+      ? codingChatThreadTitle(thread.messages)
+      : thread.title;
+    if (!window.confirm(`Delete "${title}" from chat history? This cannot be undone.`)) return;
+
+    const now = new Date().toISOString();
+    const remainingThreads = chatThreads.filter((candidate) => candidate.id !== threadId);
+    const nextThreads = remainingThreads.length > 0
+      ? remainingThreads
+      : [createCodingChatThread([{ ...INITIAL_MESSAGE, createdAt: now }], "New chat", now)];
+    const nextActiveThread = nextThreads.find((candidate) => candidate.id === activeChatThreadId)
+      ?? nextThreads[0];
+    const history = {
+      version: 1 as const,
+      activeThreadId: nextActiveThread.id,
+      threads: nextThreads,
+      updatedAt: now,
+    };
+
+    try {
+      saveCodingChatHistory(workspaceId, history);
+      savedChatHistorySignatureRef.current = JSON.stringify({
+        activeThreadId: history.activeThreadId,
+        threads: history.threads,
+      });
+    } catch (historyError) {
+      setError(historyError instanceof Error
+        ? historyError.message
+        : "The chat could not be deleted from project history.");
+      return;
+    }
+
+    setChatThreads(nextThreads);
+    setActiveChatThreadId(nextActiveThread.id);
+    if (threadId === activeChatThreadId) {
+      abortRef.current?.abort();
+      setLoading(false);
+      setStatus("Ready");
+      setInput("");
+      setAttachedFileNames([]);
+      setMessages(nextActiveThread.messages);
+    }
+    setError(null);
+  }, [activeChatThreadId, chatHistoryWorkspaceId, chatThreads, workspaceId]);
+
   const showProjectChatHistory = useCallback(() => {
     if (chatHistoryWorkspaceId !== workspaceId) return;
     setCodingSurface("assistant");
@@ -3217,20 +3266,30 @@ export function CodingChatPanel() {
                         ? new Date(thread.updatedAt).toLocaleString()
                         : "";
                       return (
-                        <button
-                          key={thread.id}
-                          type="button"
-                          onClick={() => openChatThread(thread.id)}
-                          aria-pressed={thread.id === activeChatThreadId}
-                          className="min-h-16 w-full rounded-xl border border-slate-800 bg-slate-900/60 px-4 py-3 text-left"
-                        >
-                          <span className="flex items-center justify-between gap-3">
-                            <span className="truncate text-sm font-semibold text-slate-200">{title}</span>
-                            <span className="shrink-0 text-[10px] text-slate-500">
-                              {thread.id === activeChatThreadId ? "Current" : updatedAt}
+                        <div key={thread.id} className="flex items-stretch gap-2">
+                          <button
+                            type="button"
+                            onClick={() => openChatThread(thread.id)}
+                            aria-pressed={thread.id === activeChatThreadId}
+                            className="min-h-16 min-w-0 flex-1 rounded-xl border border-slate-800 bg-slate-900/60 px-4 py-3 text-left"
+                          >
+                            <span className="flex items-center justify-between gap-3">
+                              <span className="truncate text-sm font-semibold text-slate-200">{title}</span>
+                              <span className="shrink-0 text-[10px] text-slate-500">
+                                {thread.id === activeChatThreadId ? "Current" : updatedAt}
+                              </span>
                             </span>
-                          </span>
-                        </button>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => deleteChatThread(thread.id)}
+                            aria-label={`Delete chat: ${title}`}
+                            title="Delete chat"
+                            className="min-h-16 min-w-12 rounded-xl border border-rose-500/30 bg-rose-500/10 px-3 text-xs font-semibold text-rose-200"
+                          >
+                            Delete
+                          </button>
+                        </div>
                       );
                     })}
                   </div>
