@@ -594,7 +594,7 @@ export function SermonAssistantPanel({
   const [desktopTelemetryOpen, setDesktopTelemetryOpen] = useState(false);
   const [mobileOrganizedView, setMobileOrganizedView] = useState<"outline" | "manual">("outline");
   const [speechLanguage, setSpeechLanguage] = useState<SpeechLanguage>("auto");
-  const [selectedSermonAssistantModel, setSelectedSermonAssistantModel] = useState<"deepseek" | "gemini">("deepseek");
+  const [selectedSermonAssistantModel, setSelectedSermonAssistantModel] = useState<"deepseek" | "deepseek-chat">("deepseek");
   const [autoPushDisplay, setAutoPushDisplay] = useState(false);
   const [liveMode, setLiveMode] = useState(false);
   const [monitorDisplayPrefs, setMonitorDisplayPrefs] = useState<MonitorDisplayPrefs>(DEFAULT_MONITOR_DISPLAY_PREFS);
@@ -3290,12 +3290,12 @@ export function SermonAssistantPanel({
                     <label className="text-sm font-semibold text-slate-300">LLM Model:</label>
                     <select
                       value={selectedSermonAssistantModel}
-                      onChange={(e) => setSelectedSermonAssistantModel(e.target.value as "deepseek" | "gemini")}
+                      onChange={(e) => setSelectedSermonAssistantModel(e.target.value as "deepseek" | "deepseek-chat")}
                       disabled={isGenerating}
                       className="focus-ring rounded-xl border border-slate-700/60 bg-slate-950/70 px-3 py-2 text-sm text-slate-100 outline-none focus:border-cyan-500/40 disabled:opacity-60 disabled:cursor-not-allowed"
                     >
-                      <option value="deepseek">DeepSeek (default)</option>
-                      <option value="gemini">Gemini 2.0 Flash (beta)</option>
+                      <option value="deepseek">DeepSeek R1 (default)</option>
+                      <option value="deepseek-chat">DeepSeek Chat</option>
                     </select>
                   </div>
                   <button

@@ -10,7 +10,7 @@ export const maxDuration = 30;
 const RequestSchema = z.object({
   context: z.string().min(10).max(4000),
   existingRefs: z.array(z.string().max(64)).max(50).optional().default([]),
-  sermonAssistantModel: z.enum(["deepseek", "gemini"]).default("deepseek"),
+  sermonAssistantModel: z.enum(["deepseek", "deepseek-chat"]).default("deepseek"),
 });
 
 const SYSTEM_PROMPT = `You are a Bible reference assistant for a live sermon transcription tool.

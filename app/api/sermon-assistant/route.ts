@@ -10,14 +10,14 @@ const RequestSchema = z.discriminatedUnion("action", [
   z.object({
     action: z.literal("outline"),
     rawTranscript: z.string().min(1).max(120000),
-    sermonAssistantModel: z.enum(["deepseek", "gemini"]).default("deepseek"),
+    sermonAssistantModel: z.enum(["deepseek", "deepseek-chat"]).default("deepseek"),
   }),
   z.object({
     action: z.literal("command"),
     rawTranscript: z.string().min(1).max(120000),
     organizedMarkdown: z.string().max(120000).optional().default(""),
     command: z.string().min(1).max(2000),
-    sermonAssistantModel: z.enum(["deepseek", "gemini"]).default("deepseek"),
+    sermonAssistantModel: z.enum(["deepseek", "deepseek-chat"]).default("deepseek"),
   }),
 ]);
 
@@ -116,34 +116,15 @@ async function generateMarkdownWithFallback(args: {
   prompt: string;
   system: string;
   maxTokens: number;
-  preferredChoice: "deepseek" | "gemini";
+  preferredChoice: "deepseek" | "deepseek-chat";
 }): Promise<string> {
-  const alternateChoice = args.preferredChoice === "deepseek" ? "gemini" : "deepseek";
-
+  // The user's selection is strict: every attempt uses the chosen model.
+  const choice = args.preferredChoice;
   const modelAttempts = args.action === "outline"
-    ? [
-        {
-          model: getSermonOutlineModel(args.preferredChoice),
-          temperature: getSermonTemperature(args.preferredChoice, "outline"),
-        },
-        {
-          model: getSermonOutlineModel(alternateChoice),
-          temperature: getSermonTemperature(alternateChoice, "outline"),
-        },
-      ]
+    ? [{ model: getSermonOutlineModel(choice), temperature: getSermonTemperature(choice, "outline") }]
     : [
-        {
-          model: getSermonCommandModel(args.preferredChoice),
-          temperature: getSermonTemperature(args.preferredChoice, "command"),
-        },
-        {
-          model: getSermonOutlineModel(args.preferredChoice),
-          temperature: getSermonTemperature(args.preferredChoice, "command"),
-        },
-        {
-          model: getSermonCommandModel(alternateChoice),
-          temperature: getSermonTemperature(alternateChoice, "command"),
-        },
+        { model: getSermonCommandModel(choice), temperature: getSermonTemperature(choice, "command") },
+        { model: getSermonOutlineModel(choice), temperature: getSermonTemperature(choice, "command") },
       ];
 
   let lastError: unknown = null;
