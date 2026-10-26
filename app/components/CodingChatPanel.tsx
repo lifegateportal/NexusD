@@ -4,6 +4,7 @@ import { createElement, useCallback, useEffect, useMemo, useRef, useState } from
 import { pickVoice } from "@/lib/audio-player-context";
 import {
   CodingAgentSchema,
+  CodingContextScopeHeaderSchema,
   CodingModeSchema,
   CODING_PARTIAL_RESPONSE_MARKER,
   MAX_CODING_HISTORY_MESSAGE_CHARACTERS,
@@ -420,6 +421,8 @@ export function CodingChatPanel() {
   const [attachedFileNames, setAttachedFileNames] = useState<string[]>([]);
   const [mode, setMode] = useState<CodingMode>("ask");
   const [agent, setAgent] = useState<CodingAgent>("deepseek-chat");
+  const [focusedContextEnabled, setFocusedContextEnabled] = useState(false);
+  const [contextScopeNotice, setContextScopeNotice] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [status, setStatus] = useState("Ready");
   const [error, setError] = useState<string | null>(null);
@@ -2619,6 +2622,7 @@ export function CodingChatPanel() {
     setLoading(true);
     setStatus("Nexus Code is working");
     setError(null);
+    setContextScopeNotice(null);
     const userMessage: CodingStoredMessage = {
       id: `user-${Date.now()}`,
       role: "user",
@@ -2657,11 +2661,13 @@ export function CodingChatPanel() {
         body: JSON.stringify({
           query,
           mode,
+          contextStrategy: focusedContextEnabled ? "focused" : "full",
           agent,
           workspaceId: workspaceId ?? undefined,
           revisionId: workspaceRevisionRef.current ?? undefined,
           history: requestHistory,
           files,
+          attachedFileNames,
           workbench: {
             projectName: workspaceName,
             workspaceStatus,
@@ -2687,6 +2693,19 @@ export function CodingChatPanel() {
       if (!response.ok) {
         const payload = await response.json().catch(() => null) as { error?: unknown } | null;
         throw new Error(typeof payload?.error === "string" ? payload.error : "Nexus Code could not answer.");
+      }
+      if (focusedContextEnabled) {
+        const scope = CodingContextScopeHeaderSchema.safeParse(
+          response.headers.get("X-Nexus-Context-Files"),
+        );
+        if (scope.success) {
+          const [included, total] = scope.data.split("/").map(Number);
+          if (included < total) {
+            setContextScopeNotice(
+              `Focused context sent ${included} of ${total} workspace files. If Nexus Code needs an omitted file, attach it or switch to Full Context.`,
+            );
+          }
+        }
       }
       if (!response.body) throw new Error("Nexus Code returned no response stream.");
       const reader = response.body.getReader();
@@ -2767,6 +2786,7 @@ export function CodingChatPanel() {
     attachedFileNames,
     codingSurface,
     files,
+    focusedContextEnabled,
     input,
     livePreview?.previewUrl,
     loading,
@@ -3455,6 +3475,21 @@ export function CodingChatPanel() {
                 {CODING_MODE_LABELS[item].label}
               </button>
             ))}
+            <button
+              type="button"
+              role="switch"
+              aria-checked={focusedContextEnabled}
+              onClick={() => {
+                setFocusedContextEnabled((current) => !current);
+                setContextScopeNotice(null);
+              }}
+              disabled={showChatHistory || loading}
+              aria-label={focusedContextEnabled ? "Use full workspace context" : "Use focused workspace context"}
+              title="Focused context selects likely relevant files and recent history. Switch off for the full workspace."
+              className={`min-h-12 shrink-0 rounded-xl border px-3 text-xs font-bold disabled:opacity-40 ${focusedContextEnabled ? "border-amber-400/50 bg-amber-500/10 text-amber-200" : "border-slate-700 bg-slate-950/70 text-slate-400"}`}
+            >
+              {focusedContextEnabled ? "Focused context" : "Full context"}
+            </button>
             <select
               value={agent}
               onChange={(event) => setAgent(CodingAgentSchema.parse(event.target.value))}
@@ -3497,7 +3532,16 @@ export function CodingChatPanel() {
             </button>
           </div>
         </div>
-        <p className="mt-2 text-[10px] text-slate-600">Ctrl/⌘ + Enter to send · attached files are used as coding context</p>
+        <p className="mt-2 text-[10px] text-slate-600">
+          Ctrl/⌘ + Enter to send · {focusedContextEnabled
+            ? "Focused context may omit files; switch to Full Context or attach files if needed."
+            : "Full Context sends the entire workspace, recent chat, and attached files."}
+        </p>
+        {contextScopeNotice && (
+          <p role="status" className="mt-1 text-[10px] text-amber-300">
+            {contextScopeNotice}
+          </p>
+        )}
         <p className="mt-1 text-[10px] text-slate-600">
           Each message sends project files, up to 20 prior chat messages, the active file and view
           {previewRuntime === "webcontainer" ? ", and recent WebContainer terminal output" : ""}

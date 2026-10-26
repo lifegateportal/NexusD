@@ -8,6 +8,10 @@ import {
 export const CodingModeSchema = z.enum(["ask", "plan", "code"]);
 export type CodingMode = z.infer<typeof CodingModeSchema>;
 
+export const CodingContextStrategySchema = z.enum(["full", "focused"]);
+export type CodingContextStrategy = z.infer<typeof CodingContextStrategySchema>;
+export const CodingContextScopeHeaderSchema = z.string().regex(/^\d{1,3}\/\d{1,3}$/);
+
 export const CodingAgentSchema = z.enum(["deepseek-chat", "deepseek-reasoner"]);
 export type CodingAgent = z.infer<typeof CodingAgentSchema>;
 
@@ -41,10 +45,12 @@ export const CodingWorkbenchContextSchema = z.object({
 export const CodingChatRequestSchema = z.object({
   query: z.string().trim().min(1).max(20_000),
   mode: CodingModeSchema.default("ask"),
+  contextStrategy: CodingContextStrategySchema.default("full"),
   agent: CodingAgentSchema.default("deepseek-chat"),
   workspaceId: CodingWorkspaceIdSchema.optional(),
   revisionId: CodingRevisionIdSchema.optional(),
   history: z.array(CodingHistoryMessageSchema).max(20).default([]),
+  attachedFileNames: z.array(z.string().trim().min(1).max(240)).max(200).default([]),
   files: z.array(CodingFileSchema).max(200).default([]),
   workbench: CodingWorkbenchContextSchema.default({}),
 }).superRefine((value, context) => {
