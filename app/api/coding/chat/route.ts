@@ -20,7 +20,6 @@ export const maxDuration = 300;
 
 const MAX_CODING_CONTINUATIONS = 4;
 const CONTINUATION_TAIL_CHARACTERS = 16_000;
-const LONG_FORM_CODING_PATTERN = /\b(long[-\s]?form|complete|full(?:[-\s]stack)?|multi[-\s]file|entire application|production[-\s]ready|build|implement|create|generate|refactor|migrate)\b/i;
 
 function modeInstruction(mode: CodingMode): string {
   switch (mode) {
@@ -67,10 +66,6 @@ function formatWorkbench(request: CodingChatRequest): string {
     `Preview URL: ${workbench.previewUrl ?? "None"}`,
     `Recent terminal output (up to 20,000 characters):\n${terminalOutput || "(No WebContainer terminal output captured.)"}`,
   ].join("\n\n");
-}
-
-function shouldContinueLongForm(input: CodingChatRequest): boolean {
-  return input.mode === "code" || LONG_FORM_CODING_PATTERN.test(input.query);
 }
 
 function buildContinuationPrompt(
@@ -175,7 +170,6 @@ export async function POST(request: NextRequest) {
       `USER REQUEST:\n${input.query}`,
     ].join("\n\n==========\n\n");
 
-    const continueLongForm = shouldContinueLongForm(input);
     const maxTokens = 8_000;
     return createDataStreamResponse({
       headers: {
@@ -201,7 +195,7 @@ export async function POST(request: NextRequest) {
           });
         }
         try {
-          for (let continuation = 0; continuation <= (continueLongForm ? MAX_CODING_CONTINUATIONS : 0); continuation += 1) {
+          for (let continuation = 0; continuation <= MAX_CODING_CONTINUATIONS; continuation += 1) {
             let streamError: unknown = null;
             const result = streamText({
               model,
@@ -223,7 +217,13 @@ export async function POST(request: NextRequest) {
             if (streamError) throw streamError;
 
             const finishReason = await result.finishReason;
-            if (finishReason !== "length" || continuation === MAX_CODING_CONTINUATIONS || !continueLongForm) break;
+            if (finishReason !== "length") break;
+            if (continuation === MAX_CODING_CONTINUATIONS) {
+              const warning = "\n\n> **Nexus Code reached its response continuation limit.** The generated code may be incomplete. Ask Nexus Code to continue from the last complete line.";
+              fullText += warning;
+              dataStream.write(`0:${JSON.stringify(warning)}\n`);
+              break;
+            }
           }
           if (!fullText.trim()) throw new Error("Nexus Code returned an empty response.");
           if (input.workspaceId) {

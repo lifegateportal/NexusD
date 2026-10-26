@@ -15,9 +15,11 @@ export const CodingFileSchema = CodingWorkspaceFileSchema;
 
 export type CodingFile = z.infer<typeof CodingFileSchema>;
 
+export const MAX_CODING_HISTORY_MESSAGE_CHARACTERS = 120_000;
+
 export const CodingHistoryMessageSchema = z.object({
   role: z.enum(["user", "assistant"]),
-  content: z.string().max(120_000),
+  content: z.string().max(MAX_CODING_HISTORY_MESSAGE_CHARACTERS),
 }).strict();
 
 export const CodingWorkbenchContextSchema = z.object({

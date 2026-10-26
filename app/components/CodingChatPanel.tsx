@@ -5,6 +5,7 @@ import { pickVoice } from "@/lib/audio-player-context";
 import {
   CodingAgentSchema,
   CodingModeSchema,
+  MAX_CODING_HISTORY_MESSAGE_CHARACTERS,
   CODING_MODE_LABELS,
   type CodingAgent,
   type CodingChatThread,
@@ -2632,10 +2633,14 @@ export function CodingChatPanel() {
       createdAt: new Date().toISOString(),
       fileNames: [],
     };
+    let content = "";
     const requestHistory = messages
       .filter((message): message is CodingStoredMessage & { role: "user" | "assistant" } => message.role !== "system")
       .slice(-20)
-      .map((message) => ({ role: message.role, content: message.content }));
+      .map((message) => ({
+        role: message.role,
+        content: message.content.slice(-MAX_CODING_HISTORY_MESSAGE_CHARACTERS),
+      }));
     setMessages((current) => [...current, userMessage, assistantMessage]);
     setInput("");
     const controller = new AbortController();
@@ -2683,7 +2688,6 @@ export function CodingChatPanel() {
       if (!response.body) throw new Error("Nexus Code returned no response stream.");
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
-      let content = "";
       let streamBuffer = "";
       let streamError: string | null = null;
       const appendStreamPart = (part: CodingStreamPart | null) => {
@@ -2738,9 +2742,16 @@ export function CodingChatPanel() {
     } catch (requestError) {
       if (requestError instanceof DOMException && requestError.name === "AbortError") {
         setStatus("Stopped");
+        if (content) setError("Generation stopped. The displayed response may be incomplete.");
       } else {
         setStatus("Needs attention");
         setError(requestError instanceof Error ? requestError.message : "Nexus Code request failed.");
+      }
+      if (content) {
+        setMessages((current) => current.map((message) => (
+          message.id === assistantId ? { ...message, content } : message
+        )));
+      } else {
         setMessages((current) => current.filter((message) => message.id !== assistantId));
       }
     } finally {
