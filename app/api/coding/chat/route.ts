@@ -164,8 +164,14 @@ export async function POST(request: NextRequest) {
   try {
     input = CodingChatRequestSchema.parse(await request.json() as unknown);
   } catch (error) {
+    const validationError = error instanceof z.ZodError
+      ? `Invalid coding request: ${error.issues.map((issue) => {
+        const path = issue.path.length > 0 ? issue.path.join(".") : "request";
+        return `${path}: ${issue.message}`;
+      }).join("; ")}`
+      : "Invalid coding request.";
     return NextResponse.json(
-      { error: error instanceof z.ZodError ? error.issues : "Invalid coding request." },
+      { error: validationError },
       { status: 400 },
     );
   }

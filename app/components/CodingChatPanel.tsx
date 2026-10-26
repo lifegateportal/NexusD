@@ -2644,9 +2644,7 @@ export function CodingChatPanel() {
       .slice(-20)
       .map((message) => ({
         role: message.role,
-        content: continueFromPartial
-          ? message.content.slice(-MAX_CODING_HISTORY_MESSAGE_CHARACTERS)
-          : message.content,
+        content: message.content.slice(-MAX_CODING_HISTORY_MESSAGE_CHARACTERS),
       }));
     setMessages((current) => [...current, userMessage, assistantMessage]);
     setInput("");
