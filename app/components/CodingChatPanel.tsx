@@ -5,6 +5,7 @@ import { pickVoice } from "@/lib/audio-player-context";
 import {
   CodingAgentSchema,
   CodingModeSchema,
+  CODING_PARTIAL_RESPONSE_MARKER,
   MAX_CODING_HISTORY_MESSAGE_CHARACTERS,
   CODING_MODE_LABELS,
   type CodingAgent,
@@ -2609,7 +2610,7 @@ export function CodingChatPanel() {
     });
   }, []);
 
-  const send = useCallback(async (requestedQuery?: string) => {
+  const send = useCallback(async (requestedQuery?: string, continueFromPartial = false) => {
     const query = (requestedQuery ?? input).trim();
     if (!query || loading) return;
     voiceInstructionRef.current = query;
@@ -2639,7 +2640,9 @@ export function CodingChatPanel() {
       .slice(-20)
       .map((message) => ({
         role: message.role,
-        content: message.content.slice(-MAX_CODING_HISTORY_MESSAGE_CHARACTERS),
+        content: continueFromPartial
+          ? message.content.slice(-MAX_CODING_HISTORY_MESSAGE_CHARACTERS)
+          : message.content,
       }));
     setMessages((current) => [...current, userMessage, assistantMessage]);
     setInput("");
@@ -2748,6 +2751,7 @@ export function CodingChatPanel() {
         setError(requestError instanceof Error ? requestError.message : "Nexus Code request failed.");
       }
       if (content) {
+        content += CODING_PARTIAL_RESPONSE_MARKER;
         setMessages((current) => current.map((message) => (
           message.id === assistantId ? { ...message, content } : message
         )));
@@ -3327,6 +3331,19 @@ export function CodingChatPanel() {
                       </div>
                       {message.role === "assistant" ? renderAssistantContent(message.content || "Thinking…") : (
                         <p className="whitespace-pre-wrap">{message.content}</p>
+                      )}
+                      {message.role === "assistant" && message.content.includes(CODING_PARTIAL_RESPONSE_MARKER) && (
+                        <button
+                          type="button"
+                          disabled={loading}
+                          onClick={() => void send(
+                            "Continue the immediately preceding Nexus Code response from exactly where it stopped. Use the previous user request and the assistant's partial response in the conversation history. Do not restart, repeat, or summarize completed content; continue in the same format and finish the remaining requested work.",
+                            true,
+                          )}
+                          className="mt-3 min-h-12 rounded-xl border border-cyan-500/40 bg-cyan-500/10 px-4 text-sm font-semibold text-cyan-200 disabled:opacity-50"
+                        >
+                          Continue response
+                        </button>
                       )}
                     </article>
                   ))}

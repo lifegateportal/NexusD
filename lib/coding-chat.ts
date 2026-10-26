@@ -16,6 +16,8 @@ export const CodingFileSchema = CodingWorkspaceFileSchema;
 export type CodingFile = z.infer<typeof CodingFileSchema>;
 
 export const MAX_CODING_HISTORY_MESSAGE_CHARACTERS = 120_000;
+export const CODING_PARTIAL_RESPONSE_MARKER =
+  "\n\n> **Partial response.** Use “Continue response” to pick up from here.";
 
 export const CodingHistoryMessageSchema = z.object({
   role: z.enum(["user", "assistant"]),
