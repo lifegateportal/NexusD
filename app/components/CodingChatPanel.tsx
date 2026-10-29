@@ -1,15 +1,22 @@
 "use client";
 
 import { createElement, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import Image from "next/image";
 import { pickVoice } from "@/lib/audio-player-context";
 import {
   CodingAgentSchema,
   CodingContextScopeHeaderSchema,
+  CodingChatImageSchema,
   CodingModeSchema,
   CODING_PARTIAL_RESPONSE_MARKER,
+  CODING_IMAGE_MEDIA_TYPES,
   MAX_CODING_HISTORY_MESSAGE_CHARACTERS,
+  MAX_CODING_IMAGE_BYTES,
+  MAX_CODING_IMAGES,
+  MAX_CODING_IMAGES_BASE64_CHARACTERS,
   CODING_MODE_LABELS,
   type CodingAgent,
+  type CodingChatImage,
   type CodingChatThread,
   type CodingFile,
   type CodingMode,
@@ -96,6 +103,14 @@ const MAX_FILE_SIZE = 500_000;
 const MAX_FILES = 200;
 const MAX_WORKSPACE_BYTES = 4_000_000;
 const LOCAL_ENV_FILE_NAME = ".env.local";
+
+function encodeImageBase64(bytes: Uint8Array): string {
+  let binary = "";
+  for (let offset = 0; offset < bytes.length; offset += 0x8000) {
+    binary += String.fromCharCode(...bytes.subarray(offset, offset + 0x8000));
+  }
+  return window.btoa(binary);
+}
 
 function isPrivateEnvironmentFile(name: string): boolean {
   const baseName = name.replaceAll("\\", "/").split("/").at(-1) ?? name;
@@ -419,6 +434,7 @@ export function CodingChatPanel() {
   const [localEnvironmentWorkspaceId, setLocalEnvironmentWorkspaceId] = useState<string | null>(null);
   const [input, setInput] = useState("");
   const [attachedFileNames, setAttachedFileNames] = useState<string[]>([]);
+  const [attachedImages, setAttachedImages] = useState<CodingChatImage[]>([]);
   const [mode, setMode] = useState<CodingMode>("ask");
   const [agent, setAgent] = useState<CodingAgent>("deepseek-chat");
   const [focusedContextEnabled, setFocusedContextEnabled] = useState(false);
@@ -449,6 +465,7 @@ export function CodingChatPanel() {
   const abortRef = useRef<AbortController | null>(null);
   const staticDeploymentAbortRef = useRef<AbortController | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const imageInputRef = useRef<HTMLInputElement>(null);
   const folderInputRef = useRef<HTMLInputElement>(null);
   const zipImportInputRef = useRef<HTMLInputElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -1076,6 +1093,7 @@ export function CodingChatPanel() {
     setLoading(false);
     setInput("");
     setAttachedFileNames([]);
+    setAttachedImages([]);
     setMessages([{ ...INITIAL_MESSAGE, createdAt: new Date().toISOString() }]);
     setCodingSurface("assistant");
     setShowFiles(false);
@@ -1606,6 +1624,7 @@ export function CodingChatPanel() {
     setStatus("Ready");
     setInput("");
     setAttachedFileNames([]);
+    setAttachedImages([]);
     setCodingSurface("assistant");
     setShowFiles(false);
     setShowPreview(false);
@@ -1669,6 +1688,7 @@ export function CodingChatPanel() {
     setStatus("Ready");
     setInput("");
     setAttachedFileNames([]);
+    setAttachedImages([]);
     setActiveChatThreadId(thread.id);
     setMessages(thread.messages);
     setShowChatHistory(false);
@@ -1720,6 +1740,7 @@ export function CodingChatPanel() {
       setStatus("Ready");
       setInput("");
       setAttachedFileNames([]);
+      setAttachedImages([]);
       setMessages(nextActiveThread.messages);
     }
     setError(null);
@@ -1966,6 +1987,54 @@ export function CodingChatPanel() {
     }
     setError(warning);
   }, [files, workspaceId]);
+
+  const addImages = useCallback(async (selected: FileList | null) => {
+    if (!selected) return;
+    let warning: string | null = null;
+    let totalCharacters = attachedImages.reduce((sum, image) => sum + image.data.length, 0);
+    const nextImages: CodingChatImage[] = [];
+
+    for (const file of Array.from(selected)) {
+      const mediaType = CODING_IMAGE_MEDIA_TYPES.find((type) => type === file.type);
+      if (!mediaType) {
+        warning = `${file.name} is not a supported image. Use JPEG, PNG, GIF, or WebP.`;
+        continue;
+      }
+      if (file.size === 0 || file.size > MAX_CODING_IMAGE_BYTES) {
+        warning = `${file.name} must be 4 MB or smaller.`;
+        continue;
+      }
+      if (attachedImages.length + nextImages.length >= MAX_CODING_IMAGES) {
+        warning = `Attach no more than ${MAX_CODING_IMAGES} images per message.`;
+        continue;
+      }
+
+      let data: string;
+      try {
+        data = encodeImageBase64(new Uint8Array(await file.arrayBuffer()));
+      } catch {
+        warning = `${file.name} could not be read. Choose the image again and retry.`;
+        continue;
+      }
+      if (totalCharacters + data.length > MAX_CODING_IMAGES_BASE64_CHARACTERS) {
+        warning = "Attached images are too large. Keep their combined encoded size at or below 8 MB.";
+        continue;
+      }
+      const parsed = CodingChatImageSchema.safeParse({ name: file.name, mediaType, data });
+      if (!parsed.success) {
+        warning = parsed.error.issues[0]?.message ?? `${file.name} is not a valid image attachment.`;
+        continue;
+      }
+      nextImages.push(parsed.data);
+      totalCharacters += data.length;
+    }
+
+    if (nextImages.length > 0) {
+      setAttachedImages([...attachedImages, ...nextImages]);
+      setAgent("deepseek-flash");
+    }
+    setError(warning);
+  }, [attachedImages]);
 
   const updateSelectedFile = useCallback((content: string) => {
     if (!selectedFileName) return;
@@ -2624,7 +2693,10 @@ export function CodingChatPanel() {
   }, []);
 
   const send = useCallback(async (requestedQuery?: string, continueFromPartial = false) => {
-    const query = (requestedQuery ?? input).trim();
+    const typedQuery = (requestedQuery ?? input).trim();
+    const query = typedQuery || (attachedImages.length > 0
+      ? "Describe the attached image(s) and read any visible text."
+      : "");
     if (!query || loading) return;
     voiceInstructionRef.current = query;
     workspaceChangeReasonRef.current = `Nexus Code: ${query.slice(0, 360)}`;
@@ -2638,7 +2710,7 @@ export function CodingChatPanel() {
       role: "user",
       content: query,
       createdAt: new Date().toISOString(),
-      fileNames: attachedFileNames,
+      fileNames: [...attachedFileNames, ...attachedImages.map((image) => image.name)],
     };
     const assistantId = `assistant-${Date.now()}`;
     const assistantMessage: CodingStoredMessage = {
@@ -2675,6 +2747,7 @@ export function CodingChatPanel() {
           revisionId: workspaceRevisionRef.current ?? undefined,
           history: requestHistory,
           files,
+          images: attachedImages,
           attachedFileNames,
           workbench: {
             projectName: workspaceName,
@@ -3465,6 +3538,17 @@ export function CodingChatPanel() {
               event.target.value = "";
             }}
           />
+          <input
+            ref={imageInputRef}
+            type="file"
+            accept={CODING_IMAGE_MEDIA_TYPES.join(",")}
+            multiple
+            className="hidden"
+            onChange={(event) => {
+              void addImages(event.target.files);
+              event.target.value = "";
+            }}
+          />
           <textarea
             value={input}
             onChange={(event) => setInput(event.target.value)}
@@ -3486,6 +3570,32 @@ export function CodingChatPanel() {
                 <button key={fileName} type="button" onClick={() => setAttachedFileNames((current) => current.filter((name) => name !== fileName))} disabled={showChatHistory} className="min-h-12 max-w-48 shrink-0 truncate rounded-xl border border-cyan-500/25 bg-cyan-500/10 px-3 text-xs text-cyan-200 disabled:opacity-40">
                   {fileName} ×
                 </button>
+              ))}
+            </div>
+          )}
+          {attachedImages.length > 0 && (
+            <div className="flex items-center gap-2 overflow-x-auto border-t border-slate-800 px-2 pt-2 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden" aria-label="Attached images">
+              {attachedImages.map((image, index) => (
+                <div key={`${image.name}-${index}`} className="flex min-h-12 shrink-0 items-center gap-2 rounded-xl border border-violet-400/30 bg-violet-500/10 pl-1.5 pr-1 text-xs text-violet-100">
+                  <Image
+                    src={`data:${image.mediaType};base64,${image.data}`}
+                    alt={`Attached image: ${image.name}`}
+                    width={40}
+                    height={40}
+                    unoptimized
+                    className="h-10 w-10 rounded-lg object-cover"
+                  />
+                  <span className="max-w-40 truncate">{image.name}</span>
+                  <button
+                    type="button"
+                    onClick={() => setAttachedImages((current) => current.filter((_, currentIndex) => currentIndex !== index))}
+                    disabled={loading || showChatHistory}
+                    aria-label={`Remove image ${image.name}`}
+                    className="min-h-12 min-w-12 rounded-lg text-base text-violet-200 disabled:opacity-40"
+                  >
+                    ×
+                  </button>
+                </div>
               ))}
             </div>
           )}
@@ -3525,11 +3635,19 @@ export function CodingChatPanel() {
               aria-label="DeepSeek coding model"
               className="min-h-12 min-w-[6.5rem] shrink-0 rounded-xl border border-slate-700 bg-slate-950/70 px-2 text-base text-slate-300 focus:border-violet-400/60 focus:outline-none disabled:opacity-40"
             >
-              <option value="deepseek-chat">Chat</option>
-              <option value="deepseek-reasoner">R1</option>
+              <option value="deepseek-chat" disabled={attachedImages.length > 0}>Chat</option>
+              <option value="deepseek-reasoner" disabled={attachedImages.length > 0}>R1</option>
+              <option value="deepseek-flash">Vision</option>
             </select>
             <button type="button" onClick={() => fileInputRef.current?.click()} disabled={showChatHistory} className="flex min-h-12 min-w-12 shrink-0 items-center justify-center rounded-xl border border-slate-700 bg-slate-950/70 text-lg text-slate-300 disabled:opacity-40" aria-label="Attach code">
               +
+            </button>
+            <button type="button" onClick={() => imageInputRef.current?.click()} disabled={loading || showChatHistory} className="flex min-h-12 min-w-12 shrink-0 items-center justify-center rounded-xl border border-violet-400/30 bg-slate-950/70 text-violet-200 disabled:opacity-40" aria-label="Attach image" title="Attach JPEG, PNG, GIF, or WebP">
+              <svg viewBox="0 0 24 24" aria-hidden="true" className="h-5 w-5 fill-none stroke-current stroke-2">
+                <rect x="3" y="4" width="18" height="16" rx="2" />
+                <circle cx="8.5" cy="9" r="1.5" />
+                <path d="m21 15-5-5L5 20" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
             </button>
             <button
               type="button"
@@ -3552,7 +3670,7 @@ export function CodingChatPanel() {
             <button
               type="button"
               onClick={loading ? stop : () => void send()}
-              disabled={showChatHistory || (!loading && !input.trim())}
+              disabled={showChatHistory || (!loading && !input.trim() && attachedImages.length === 0)}
               className={`ml-auto min-h-12 shrink-0 rounded-xl px-4 text-sm font-bold ${loading ? "border border-rose-400/40 bg-rose-500/10 text-rose-200" : "bg-cyan-400 text-slate-950 disabled:bg-slate-700 disabled:text-slate-500"}`}
               aria-label={loading ? "Stop response" : "Send coding request"}
             >

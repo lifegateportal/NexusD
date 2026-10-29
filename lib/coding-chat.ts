@@ -12,8 +12,27 @@ export const CodingContextStrategySchema = z.enum(["full", "focused"]);
 export type CodingContextStrategy = z.infer<typeof CodingContextStrategySchema>;
 export const CodingContextScopeHeaderSchema = z.string().regex(/^\d{1,3}\/\d{1,3}$/);
 
-export const CodingAgentSchema = z.enum(["deepseek-chat", "deepseek-reasoner"]);
+export const CodingAgentSchema = z.enum(["deepseek-chat", "deepseek-reasoner", "deepseek-flash"]);
 export type CodingAgent = z.infer<typeof CodingAgentSchema>;
+
+export const CODING_IMAGE_MEDIA_TYPES = ["image/jpeg", "image/png", "image/gif", "image/webp"] as const;
+export const MAX_CODING_IMAGES = 4;
+export const MAX_CODING_IMAGE_BYTES = 4 * 1024 * 1024;
+export const MAX_CODING_IMAGES_BASE64_CHARACTERS = 8 * 1024 * 1024;
+
+const MAX_CODING_IMAGE_BASE64_CHARACTERS = Math.ceil(MAX_CODING_IMAGE_BYTES / 3) * 4;
+const CodingImageBase64Schema = z.string()
+  .min(4)
+  .max(MAX_CODING_IMAGE_BASE64_CHARACTERS)
+  .regex(/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/);
+
+export const CodingChatImageSchema = z.object({
+  name: z.string().trim().min(1).max(240),
+  mediaType: z.enum(CODING_IMAGE_MEDIA_TYPES),
+  data: CodingImageBase64Schema,
+}).strict();
+
+export type CodingChatImage = z.infer<typeof CodingChatImageSchema>;
 
 export const CodingFileSchema = CodingWorkspaceFileSchema;
 
@@ -52,6 +71,7 @@ export const CodingChatRequestSchema = z.object({
   history: z.array(CodingHistoryMessageSchema).max(20).default([]),
   attachedFileNames: z.array(z.string().trim().min(1).max(240)).max(200).default([]),
   files: z.array(CodingFileSchema).max(200).default([]),
+  images: z.array(CodingChatImageSchema).max(MAX_CODING_IMAGES).default([]),
   workbench: CodingWorkbenchContextSchema.default({}),
 }).superRefine((value, context) => {
   const totalCharacters = value.files.reduce((sum, file) => sum + file.content.length, 0);
@@ -60,6 +80,21 @@ export const CodingChatRequestSchema = z.object({
       code: z.ZodIssueCode.custom,
       path: ["files"],
       message: "Attached code is too large. Keep the total under 4 million characters.",
+    });
+  }
+  const totalImageCharacters = value.images.reduce((sum, image) => sum + image.data.length, 0);
+  if (totalImageCharacters > MAX_CODING_IMAGES_BASE64_CHARACTERS) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["images"],
+      message: "Attached images are too large. Keep their combined encoded size at or below 8 MB.",
+    });
+  }
+  if (value.images.length > 0 && value.agent !== "deepseek-flash") {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["agent"],
+      message: "Image attachments require the DeepSeek Vision model.",
     });
   }
 });

@@ -12,6 +12,11 @@ const deepSeek = createOpenAI({
   baseURL: "https://api.deepseek.com/v1"
 });
 
+const deepSeekVision = createOpenAI({
+  apiKey: env.DEEPSEEK_API_KEY,
+  baseURL: "https://api.deepseek.com"
+});
+
 const anthropic = createAnthropic({
   apiKey: env.ANTHROPIC_API_KEY
 });
@@ -27,5 +32,6 @@ export const geminiModel = google(env.GEMINI_MODEL);
 export const deepSeekModel = deepSeek(env.DEEPSEEK_MODEL);
 export const deepSeekChatModel = deepSeek("deepseek-chat");
 export const deepSeekReasonerModel = deepSeek("deepseek-reasoner");
+export const deepSeekVisionModel = deepSeekVision("deepseek-flash");
 export const claudeModel = anthropic(env.CLAUDE_MODEL);
 export const curatorModel = anthropicCurator(env.CURATOR_MODEL);

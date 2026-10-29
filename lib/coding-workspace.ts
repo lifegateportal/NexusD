@@ -277,7 +277,7 @@ export const CodingAgentEventSchema = z.discriminatedUnion("type", [
   CodingAgentEventBaseSchema.extend({
     type: z.literal("run.started"),
     mode: z.enum(["ask", "plan", "code"]),
-    agent: z.enum(["deepseek-chat", "deepseek-reasoner"]),
+    agent: z.enum(["deepseek-chat", "deepseek-reasoner", "deepseek-flash"]),
   }),
   CodingAgentEventBaseSchema.extend({
     type: z.literal("files.proposed"),
