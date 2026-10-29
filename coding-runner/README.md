@@ -16,6 +16,11 @@ mounts the project once and stays available for commands such as `npm install`
 and `npm run dev`; command output streams in the Preview panel, and the app
 preview appears when a dev server reports its ready port.
 
+Nexus Code's DeepSeek Chat agent has server-side DeepSeek Search and Fetch
+tools for current web research. These use the existing `DEEPSEEK_API_KEY` and
+do not enable network access in the isolated command sandbox. Up to three
+search/fetch calls are allowed per chat request.
+
 ## Security boundary
 
 Each run starts a fresh Docker container with:
