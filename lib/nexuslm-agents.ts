@@ -11,6 +11,6 @@ export const NEXUSLM_AGENTS: Record<NexusLMAgent, { label: string; description: 
   },
   NexusChat: {
     label: "NexusChat",
-    description: "DeepSeek Chat for fast conversation and drafting",
+    description: "DeepSeek Chat for fast conversation, drafting, and live web research",
   },
 };
