@@ -452,6 +452,8 @@ export function CodingChatPanel() {
   const folderInputRef = useRef<HTMLInputElement>(null);
   const zipImportInputRef = useRef<HTMLInputElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const lineNumberGutterRef = useRef<HTMLDivElement>(null);
+  const selectedFileEditorRef = useRef<HTMLTextAreaElement>(null);
   const voiceModeRef = useRef(false);
   const voiceRecognitionRef = useRef<CodingVoiceRecognition | null>(null);
   const voiceSessionRef = useRef(0);
@@ -499,9 +501,17 @@ export function CodingChatPanel() {
     () => editorFiles.find((file) => file.name === selectedFileName) ?? null,
     [editorFiles, selectedFileName],
   );
+  const editorLineNumbers = useMemo(
+    () => selectedFile?.content.split(/\r\n|\n|\r/) ?? [""],
+    [selectedFile?.content],
+  );
   const selectedFileIsHtml = selectedFile?.language === "html"
     || /\.(?:html?|xhtml)$/i.test(selectedFile?.name ?? "");
   const selectedFileCanPreview = Boolean(selectedFile && selectedFileIsHtml);
+  useEffect(() => {
+    if (selectedFileEditorRef.current) selectedFileEditorRef.current.scrollTop = 0;
+    if (lineNumberGutterRef.current) lineNumberGutterRef.current.scrollTop = 0;
+  }, [selectedFileName]);
   const workspaceFilesAreSaved = useMemo(
     () => JSON.stringify(files) === workspaceSyncedFilesRef.current,
     [files, workspaceRevisionId],
@@ -3382,13 +3392,33 @@ export function CodingChatPanel() {
                     <span className="truncate font-mono text-xs text-slate-400">{selectedFile.name}</span>
                     <span className="shrink-0 text-[10px] font-semibold uppercase tracking-widest text-slate-600">{selectedFile.language ?? "text"}</span>
                   </div>
+                  <div className="flex min-h-0 flex-1 overflow-hidden">
+                    <div
+                      ref={lineNumberGutterRef}
+                      aria-hidden="true"
+                      className="min-h-0 shrink-0 overflow-hidden border-r border-slate-800 bg-slate-950/40 px-2 py-4 text-right font-mono text-base leading-6 text-slate-600 sm:px-3"
+                    >
+                      <div style={{ minWidth: `${Math.max(3, String(editorLineNumbers.length).length)}ch` }}>
+                        {editorLineNumbers.map((_, index) => (
+                          <div key={index} className="h-6">{index + 1}</div>
+                        ))}
+                      </div>
+                    </div>
                   <textarea
+                    ref={selectedFileEditorRef}
                     value={selectedFile.content}
                     onChange={(event) => updateSelectedFile(event.target.value)}
+                    onScroll={(event) => {
+                      if (lineNumberGutterRef.current) {
+                        lineNumberGutterRef.current.scrollTop = event.currentTarget.scrollTop;
+                      }
+                    }}
                     aria-label={`Edit ${selectedFile.name}`}
                     spellCheck={false}
-                    className="min-h-0 flex-1 resize-none bg-transparent px-4 py-4 font-mono text-base leading-6 text-slate-300 focus:outline-none"
+                    wrap="off"
+                    className="min-h-0 min-w-0 flex-1 resize-none overflow-auto whitespace-pre bg-transparent px-4 py-4 font-mono text-base leading-6 text-slate-300 focus:outline-none"
                   />
+                  </div>
                 </>
               ) : (
                 <div className="flex min-h-[320px] flex-1 items-center justify-center px-6 text-center">
