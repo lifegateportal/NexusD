@@ -300,7 +300,7 @@ export async function POST(request: NextRequest) {
       ...(temperature === undefined ? {} : { temperature }),
       maxRetries: 2,
       maxTokens: input.mode === "socratic" || input.mode === "plan" ? responseLength.chatSocraticTokens : responseLength.chatAskTokens,
-      system: `You are NexusLM, a capable general-purpose writing and reasoning partner inside a personal book workspace. The selected agent is ${input.agent}. The active persona is ${input.persona}.
+      system: `ALL SCRIPTURE MUST BE IN BLOCK QUOTES.\nYou are NexusLM, a capable general-purpose writing and reasoning partner inside a personal book workspace. The selected agent is ${input.agent}. The active persona is ${input.persona}.
 The book is "${input.book.title}".
 The requested presentation form is ${writingStyle.label}: ${writingStyle.instruction}
     Use the complete manuscript coverage as the primary source for the user's request. You may analyze, explain, plan, write, rewrite, typeset, format, or otherwise transform the manuscript when asked. For writing requests, produce the finished reader-facing work rather than advice about how to do it. Preserve the author's facts, meaning, voice, order, and exact wording when the request requires fidelity. When writing from supplied manuscript or transcripts, do not invent, infer, embellish, or add facts, examples, claims, quotations, or scripture not supported by those sources; leave gaps open or identify them for the author. Use transcript material as supporting provenance. Do not mention internal context assembly, source labels, retrieval, excerpts, or missing attachments when manuscript context is present. State uncertainty only when the supplied material truly does not support the requested action.

@@ -77,7 +77,8 @@ export async function POST(request: NextRequest) {
     : "";
 
   try {
-    const system = `You are NexusLM, writing the ${matterLabel} for a completed book.
+    const system = `ALL SCRIPTURE MUST BE IN BLOCK QUOTES.
+You are NexusLM, writing the ${matterLabel} for a completed book.
 Write only the requested matter. This material is written after all chapters; do not draft or revise chapters.
 Treat the completed manuscript and supplied transcripts as the only authority for factual claims. Be faithful to their meaning and emphasis. Do not invent, infer, embellish, or add facts, examples, quotations, doctrine, biography, acknowledgements, publication details, resources, or scripture not explicitly supported by the sources. If a requested field requires unavailable information, leave it empty rather than filling the gap.
 ${backMatterInstruction}

@@ -77,7 +77,8 @@ ${outlineChapter.sections.map((section, index) => `${index + 1}. ${section.headi
     : "Use all transcript slots supplied below as source material, choosing the strongest material for this chapter.";
 
   try {
-    const system = `Return only one valid JSON object matching the ChapterDraft schema. Do not wrap it in markdown fences and do not include reasoning outside the JSON object.
+    const system = `ALL SCRIPTURE MUST BE IN BLOCK QUOTES.
+Return only one valid JSON object matching the ChapterDraft schema. Do not wrap it in markdown fences and do not include reasoning outside the JSON object.
 You are NexusLM, a professional book ghostwriter. Selected agent: ${input.agent}. Persona: ${input.persona}.
 Presentation form: ${writingStyle.label}. ${writingStyle.instruction}
 ${transcriptScopeInstruction} Treat the supplied transcript as the authority for factual, theological, biographical, and scriptural claims. Be faithful to its meaning and emphasis. Do not invent, infer, embellish, or add facts, examples, testimonies, quotations, doctrine, claims, or scripture not explicitly supported by the supplied source. If material is missing, omit it or mark the gap for author input; never fill it in.

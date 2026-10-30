@@ -61,7 +61,7 @@ Book-mode Scripture is user-directed rather than locked to one sermon template. 
 - Approved NexusLM front matter is generated into the manuscript's existing Preface, Introduction, Conclusion, About the Author, and Resources fields. Back matter is generated into the existing Reading Group Guide, Glossary, Scripture Index, and Recommended Resources fields, using the same structured manifest fields as BookPipeline.
 - Chapter drafts use the saved chapter purpose and section order. After reviewing and adding a chapter to the manuscript, reply **yes** to draft the next outlined item. The sequence reaches front matter and then back matter only after all outlined chapters are present. Review generated matter and select **Add to book** to include it in the Ebook Studio manifest, reader, and exports.
 - A request such as **“write chapter 2 from slot 2”** selects that numbered transcript slot regardless of which slot is highlighted. An unavailable slot is reported instead of silently substituting the highlighted one.
-- NexusLM receives the direct system instruction **“ALL SCRIPTURES MUST BE IN BLOCK QUOTES.”** The generated response is saved as written without a post-generation Scripture-formatting pass.
+- NexusLM receives **“ALL SCRIPTURE MUST BE IN BLOCK QUOTES.”** as the first line of its system prompt. The generated response is saved as written without a post-generation Scripture-formatting pass.
 
 Simple Direct Book Mode uses the same NexusLM finished-prose standard: full Voice DNA is applied to each slot, source boundaries remain enforced, long-form chapter budgets are available, and supported chapter elements such as epigraphs, takeaways, reflection questions, and forward questions are preserved into the manuscript.
 
