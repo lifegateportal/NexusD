@@ -440,6 +440,7 @@ export function CodingChatPanel() {
   const [agent, setAgent] = useState<CodingAgent>("deepseek-chat");
   const [focusedContextEnabled, setFocusedContextEnabled] = useState(false);
   const [contextScopeNotice, setContextScopeNotice] = useState<string | null>(null);
+  const [fullContextNotice, setFullContextNotice] = useState(false);
   const [loading, setLoading] = useState(false);
   const [status, setStatus] = useState("Ready");
   const [error, setError] = useState<string | null>(null);
@@ -2706,6 +2707,7 @@ export function CodingChatPanel() {
     setStatus("Nexus Code is working");
     setError(null);
     setContextScopeNotice(null);
+    setFullContextNotice(false);
     const userMessage: CodingStoredMessage = {
       id: `user-${Date.now()}`,
       role: "user",
@@ -2955,29 +2957,10 @@ export function CodingChatPanel() {
       <header className="relative z-20 shrink-0 border-b border-cyan-500/20 bg-slate-950/90 px-3 py-2 backdrop-blur sm:px-4">
         <div className="flex min-h-12 flex-wrap items-center justify-between gap-2">
           <h1 className="min-w-0 truncate text-base font-bold text-slate-100 sm:text-lg">Nexus Code</h1>
-          <div className={`rounded-full border px-2 py-1 text-[10px] font-semibold ${loading ? "border-amber-400/40 text-amber-300" : "border-emerald-400/30 text-emerald-300"}`} aria-live="polite">
-            {status}
-          </div>
-          <button
-            type="button"
-            onClick={() => setMobileActionsOpen((open) => !open)}
-            aria-expanded={mobileActionsOpen}
-            aria-controls="coding-workspace-actions"
-            aria-label={mobileActionsOpen ? "Hide workspace actions" : "Show workspace actions"}
-            className="flex min-h-12 min-w-12 items-center justify-center rounded-xl border border-slate-700 text-slate-200 lg:hidden"
-          >
-            <svg viewBox="0 0 24 24" aria-hidden="true" className="h-6 w-6 fill-none stroke-current stroke-2">
-              {mobileActionsOpen
-                ? <path d="m6 6 12 12M18 6 6 18" strokeLinecap="round" />
-                : <path d="M4 6h16M4 12h16M4 18h16" strokeLinecap="round" />}
-            </svg>
-          </button>
-        </div>
-        <div
-          id="coding-workspace-actions"
-          className={`${mobileActionsOpen ? "flex" : "hidden"} flex-col gap-1 lg:flex`}
-        >
-          <div className="flex min-h-12 flex-wrap items-center justify-end gap-1.5">
+          <div className="hidden shrink-0 flex-wrap items-center justify-end gap-1.5 lg:flex">
+            <div className={`rounded-full border px-2 py-1 text-[10px] font-semibold ${loading ? "border-amber-400/40 text-amber-300" : "border-emerald-400/30 text-emerald-300"}`} aria-live="polite">
+              {status}
+            </div>
             <button
               type="button"
               onClick={() => void undoWorkspace()}
@@ -3004,13 +2987,89 @@ export function CodingChatPanel() {
               New chat
             </button>
           </div>
+          <div className={`rounded-full border px-2 py-1 text-[10px] font-semibold lg:hidden ${loading ? "border-amber-400/40 text-amber-300" : "border-emerald-400/30 text-emerald-300"}`} aria-live="polite">
+            {status}
+          </div>
+          <button
+            type="button"
+            onClick={() => setMobileActionsOpen((open) => !open)}
+            aria-expanded={mobileActionsOpen}
+            aria-controls="coding-workspace-actions"
+            aria-label={mobileActionsOpen ? "Hide workspace actions" : "Show workspace actions"}
+            className="flex min-h-12 min-w-12 items-center justify-center rounded-xl border border-slate-700 text-slate-200 lg:hidden"
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true" className="h-6 w-6 fill-none stroke-current stroke-2">
+              {mobileActionsOpen
+                ? <path d="m6 6 12 12M18 6 6 18" strokeLinecap="round" />
+                : <path d="M4 6h16M4 12h16M4 18h16" strokeLinecap="round" />}
+            </svg>
+          </button>
+        </div>
+        <div className="grid grid-cols-5 gap-1 py-1 lg:hidden" role="group" aria-label="Quick chat and workspace actions">
+          <button
+            type="button"
+            onClick={() => void undoWorkspace()}
+            disabled={!workspaceParentRevisionId || loading || !workspaceRevisionId}
+            className="min-h-12 rounded-lg border border-slate-700 px-1 text-[11px] font-semibold text-slate-300 disabled:opacity-40"
+          >
+            Undo
+          </button>
+          <button
+            type="button"
+            onClick={showChatHistory ? () => setShowChatHistory(false) : showProjectChatHistory}
+            disabled={!workspaceId || chatHistoryWorkspaceId !== workspaceId}
+            aria-expanded={showChatHistory}
+            className="min-h-12 rounded-lg border border-slate-700 px-1 text-[11px] font-semibold text-slate-300 disabled:opacity-40"
+          >
+            {showChatHistory ? "Back" : "History"}
+          </button>
+          <button
+            type="button"
+            onClick={startNewChat}
+            disabled={!workspaceId || chatHistoryWorkspaceId !== workspaceId}
+            className="min-h-12 rounded-lg bg-cyan-400 px-1 text-[11px] font-bold text-slate-950 disabled:opacity-40"
+          >
+            New chat
+          </button>
+          <button
+            type="button"
+            onClick={() => { toggleWorkspacePanel("files"); setMobileActionsOpen(false); }}
+            aria-pressed={showFiles}
+            className={`min-h-12 rounded-lg border px-1 text-[11px] font-semibold ${showFiles ? "border-cyan-400/50 bg-cyan-500/15 text-cyan-200" : "border-slate-700 text-slate-300"}`}
+          >
+            Explorer{files.length > 0 ? ` ${files.length}` : ""}
+          </button>
+          <button
+            type="button"
+            onClick={() => { toggleWorkspacePanel("preview"); setMobileActionsOpen(false); }}
+            aria-pressed={showPreview}
+            className={`min-h-12 rounded-lg border px-1 text-[11px] font-semibold ${showPreview ? "border-violet-400/50 bg-violet-500/15 text-violet-200" : "border-slate-700 text-slate-300"}`}
+          >
+            Preview
+          </button>
+        </div>
+        <div
+          id="coding-workspace-actions"
+          className={`${mobileActionsOpen ? "absolute inset-x-3 top-full z-50 flex max-h-[calc(100dvh-12rem)] flex-col overflow-y-auto overscroll-contain rounded-2xl border border-slate-700 bg-slate-950 p-3 shadow-2xl" : "hidden"} lg:static lg:block lg:max-h-none lg:overflow-visible lg:rounded-none lg:border-0 lg:bg-transparent lg:p-0 lg:shadow-none`}
+        >
+          <div className="mb-2 flex min-h-12 items-center justify-between border-b border-slate-800 pb-2 lg:hidden">
+            <span className="text-xs font-semibold text-slate-200">Workspace tools</span>
+            <button
+              type="button"
+              onClick={() => setMobileActionsOpen(false)}
+              className="min-h-12 min-w-12 rounded-lg text-slate-300"
+              aria-label="Close workspace tools"
+            >
+              ×
+            </button>
+          </div>
         <div className="mt-1 flex min-h-12 flex-wrap items-center gap-2">
           <select
             value={workspaceId ?? ""}
             onChange={(event) => void openWorkspace(event.target.value)}
             disabled={loading || workspaces.length === 0}
             aria-label="Select coding project"
-            className="min-h-12 min-w-36 max-w-[min(48vw,18rem)] flex-1 rounded-xl border border-slate-700 bg-slate-900 px-3 text-base text-slate-200 focus:border-cyan-400/60 focus:outline-none disabled:opacity-60"
+            className="min-h-12 w-full min-w-0 rounded-xl border border-slate-700 bg-slate-900 px-3 text-base text-slate-200 focus:border-cyan-400/60 focus:outline-none disabled:opacity-60 lg:w-auto lg:min-w-36 lg:max-w-[min(48vw,18rem)] lg:flex-1"
           >
             {!workspaceId && <option value="">{workspaceName}</option>}
             {workspaces.map((workspace) => (
@@ -3039,7 +3098,7 @@ export function CodingChatPanel() {
             type="button"
             onClick={() => toggleWorkspacePanel("files")}
             aria-pressed={showFiles}
-            className={`min-h-12 shrink-0 rounded-xl border px-3 text-xs font-semibold ${showFiles ? "border-cyan-400/50 bg-cyan-500/15 text-cyan-200" : "border-slate-700 text-slate-400"}`}
+            className={`hidden min-h-12 shrink-0 rounded-xl border px-3 text-xs font-semibold lg:flex lg:items-center ${showFiles ? "border-cyan-400/50 bg-cyan-500/15 text-cyan-200" : "border-slate-700 text-slate-400"}`}
           >
             Explorer {files.length > 0 ? `(${files.length})` : ""}
           </button>
@@ -3047,7 +3106,7 @@ export function CodingChatPanel() {
             type="button"
             onClick={() => toggleWorkspacePanel("preview")}
             aria-pressed={showPreview}
-            className={`min-h-12 shrink-0 rounded-xl border px-3 text-xs font-semibold ${showPreview ? "border-violet-400/50 bg-violet-500/15 text-violet-200" : "border-slate-700 text-slate-400"}`}
+            className={`hidden min-h-12 shrink-0 rounded-xl border px-3 text-xs font-semibold lg:flex lg:items-center ${showPreview ? "border-violet-400/50 bg-violet-500/15 text-violet-200" : "border-slate-700 text-slate-400"}`}
           >
             Preview
           </button>
@@ -3088,12 +3147,12 @@ export function CodingChatPanel() {
               Cancel
             </button>
           )}
-          <details className="group relative shrink-0">
-            <summary className="flex min-h-12 cursor-pointer list-none items-center rounded-xl border border-cyan-400/30 px-3 text-xs font-semibold text-cyan-200 [&::-webkit-details-marker]:hidden">
+          <details className="group relative w-full shrink-0 lg:w-auto">
+            <summary className="flex min-h-12 w-full cursor-pointer list-none items-center justify-between rounded-xl border border-cyan-400/30 px-3 text-xs font-semibold text-cyan-200 [&::-webkit-details-marker]:hidden lg:w-auto">
               {codingDeployment ? `Deployment · ${codingDeployment.status}` : "Deployment status"}
               <span className="ml-2 text-[10px] text-cyan-300/70" aria-hidden="true">⌄</span>
             </summary>
-            <div className="absolute right-0 top-full z-50 mt-2 max-h-[min(70dvh,36rem)] w-[min(90vw,34rem)] overflow-y-auto rounded-2xl border border-cyan-500/30 bg-slate-950 p-3 shadow-2xl">
+            <div className="relative mt-2 max-h-none w-full overflow-visible rounded-2xl border border-cyan-500/30 bg-slate-950 p-3 shadow-2xl lg:absolute lg:right-0 lg:top-full lg:z-50 lg:mt-2 lg:max-h-[min(70dvh,36rem)] lg:w-[min(90vw,34rem)] lg:overflow-y-auto">
               <p className="text-xs font-semibold text-cyan-200">EpicGlobal hosting</p>
               <p className="mt-1 text-[10px] leading-4 text-slate-400">
                 Static is for browser-only React apps. Full-stack sends source to EpicGlobal, which builds and runs the Node.js server on your existing Droplet; its package.json needs a start script and the server must listen on PORT. Full-stack needs the EpicGlobal API key, but no GitHub repository, Docker, or coding runner. Builds run with the same host permissions as EpicGlobal's existing Git deployments.
@@ -3172,12 +3231,12 @@ export function CodingChatPanel() {
               {deploymentError && <p role="alert" className="mt-3 text-xs text-rose-200">{deploymentError}</p>}
             </div>
           </details>
-          <details className="group relative shrink-0">
-            <summary className="flex min-h-12 cursor-pointer list-none items-center rounded-xl border border-violet-400/30 px-3 text-xs font-semibold text-violet-200 [&::-webkit-details-marker]:hidden">
+          <details className="group relative w-full shrink-0 lg:w-auto">
+            <summary className="flex min-h-12 w-full cursor-pointer list-none items-center justify-between rounded-xl border border-violet-400/30 px-3 text-xs font-semibold text-violet-200 [&::-webkit-details-marker]:hidden lg:w-auto">
               Export / GitHub
               <span className="ml-2 text-[10px] text-violet-300/70" aria-hidden="true">⌄</span>
             </summary>
-            <div className="absolute right-0 top-full z-50 mt-2 max-h-[min(70dvh,36rem)] w-[min(90vw,34rem)] overflow-y-auto rounded-2xl border border-violet-500/30 bg-slate-950 p-3 shadow-2xl">
+            <div className="relative mt-2 max-h-none w-full overflow-visible rounded-2xl border border-violet-500/30 bg-slate-950 p-3 shadow-2xl lg:absolute lg:right-0 lg:top-full lg:z-50 lg:mt-2 lg:max-h-[min(70dvh,36rem)] lg:w-[min(90vw,34rem)] lg:overflow-y-auto">
               <p className="text-xs font-semibold text-violet-200">Export or publish this project</p>
               <p className="mt-1 text-[10px] leading-4 text-slate-400">
                 GitHub uses broad repository permission for public and private repositories. Matching paths are overwritten; other files are kept.
@@ -3266,7 +3325,7 @@ export function CodingChatPanel() {
       </header>
 
       <div className="flex min-h-0 flex-1 flex-col lg:flex-row">
-        <aside className={`${showFiles ? "flex" : "hidden"} w-full shrink-0 flex-col border-b border-cyan-500/20 bg-slate-950/80 lg:w-64 lg:border-b-0 lg:border-r`} aria-label="Project file tree">
+        <aside className={`${showFiles ? "flex" : "hidden"} min-h-0 w-full flex-1 flex-col border-b border-cyan-500/20 bg-slate-950/80 lg:w-64 lg:flex-none lg:border-b-0 lg:border-r`} aria-label="Project file tree">
           <div className="flex min-h-14 shrink-0 items-center justify-between border-b border-slate-800 px-3">
             <div>
               <p className="text-[10px] font-bold uppercase tracking-widest text-cyan-400">Workspace</p>
@@ -3276,27 +3335,71 @@ export function CodingChatPanel() {
               ×
             </button>
           </div>
-          <div className="grid shrink-0 grid-cols-2 gap-2 border-b border-slate-800 p-3">
-            <input
-              ref={folderInputRef}
-              type="file"
-              multiple
-              className="hidden"
-              onChange={(event) => {
-                void addFiles(event.target.files, false);
-                event.target.value = "";
-              }}
-            />
-            <input
-              ref={zipImportInputRef}
-              type="file"
-              accept=".zip,application/zip"
-              className="hidden"
-              onChange={(event) => {
-                void importWorkspaceZip(event.target.files?.[0] ?? null);
-                event.target.value = "";
-              }}
-            />
+          <input
+            ref={folderInputRef}
+            type="file"
+            multiple
+            className="hidden"
+            onChange={(event) => {
+              void addFiles(event.target.files, false);
+              event.target.value = "";
+            }}
+          />
+          <input
+            ref={zipImportInputRef}
+            type="file"
+            accept=".zip,application/zip"
+            className="hidden"
+            onChange={(event) => {
+              void importWorkspaceZip(event.target.files?.[0] ?? null);
+              event.target.value = "";
+            }}
+          />
+          <div className="grid shrink-0 grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] gap-2 border-b border-slate-800 p-2 lg:hidden">
+            <button type="button" onClick={() => folderInputRef.current?.click()} className="min-h-12 rounded-xl bg-cyan-400 px-2 text-xs font-bold text-slate-950">
+              Open folder
+            </button>
+            <button
+              type="button"
+              onClick={() => createWorkspaceFile()}
+              disabled={!workspaceId}
+              className="min-h-12 rounded-xl border border-slate-700 px-2 text-xs font-bold text-slate-200 disabled:opacity-40"
+            >
+              New file
+            </button>
+            <details className="relative">
+              <summary className="flex min-h-12 min-w-12 cursor-pointer list-none items-center justify-center rounded-xl border border-slate-700 text-sm font-bold text-slate-200 [&::-webkit-details-marker]:hidden" aria-label="More file actions">
+                ···
+              </summary>
+              <div className="absolute right-0 top-full z-30 mt-2 grid w-[min(85vw,18rem)] grid-cols-2 gap-2 rounded-xl border border-slate-700 bg-slate-950 p-2 shadow-2xl">
+                <button
+                  type="button"
+                  onClick={() => createWorkspaceFile(LOCAL_ENV_FILE_NAME)}
+                  disabled={!workspaceId}
+                  className="min-h-12 rounded-xl border border-emerald-500/30 px-2 text-xs font-bold text-emerald-200 disabled:opacity-40"
+                >
+                  New .env.local
+                </button>
+                <button
+                  type="button"
+                  onClick={() => zipImportInputRef.current?.click()}
+                  disabled={zipImporting}
+                  className="min-h-12 rounded-xl border border-slate-700 px-2 text-xs font-bold text-slate-200 disabled:opacity-40"
+                >
+                  {zipImporting ? "Uploading…" : "Upload ZIP"}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void exportWorkspaceZip()}
+                  disabled={zipExporting || files.length === 0}
+                  className="col-span-2 min-h-12 rounded-xl border border-violet-400/30 px-2 text-xs font-bold text-violet-200 disabled:opacity-40"
+                >
+                  {zipExporting ? "Preparing…" : "Download ZIP"}
+                </button>
+              </div>
+            </details>
+          </div>
+          <div className="hidden shrink-0 grid-cols-2 gap-2 border-b border-slate-800 p-3 lg:grid">
             <button type="button" onClick={() => folderInputRef.current?.click()} className="min-h-12 rounded-xl bg-cyan-400 px-3 text-xs font-bold text-slate-950">
               Open folder
             </button>
@@ -3619,7 +3722,97 @@ export function CodingChatPanel() {
               ))}
             </div>
           )}
-          <div className="mt-2 flex items-center gap-2 overflow-x-auto border-t border-slate-800 px-1 pt-2 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+          <div className="mt-2 grid gap-2 border-t border-slate-800 px-1 pt-2 lg:hidden">
+            <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-2">
+              <select
+                value={mode}
+                onChange={(event) => setMode(CodingModeSchema.parse(event.target.value))}
+                disabled={showChatHistory}
+                aria-label="Coding mode"
+                className="min-h-12 min-w-0 rounded-xl border border-slate-700 bg-slate-950/70 px-3 text-base text-slate-200 disabled:opacity-40"
+              >
+                {(Object.keys(CODING_MODE_LABELS) as CodingMode[]).map((item) => (
+                  <option key={item} value={item}>{CODING_MODE_LABELS[item].label}</option>
+                ))}
+              </select>
+              <button
+                type="button"
+                role="switch"
+                aria-checked={!focusedContextEnabled}
+                onClick={() => {
+                  const enableFocusedContext = !focusedContextEnabled;
+                  setFocusedContextEnabled(enableFocusedContext);
+                  setContextScopeNotice(null);
+                  setFullContextNotice(!enableFocusedContext);
+                }}
+                disabled={showChatHistory || loading}
+                aria-label={focusedContextEnabled ? "Use full workspace context" : "Use focused workspace context"}
+                className={`min-h-12 rounded-xl border px-3 text-xs font-bold disabled:opacity-40 ${focusedContextEnabled ? "border-amber-400/50 bg-amber-500/10 text-amber-200" : "border-cyan-400/50 bg-cyan-500/10 text-cyan-200"}`}
+              >
+                {focusedContextEnabled ? "Focused" : "Full context"}
+              </button>
+            </div>
+            <div className="grid grid-cols-5 gap-1">
+              <button
+                type="button"
+                onClick={() => fileInputRef.current?.click()}
+                disabled={showChatHistory}
+                className="flex min-h-12 min-w-12 items-center justify-center rounded-xl border border-slate-700 bg-slate-950/70 text-lg text-slate-300 disabled:opacity-40"
+                aria-label="Attach code"
+              >
+                +
+              </button>
+              <button
+                type="button"
+                onClick={() => imageInputRef.current?.click()}
+                disabled={loading || showChatHistory}
+                className="flex min-h-12 min-w-12 items-center justify-center rounded-xl border border-violet-400/30 bg-slate-950/70 text-violet-200 disabled:opacity-40"
+                aria-label="Attach image"
+              >
+                <svg viewBox="0 0 24 24" aria-hidden="true" className="h-5 w-5 fill-none stroke-current stroke-2">
+                  <rect x="3" y="4" width="18" height="16" rx="2" />
+                  <circle cx="8.5" cy="9" r="1.5" />
+                  <path d="m21 15-5-5L5 20" strokeLinecap="round" strokeLinejoin="round" />
+                </svg>
+              </button>
+              <select
+                value={agent}
+                onChange={(event) => setAgent(CodingAgentSchema.parse(event.target.value))}
+                disabled={showChatHistory}
+                aria-label="DeepSeek coding model"
+                className="min-h-12 min-w-12 rounded-xl border border-slate-700 bg-slate-950/70 px-1 text-base text-slate-300 disabled:opacity-40"
+              >
+                <option value="deepseek-chat" disabled={attachedImages.length > 0}>Chat</option>
+                <option value="deepseek-reasoner" disabled={attachedImages.length > 0}>R1</option>
+                <option value="deepseek-flash">Vision</option>
+              </select>
+              <button
+                type="button"
+                role="switch"
+                aria-checked={voiceModeEnabled}
+                onClick={toggleVoiceMode}
+                disabled={showChatHistory}
+                aria-label={voiceModeEnabled ? "Turn Nexus voice mode off" : "Turn Nexus voice mode on"}
+                title={voiceModeEnabled ? voiceStatusLabel(voiceStatus) : "Turn on Nexus voice mode"}
+                className={`relative flex min-h-12 min-w-12 items-center justify-center rounded-xl border disabled:opacity-40 ${voiceModeEnabled ? "border-cyan-400/60 bg-cyan-400/15 text-cyan-200" : "border-slate-700 text-slate-400"}`}
+              >
+                <svg viewBox="0 0 24 24" aria-hidden="true" className="h-5 w-5 fill-none stroke-current stroke-2">
+                  <path d="M12 3a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3Z" strokeLinecap="round" strokeLinejoin="round" />
+                  <path d="M5 11a7 7 0 0 0 14 0M12 18v3M9 21h6" strokeLinecap="round" strokeLinejoin="round" />
+                </svg>
+              </button>
+              <button
+                type="button"
+                onClick={loading ? stop : () => void send()}
+                disabled={showChatHistory || (!loading && !input.trim() && attachedImages.length === 0)}
+                className={`min-h-12 min-w-12 rounded-xl px-1 text-xs font-bold ${loading ? "border border-rose-400/40 bg-rose-500/10 text-rose-200" : "bg-cyan-400 text-slate-950 disabled:bg-slate-700 disabled:text-slate-500"}`}
+                aria-label={loading ? "Stop response" : "Send coding request"}
+              >
+                {loading ? "Stop" : "Send"}
+              </button>
+            </div>
+          </div>
+          <div className="mt-2 hidden items-center gap-2 overflow-x-auto border-t border-slate-800 px-1 pt-2 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden lg:flex">
             <span className="shrink-0 text-[10px] font-bold uppercase tracking-widest text-slate-500">Mode</span>
             {(Object.keys(CODING_MODE_LABELS) as CodingMode[]).map((item) => (
               <button
@@ -3640,6 +3833,7 @@ export function CodingChatPanel() {
               onClick={() => {
                 setFocusedContextEnabled((current) => !current);
                 setContextScopeNotice(null);
+                setFullContextNotice(false);
               }}
               disabled={showChatHistory || loading}
               aria-label={focusedContextEnabled ? "Use full workspace context" : "Use focused workspace context"}
@@ -3699,8 +3893,13 @@ export function CodingChatPanel() {
           </div>
         </div>
         {contextScopeNotice && (
-          <p role="status" className="mt-1 text-[10px] text-amber-300">
+          <p role="status" className="mt-1 hidden text-[10px] text-amber-300 lg:block">
             {contextScopeNotice}
+          </p>
+        )}
+        {fullContextNotice && (
+          <p role="status" className="mt-1 text-[10px] text-cyan-200 lg:hidden">
+            Full context enabled. Your message will include the full workspace.
           </p>
         )}
         <p className="mt-2 hidden text-[10px] text-slate-600 lg:block">
