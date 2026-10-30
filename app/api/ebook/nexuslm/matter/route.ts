@@ -2,6 +2,10 @@ import { NextRequest, NextResponse } from "next/server";
 import { generateObject } from "ai";
 import { z } from "zod";
 import { deepSeekModel } from "@/lib/ai-providers";
+import {
+  formatNexusLMConversationInstructions,
+  NexusLMConversationInstructionsSchema,
+} from "@/lib/nexuslm-conversation";
 import { includeRequiredBackMatterItems, NexusLMBookOutlineSchema } from "@/lib/nexuslm-book-outline";
 import { EM_DASH_MINIMIZATION_RULES } from "@/lib/editorial-style-bible";
 import { NEXUSLM_SCRIPTURE_FORMATTING_RULES } from "@/lib/scripture-formatter";
@@ -23,6 +27,7 @@ const RequestSchema = z.object({
   bookTitle: z.string().trim().min(1).max(300),
   authorName: z.string().max(200),
   outline: NexusLMBookOutlineSchema,
+  conversationInstructions: NexusLMConversationInstructionsSchema,
   chapters: z.array(z.object({
     number: z.number().int().positive().max(100),
     title: z.string().trim().min(1).max(300),
@@ -75,11 +80,13 @@ export async function POST(request: NextRequest) {
   const backMatterInstruction = input.kind === "backMatter"
     ? `Return the existing manuscript back-matter fields: a glossary with first appearances, a reading-group guide with 3–7 questions for every outlined chapter, and recommended resources only when present in the sources. The Scripture index is built from the completed chapter citations after generation.`
     : "";
+  const conversationInstructions = formatNexusLMConversationInstructions(input.conversationInstructions);
 
   try {
     const system = `ALL SCRIPTURE MUST BE IN BLOCK QUOTES.
 You are NexusLM, writing the ${matterLabel} for a completed book.
 Write only the requested matter. This material is written after all chapters; do not draft or revise chapters.
+Apply relevant requirements and corrections from the user's chat instructions. Newer applicable user instructions override older conflicting preferences.
 Treat the completed manuscript and supplied transcripts as the only authority for factual claims. Be faithful to their meaning and emphasis. Do not invent, infer, embellish, or add facts, examples, quotations, doctrine, biography, acknowledgements, publication details, resources, or scripture not explicitly supported by the sources. If a requested field requires unavailable information, leave it empty rather than filling the gap.
 ${backMatterInstruction}
 ${EM_DASH_MINIMIZATION_RULES}
@@ -90,6 +97,8 @@ AUTHOR: ${input.authorName || "Not specified"}
 
 ${matterLabel.toUpperCase()} FIELDS:
 ${matterItems.map((item, index) => `${index + 1}. ${item.title}\nPurpose: ${item.purpose}`).join("\n\n")}
+
+${conversationInstructions}
 
 COMPLETED CHAPTERS:
 ${chapterContext}

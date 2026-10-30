@@ -19,6 +19,10 @@ import {
   PREMIUM_BOOK_STYLE_RULES,
 } from "@/lib/editorial-style-bible";
 import { SCRIPTURE_FORMATTING_RULES } from "@/lib/scripture-formatter";
+import {
+  formatNexusLMConversationInstructions,
+  NexusLMConversationInstructionsSchema,
+} from "@/lib/nexuslm-conversation";
 import { NexusLMResponseLengthSchema, NEXUSLM_RESPONSE_LENGTHS } from "@/lib/nexuslm-response";
 
 export const runtime = "nodejs";
@@ -38,6 +42,7 @@ const RequestSchema = z.object({
   manifest: EbookManifestSchema,
   instruction: z.string().min(1).max(4000),
   history: z.array(ChatMessageSchema).max(20).optional(),
+  conversationInstructions: NexusLMConversationInstructionsSchema,
   responseLength: NexusLMResponseLengthSchema.default("default"),
   llmTemperature: z.number().min(0).max(1).optional(),
   transcriptSources: z.array(TranscriptSourceSchema).max(20).optional(),
@@ -372,6 +377,7 @@ export async function POST(req: NextRequest) {
       temperature: input.llmTemperature ?? 0.15,
       system: `You are the Nexus Book Director — a precision ebook editor with MAXIMUM AUTHORITY over every part of this published teaching book. You receive the full book structure and can make any change the user requests.
 ${responseLength.instruction}
+Apply relevant requirements and corrections from the user's chat instructions. Newer applicable user instructions override older conflicting preferences.
 
 ════════════════════════════════════════════
 SPEAKER-FIDELITY LAW — NON-NEGOTIABLE
@@ -556,6 +562,8 @@ ${isChapterWideEdit ? "- This is a chapter-wide edit. For each explicitly named 
               "",
             ]
           : []),
+        formatNexusLMConversationInstructions(input.conversationInstructions),
+        "",
         "CURRENT USER INSTRUCTION:",
         instruction,
       ].join("\n"),

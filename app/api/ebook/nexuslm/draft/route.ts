@@ -2,6 +2,10 @@ import { NextRequest, NextResponse } from "next/server";
 import { generateObject } from "ai";
 import { z } from "zod";
 import { deepSeekModel, deepSeekReasonerModel } from "@/lib/ai-providers";
+import {
+  formatNexusLMConversationInstructions,
+  NexusLMConversationInstructionsSchema,
+} from "@/lib/nexuslm-conversation";
 import { EM_DASH_MINIMIZATION_RULES } from "@/lib/editorial-style-bible";
 import { ChapterDraftSchema } from "@/lib/schemas/ebook";
 import { NEXUSLM_SCRIPTURE_FORMATTING_RULES } from "@/lib/scripture-formatter";
@@ -22,6 +26,7 @@ const RequestSchema = z.object({
     manuscriptChapter: ChapterDraftSchema.nullable(),
   }),
   outline: NexusLMBookOutlineSchema.nullable().optional(),
+  conversationInstructions: NexusLMConversationInstructionsSchema,
   transcripts: z.array(z.object({ label: z.string().min(1).max(200), text: z.string().max(250000) })).max(20),
   persona: z.string().min(1).max(80),
   agent: NexusLMAgentSchema.default("nexusR1"),
@@ -75,6 +80,7 @@ ${outlineChapter.sections.map((section, index) => `${index + 1}. ${section.headi
   const transcriptScopeInstruction = input.transcriptScope === "selected"
     ? `Use only the selected transcript slot "${input.selectedTranscriptLabel}" supplied below as source material for this chapter.`
     : "Use all transcript slots supplied below as source material, choosing the strongest material for this chapter.";
+  const conversationInstructions = formatNexusLMConversationInstructions(input.conversationInstructions);
 
   try {
     const system = `ALL SCRIPTURE MUST BE IN BLOCK QUOTES.
@@ -83,6 +89,7 @@ You are NexusLM, a professional book ghostwriter. Selected agent: ${input.agent}
 Presentation form: ${writingStyle.label}. ${writingStyle.instruction}
 ${transcriptScopeInstruction} Treat the supplied transcript as the authority for factual, theological, biographical, and scriptural claims. Be faithful to its meaning and emphasis. Do not invent, infer, embellish, or add facts, examples, testimonies, quotations, doctrine, claims, or scripture not explicitly supported by the supplied source. If material is missing, omit it or mark the gap for author input; never fill it in.
 ${outlineChapter ? "The saved book outline is the required structure for this chapter; follow its title, purpose, headings, and order exactly while writing polished prose." : "Choose a coherent chapter structure from the supported source material. Do not treat an existing manuscript chapter, chapter premise, key point, or prior wording as mandatory."}
+Apply relevant requirements and corrections from the user's chat instructions. Follow the latest applicable user instruction when it conflicts with a general formatting preference.
 Use only connective wording and transitions as original composition; they must not introduce new information or change the source's meaning. Preserve significant points without exaggeration, omission, or unsupported expansion. Remove live-audience language without changing the teaching.
   CHAPTER OPENING PLACEMENT: Leave the ChapterDraft intro field empty. Do not write a separate premise, overview, thesis summary, or chapter-preview block before the body. The actual chapter introduction belongs in the opening paragraphs of Section 1, written as finished reader-facing prose that enters the chapter's material directly. Section 1 must begin with the chapter body, not planning language or a summary of what the chapter will discuss.
   SERIES-SERMON TO BOOK TRANSFORMATION: Sermon transcripts may recap earlier messages. Treat that recap as source context, not as mandatory chapter-opening material. Do not open with "last week," "as we saw," "continuing this series," or a replay of an earlier chapter. If the recap helps orient the reader, compress it into the shortest useful bridge and pivot quickly to this chapter's new movement. Write for a reader who may not have attended the sermon, and do not make the book repeat live-series catch-up.
@@ -97,6 +104,8 @@ EXISTING CHAPTER OUTLINE:
 ${chapterTitles || "No outline available."}
 
 ${outlineInstruction}
+
+${conversationInstructions}
 
 REQUEST:
 Write Chapter ${input.chapterNumber} based on this request: ${input.instruction}

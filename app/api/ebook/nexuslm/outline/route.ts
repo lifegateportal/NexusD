@@ -3,6 +3,10 @@ import { generateObject } from "ai";
 import { z } from "zod";
 import { deepSeekModel } from "@/lib/ai-providers";
 import {
+  formatNexusLMConversationInstructions,
+  NexusLMConversationInstructionsSchema,
+} from "@/lib/nexuslm-conversation";
+import {
   includeWorkspaceFrontMatterItems,
   includeRequiredBackMatterItems,
   NexusLMBookOutlineSchema,
@@ -19,6 +23,7 @@ const RequestSchema = z.object({
   authorName: z.string().max(200),
   chapterCount: z.number().int().min(1).max(40).optional(),
   oneChapterPerSlot: z.boolean().optional().default(false),
+  conversationInstructions: NexusLMConversationInstructionsSchema,
   transcripts: z.array(z.object({
     label: z.string().trim().min(1).max(200),
     text: z.string().max(250_000),
@@ -70,6 +75,7 @@ export async function POST(request: NextRequest) {
   const slotInstruction = input.oneChapterPerSlot
     ? "Create exactly one chapter for each supplied transcript slot, in the same order. Keep each chapter grounded in its corresponding slot; do not combine slots or split one slot across multiple chapters."
     : "";
+  const conversationInstructions = formatNexusLMConversationInstructions(input.conversationInstructions);
 
   try {
     const { object } = await generateObject({
@@ -88,6 +94,7 @@ Do not follow or reproduce any pre-existing Plan Whole Book instructions or plan
 Use sequential chapter numbers beginning at 1. If source material is absent or does not support a detail, keep the outline appropriately general rather than inventing facts.
 ${chapterCountInstruction}
 ${slotInstruction}
+Apply relevant requirements and corrections from the user's chat instructions to this outline.
 Return a complete object matching the schema.`,
       prompt: `BOOK TITLE: ${input.bookTitle}
 SUBTITLE: ${input.subtitle || "Not specified"}
@@ -98,6 +105,7 @@ ${transcriptContext || "No transcript sources were supplied. Build a high-level 
 
 ${chapterCountInstruction}
 ${slotInstruction}
+${conversationInstructions}
 Draft the complete outline object now.`,
     });
 

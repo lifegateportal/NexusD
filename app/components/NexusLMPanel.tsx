@@ -225,6 +225,12 @@ function compactHistory(history: Message[]): Array<{ role: "user" | "assistant";
     }));
 }
 
+function compactUserInstructions(history: Message[]): string[] {
+  return history
+    .filter((message) => message.role === "user" && message.content.trim())
+    .map((message) => message.content.trim());
+}
+
 function initialMessage(manifest: EbookManifest | null): Message {
   return manifest
     ? { role: "system", content: `NexusLM is connected to “${manifest.bookTitle}”. Ask about the manuscript, challenge its thinking, or request a focused edit.` }
@@ -1713,6 +1719,7 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
             authorName: manifest?.authorName ?? manuscript.authorName,
             chapterCount: outlineChapterRequest.chapterCount,
             oneChapterPerSlot: outlineChapterRequest.oneChapterPerSlot,
+            conversationInstructions: compactUserInstructions(nextMessages),
             transcripts,
           }),
         });
@@ -1760,6 +1767,7 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
             outline: manuscript.outline,
             chapters,
             allQuotes: manifest?.allQuotes ?? [],
+            conversationInstructions: compactUserInstructions(nextMessages),
             transcripts: requestTranscripts,
             responseLength: requestResponseLength,
           }),
@@ -1819,6 +1827,7 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
               manuscriptChapter: manifest?.chapters.find((chapter) => chapter.number === chapterNumber) ?? null,
             },
             outline: manuscript.outline ?? null,
+            conversationInstructions: compactUserInstructions(nextMessages),
             transcripts: requestTranscripts,
             transcriptScope: effectiveTranscriptScope,
             selectedTranscriptLabel: draftSelectedTranscript?.label ?? null,
@@ -1867,6 +1876,7 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
           manifest,
           instruction: `${MODES[activeMode].prompt}\nPersona: ${PERSONAS[persona].description}\n\nUser request:\n${userMessage}`,
           history: compactHistory(nextMessages),
+          conversationInstructions: compactUserInstructions(nextMessages),
           responseLength: requestResponseLength,
           llmTemperature: nexusLMTemperature,
           pipeline: pipelineSnapshot ?? undefined,
