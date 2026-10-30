@@ -55,7 +55,9 @@ Book-mode Scripture is user-directed rather than locked to one sermon template. 
 ### Outline-guided book writing
 
 - Ask NexusLM to **draft a book outline**, or use **Draft outline** in the Manuscript workspace. This uses a dedicated outline workflow rather than the existing Plan Whole Book instructions.
+- State a number such as **“exactly four chapters”** to enforce that exact outline length, or say **“one chapter per slot”** to make one chapter for each supplied transcript slot. Conflicting counts are reported instead of silently changing the requested structure.
 - The saved outline includes a thesis, target reader, chapter purposes and section headings, plus front- and back-matter items. It is persisted with the browser-based manuscript and remains visible in the conversation and workspace.
+- Every outline includes back-matter items for **Study Questions**, a **Glossary**, and an **Index of Scripture**. Questions and definitions are drawn from the completed chapters, and the index contains only cited Scripture references with their chapter locations.
 - Chapter drafts use the saved chapter purpose and section order. After reviewing and adding a chapter to the manuscript, reply **yes** to draft the next outlined item. The sequence reaches front matter and then back matter only after all outlined chapters are present. Review generated matter and select **Add to book** to include it in the Ebook Studio manifest, reader, and exports.
 - A request such as **“write chapter 2 from slot 2”** selects that numbered transcript slot regardless of which slot is highlighted. An unavailable slot is reported instead of silently substituting the highlighted one.
 - Chapter, matter, and book-writing prompts require source-faithful content without invented facts or Scripture. Quoted Scripture must be a standalone blockquote with its reference on a separate line; when the supplied source has only a reference, NexusLM must not invent verse wording.

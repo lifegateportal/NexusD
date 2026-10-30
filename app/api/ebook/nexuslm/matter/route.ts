@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { generateText } from "ai";
 import { z } from "zod";
 import { deepSeekModel } from "@/lib/ai-providers";
-import { NexusLMBookOutlineSchema } from "@/lib/nexuslm-book-outline";
+import { includeRequiredBackMatterItems, NexusLMBookOutlineSchema } from "@/lib/nexuslm-book-outline";
 import { EM_DASH_MINIMIZATION_RULES } from "@/lib/editorial-style-bible";
 import { normalizeScriptureBlockquotes, NEXUSLM_SCRIPTURE_FORMATTING_RULES } from "@/lib/scripture-formatter";
 import { NexusLMResponseLengthSchema, NEXUSLM_RESPONSE_LENGTHS, sanitizeNexusLMText } from "@/lib/nexuslm-response";
@@ -48,7 +48,9 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: error instanceof Error ? error.message : "Invalid book matter request." }, { status: 400 });
   }
 
-  const matterItems = input.kind === "frontMatter" ? input.outline.frontMatter : input.outline.backMatter;
+  const matterItems = input.kind === "frontMatter"
+    ? input.outline.frontMatter
+    : includeRequiredBackMatterItems(input.outline.backMatter);
   const matterLabel = input.kind === "frontMatter" ? "front matter" : "back matter";
   const chapterContext = input.chapters.map((chapter) => {
     const content = chapter.content.trim();
@@ -61,6 +63,9 @@ export async function POST(request: NextRequest) {
     .map((transcript) => `[SOURCE: ${transcript.label}]\n${transcript.text}`)
     .join("\n\n---\n\n");
   const responseLength = NEXUSLM_RESPONSE_LENGTHS[input.responseLength];
+  const backMatterInstruction = input.kind === "backMatter"
+    ? `For Study Questions, provide chapter-grouped questions drawn only from the completed chapters. For the Glossary, define only terms whose meaning is supported by the completed chapters. For the Index of Scripture, list only references actually cited in those chapters and identify the chapter number(s) where each appears; do not add verse wording or uncited references.`
+    : "";
 
   try {
     const { text } = await generateText({
@@ -70,6 +75,7 @@ export async function POST(request: NextRequest) {
       system: `You are NexusLM, writing the ${matterLabel} for a completed book.
 Write only the requested matter items, in the exact outline order, using each item title as a heading. This material is written after all chapters; do not draft or revise chapters.
 Treat the completed manuscript and supplied transcripts as the only authority for factual claims. Be faithful to their meaning and emphasis. Do not invent, infer, embellish, or add facts, examples, quotations, doctrine, biography, acknowledgements, publication details, resources, or scripture not explicitly supported by the sources. If an outline item requires unavailable information, use a brief clearly marked [Author input needed] placeholder rather than filling the gap.
+${backMatterInstruction}
 ${EM_DASH_MINIMIZATION_RULES}
 ${NEXUSLM_SCRIPTURE_FORMATTING_RULES}
 Every quoted Scripture passage, even one verse or a short phrase, MUST be a standalone Markdown blockquote with its reference on a separate blockquote line; never put Scripture in inline prose. Quote only wording present in the supplied source. If the source provides only a reference, do not invent verse wording.

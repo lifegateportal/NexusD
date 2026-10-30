@@ -24,7 +24,7 @@ export const NexusLMBookOutlineSchema = z.object({
   targetReader: z.string().trim().min(1).max(1200),
   chapters: z.array(NexusLMOutlineChapterSchema).min(1).max(40),
   frontMatter: z.array(NexusLMOutlineMatterItemSchema).min(1).max(12),
-  backMatter: z.array(NexusLMOutlineMatterItemSchema).min(1).max(12),
+  backMatter: z.array(NexusLMOutlineMatterItemSchema).min(1).max(15),
 }).strict();
 
 export const NexusLMOutlineContinuationSchema = z.discriminatedUnion("kind", [
@@ -45,6 +45,106 @@ export const NexusLMOutlineContinuationSchema = z.discriminatedUnion("kind", [
 
 export type NexusLMBookOutline = z.infer<typeof NexusLMBookOutlineSchema>;
 export type NexusLMOutlineContinuation = z.infer<typeof NexusLMOutlineContinuationSchema>;
+
+const REQUIRED_BACK_MATTER = [
+  {
+    title: "Study Questions",
+    aliases: ["studyquestions", "discussionquestions", "reflectionquestions"],
+    purpose: "Provide source-grounded study and reflection questions grouped by chapter, derived from the completed chapters.",
+  },
+  {
+    title: "Glossary",
+    aliases: ["glossary"],
+    purpose: "Define key terms used in the book as they are used in context, using only meanings supported by the completed chapters.",
+  },
+  {
+    title: "Index of Scripture",
+    aliases: ["indexofscripture", "scriptureindex", "indexofscripturereferences", "scripturereferenceindex"],
+    purpose: "List Scripture references actually cited in the completed chapters and identify where each appears; do not add uncited references or verse text.",
+  },
+] as const;
+
+export function includeRequiredBackMatterItems(
+  items: NexusLMBookOutline["backMatter"],
+): NexusLMBookOutline["backMatter"] {
+  const requiredItems = new Map<string, NexusLMBookOutline["backMatter"][number]>();
+  const additionalItems: NexusLMBookOutline["backMatter"] = [];
+
+  for (const item of items) {
+    const normalizedTitle = item.title.toLowerCase().replace(/[^a-z0-9]/g, "");
+    const required = REQUIRED_BACK_MATTER.find((entry) => entry.aliases.some((alias) => alias === normalizedTitle));
+    if (!required) {
+      additionalItems.push(item);
+    } else if (!requiredItems.has(required.title)) {
+      requiredItems.set(required.title, { ...item, title: required.title });
+    }
+  }
+
+  return [
+    ...additionalItems,
+    ...REQUIRED_BACK_MATTER.map((item) => requiredItems.get(item.title) ?? {
+      title: item.title,
+      purpose: item.purpose,
+    }),
+  ];
+}
+
+const NUMBER_WORDS: Record<string, number> = {
+  one: 1,
+  two: 2,
+  three: 3,
+  four: 4,
+  five: 5,
+  six: 6,
+  seven: 7,
+  eight: 8,
+  nine: 9,
+  ten: 10,
+  eleven: 11,
+  twelve: 12,
+  thirteen: 13,
+  fourteen: 14,
+  fifteen: 15,
+  sixteen: 16,
+  seventeen: 17,
+  eighteen: 18,
+  nineteen: 19,
+  twenty: 20,
+  thirty: 30,
+  forty: 40,
+};
+
+function parseOutlineCount(value: string): number | null {
+  const normalized = value.toLowerCase().replace(/-/g, " ").trim();
+  if (/^\d+$/.test(normalized)) return Number(normalized);
+  const words = normalized.split(/\s+/);
+  const base = NUMBER_WORDS[words[0]];
+  if (base === undefined) return null;
+  if (words.length === 1) return base;
+  const remainder = NUMBER_WORDS[words[1]];
+  return words.length === 2 && base >= 20 && remainder !== undefined && remainder < 10
+    ? base + remainder
+    : null;
+}
+
+export function parseOutlineChapterRequest(
+  instruction: string,
+  transcriptSlotCount: number,
+): { chapterCount?: number; oneChapterPerSlot: boolean } {
+  const oneChapterPerSlot = /\b(?:(?:a|one)\s+)?chapter\s+(?:per|for each|for every)\s+(?:transcript\s+)?slot\b/i.test(instruction);
+  const countInstruction = instruction.replace(
+    /\b(?:(?:a|one)\s+)?chapter\s+(?:per|for each|for every)\s+(?:transcript\s+)?slot\b/gi,
+    " ",
+  );
+  const numberPattern = "(?:\\d+|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty(?:[- ](?:one|two|three|four|five|six|seven|eight|nine))?|thirty(?:[- ](?:one|two|three|four|five|six|seven|eight|nine))?|forty(?:[- ](?:one|two|three|four|five|six|seven|eight|nine))?)";
+  const countMatch = countInstruction.match(new RegExp(`\\b(${numberPattern})[-\\s]+chapters?\\b`, "i"));
+  const requestedCount = countMatch ? parseOutlineCount(countMatch[1]) : null;
+  const chapterCount = requestedCount ?? (oneChapterPerSlot ? transcriptSlotCount : undefined);
+  return {
+    ...(chapterCount === undefined ? {} : { chapterCount }),
+    oneChapterPerSlot,
+  };
+}
 
 export function getNextOutlineContinuation(
   outline: NexusLMBookOutline,

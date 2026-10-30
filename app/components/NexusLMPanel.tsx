@@ -25,9 +25,11 @@ import {
   explicitTranscriptSlotNumber,
   formatOutlineContinuation,
   getNextOutlineContinuation,
+  includeRequiredBackMatterItems,
   isOutlineContinuationAffirmative,
   isOutlineContinuationDecline,
   NexusLMBookOutlineSchema,
+  parseOutlineChapterRequest,
   transcriptForExplicitSlot,
   type NexusLMBookOutline,
   type NexusLMOutlineContinuation,
@@ -398,6 +400,7 @@ function formatChapterDraft(chapter: ChapterDraft): string {
 }
 
 function formatBookOutline(outline: NexusLMBookOutline): string {
+  const backMatter = includeRequiredBackMatterItems(outline.backMatter);
   const chapters = outline.chapters.map((chapter) => [
     `### Chapter ${chapter.number}: ${chapter.title}`,
     chapter.purpose,
@@ -415,7 +418,7 @@ function formatBookOutline(outline: NexusLMBookOutline): string {
     "## Chapters",
     chapters,
     matter("Front matter (written after all chapters)", outline.frontMatter),
-    matter("Back matter (written after all chapters)", outline.backMatter),
+    matter("Back matter (written after all chapters)", backMatter),
   ].filter(Boolean).join("\n\n");
 }
 
@@ -814,7 +817,16 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
         if (cancelled) return;
         setMessages(archive?.messages?.length ? archive.messages : [initialMessage(manifest)]);
         setAttachments(archive?.attachments ?? []);
-        setManuscript(archive?.manuscript ?? createEmptyManuscript(manifest, pipelineSnapshot));
+        const restoredManuscript = archive?.manuscript ?? createEmptyManuscript(manifest, pipelineSnapshot);
+        setManuscript(restoredManuscript.outline
+          ? {
+            ...restoredManuscript,
+            outline: {
+              ...restoredManuscript.outline,
+              backMatter: includeRequiredBackMatterItems(restoredManuscript.outline.backMatter),
+            },
+          }
+          : restoredManuscript);
         setPendingDraft(null);
         setPendingDraftSourceLabel(null);
         setPendingMatter(null);
@@ -1679,6 +1691,7 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
       }
 
       if (activeMode === "outline") {
+        const outlineChapterRequest = parseOutlineChapterRequest(instruction, transcripts.length);
         const res = await fetch("/api/ebook/nexuslm/outline", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -1686,6 +1699,8 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
             bookTitle: manifest?.bookTitle ?? pipelineSnapshot?.bookTitle ?? manuscript.title,
             subtitle: manifest?.subtitle ?? manuscript.subtitle,
             authorName: manifest?.authorName ?? manuscript.authorName,
+            chapterCount: outlineChapterRequest.chapterCount,
+            oneChapterPerSlot: outlineChapterRequest.oneChapterPerSlot,
             transcripts,
           }),
         });
@@ -2815,6 +2830,7 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
                     ? `${manuscript.outline.chapters.length} chapters · front and back matter follow the chapters`
                     : "Draft a fresh outline from the transcript sources, separate from Plan Whole Book."}
                 </p>
+                <p className="mt-1 text-[11px] leading-5 text-slate-500">Specify “exactly four chapters” or “one chapter per slot” to lock the chapter count.</p>
               </div>
               <button
                 type="button"
