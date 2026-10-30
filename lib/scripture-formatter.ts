@@ -254,14 +254,14 @@ PLACEMENT AND SEQUENCING:
 • Never add biblical background (historical setting, authorial intent, cultural or manuscript context) unless the source explicitly stated it.
 • Every scripture must complete TEXT → TRUTH → APPLICATION within 2–3 paragraphs of the quotation.`;
 
-export const NEXUSLM_SCRIPTURE_FORMATTING_RULES = `SCRIPTURE PRESENTATION — USER-DIRECTED:
-• Follow the user's requested Scripture presentation. Do not impose a fixed introduction, application, placement, or blockquote template unless the user asks for it.
-• If the user asks to quote all, every, or selected Scriptures in block form, use standalone Markdown blockquotes and put each reference on its own citation line.
-• If the user asks for inline citations, a list, devotional prose, a study outline, or another presentation, preserve that requested form instead of converting it to blockquotes.
-• Preserve the supplied wording, punctuation, capitalization, translation, and omissions when they are provided. Do not turn a paraphrase into a quotation, invent a reference, or silently substitute a translation.
-• When the user requests a complete or verbatim passage and the wording cannot be verified, use a citation-only reference or explain that verification is needed rather than fabricating text.
-• Do not add speculative biblical allusions or background that the sources and user request do not support.
-• Never reproduce a Bible provider's copyright, licensing, API, or retrieval notice as Scripture.`;
+export const NEXUSLM_SCRIPTURE_FORMATTING_RULES = `SCRIPTURE PRESENTATION — MANDATORY BLOCKQUOTES:
+• In every NexusLM book-writing response, every quoted Scripture passage—including a single verse or short phrase—MUST be a standalone Markdown blockquote, whether or not the user repeats this instruction.
+• Put the Scripture wording on blockquote line(s), then put its reference on a separate blockquote line in the form "> — Book Chapter:Verse (Translation)".
+• Never place quoted Scripture inline in prose, in a heading, or inside a list. Surrounding explanation remains normal prose.
+• Preserve Scripture wording, punctuation, capitalization, translation, and source-provided omissions exactly. Do not invent verse wording, a translation, or a reference, and do not silently substitute another passage.
+• If the source provides only a reference and no verse wording, leave it as a prose citation or mark it for verification; do not turn the reference into a quote.
+• Do not add speculative biblical allusions or background unsupported by the source.
+• Keep the surrounding prose natural, finished, and in the exact Markdown/JSON field requested by the user.`;
 
 export function requestsStandaloneScriptureBlockquotes(instruction: string): boolean {
   const normalized = instruction.toLowerCase();
