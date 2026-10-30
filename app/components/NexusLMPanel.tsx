@@ -25,6 +25,7 @@ import {
   explicitTranscriptSlotNumber,
   formatOutlineContinuation,
   getNextOutlineContinuation,
+  includeWorkspaceFrontMatterItems,
   includeRequiredBackMatterItems,
   isOutlineContinuationAffirmative,
   isOutlineContinuationDecline,
@@ -41,6 +42,14 @@ import {
   saveEbookUndoSnapshot,
 } from "@/lib/ebook-change-control";
 import type { EbookChangeEntry, EbookUndoSnapshot } from "@/lib/ebook-change-control";
+import {
+  applyNexusLMBackMatter,
+  applyNexusLMFrontMatter,
+  NexusLMBackMatterFieldsSchema,
+  NexusLMFrontMatterFieldsSchema,
+  type NexusLMBackMatterFields,
+  type NexusLMFrontMatterFields,
+} from "@/lib/nexuslm-matter-mapping";
 
 type NexusLMPanelProps = {
   conversationKey: string;
@@ -72,7 +81,9 @@ type GeneralRequest = {
   responseLength: NexusLMResponseLength;
 };
 type ManuscriptChapter = NexusLMManuscriptChapter;
-type PendingMatter = { kind: "frontMatter" | "backMatter"; content: string; transcriptLabel: string | null };
+type PendingMatter =
+  | { kind: "frontMatter"; content: string; fields: NexusLMFrontMatterFields; transcriptLabel: string | null }
+  | { kind: "backMatter"; content: string; fields: NexusLMBackMatterFields; transcriptLabel: string | null };
 type LibraryPatch = {
   slug: string;
   title?: string;
@@ -823,6 +834,7 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
             ...restoredManuscript,
             outline: {
               ...restoredManuscript.outline,
+              frontMatter: includeWorkspaceFrontMatterItems(),
               backMatter: includeRequiredBackMatterItems(restoredManuscript.outline.backMatter),
             },
           }
@@ -1747,19 +1759,30 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
             authorName: manifest?.authorName ?? manuscript.authorName,
             outline: manuscript.outline,
             chapters,
+            allQuotes: manifest?.allQuotes ?? [],
             transcripts: requestTranscripts,
             responseLength: requestResponseLength,
           }),
         });
-        const json = await res.json() as { content?: unknown; error?: string };
+        const json = await res.json() as {
+          content?: unknown;
+          matter?: { kind?: unknown; fields?: unknown };
+          error?: string;
+        };
         if (!res.ok || json.error) throw new Error(json.error ?? `Request failed (${res.status})`);
         if (typeof json.content !== "string" || !json.content.trim()) throw new Error("NexusLM returned empty book matter.");
         const content = sanitizeNexusLMText(json.content);
-        setPendingMatter({
-          kind: continuationTask.kind,
-          content,
-          transcriptLabel: draftSelectedTranscript?.label ?? continuationTask.transcriptLabel ?? null,
-        });
+        const transcriptLabel = draftSelectedTranscript?.label ?? continuationTask.transcriptLabel ?? null;
+        if (json.matter?.kind !== continuationTask.kind) throw new Error("NexusLM returned matter for the wrong manuscript section.");
+        if (continuationTask.kind === "frontMatter") {
+          const parsedFields = NexusLMFrontMatterFieldsSchema.safeParse(json.matter.fields);
+          if (!parsedFields.success) throw new Error("NexusLM returned front matter that does not match the manuscript fields.");
+          setPendingMatter({ kind: "frontMatter", content, fields: parsedFields.data, transcriptLabel });
+        } else {
+          const parsedFields = NexusLMBackMatterFieldsSchema.safeParse(json.matter.fields);
+          if (!parsedFields.success) throw new Error("NexusLM returned back matter that does not match the manuscript fields.");
+          setPendingMatter({ kind: "backMatter", content, fields: parsedFields.data, transcriptLabel });
+        }
         const completedLabel = continuationTask.kind === "frontMatter" ? "Front matter" : "Back matter";
         setMessages((current) => [...current, {
           role: "assistant",
@@ -2000,108 +2023,66 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
 
   function addPendingMatter() {
     if (!pendingMatter || !manuscript.outline) return;
-    const baseManifest = manifest ?? createEmptyManifest(conversationKey, pipelineSnapshot);
-    const section = {
-      title: pendingMatter.kind === "frontMatter" ? "Front Matter" : "Back Matter",
-      content: pendingMatter.content,
-    };
-    const nextManifest = pendingMatter.kind === "frontMatter"
-      ? {
+    try {
+      const baseManifest = manifest ?? createEmptyManifest(conversationKey, pipelineSnapshot);
+      const nextManifest = pendingMatter.kind === "frontMatter"
+        ? {
           ...baseManifest,
           frontMatter: {
-            ...baseManifest.frontMatter,
-            additionalSections: [
-              ...(baseManifest.frontMatter.additionalSections ?? []).filter((item) => item.title !== section.title),
-              section,
-            ],
+            ...applyNexusLMFrontMatter(
+              baseManifest.frontMatter,
+              pendingMatter.fields,
+            ),
           },
         }
-      : {
+        : {
           ...baseManifest,
-          backMatter: {
-            scriptureIndex: [],
-            glossary: [],
-            readingGroupGuide: [],
-            recommendedResources: [],
-            ...baseManifest.backMatter,
-            additionalSections: [
-              ...(baseManifest.backMatter?.additionalSections ?? []).filter((item) => item.title !== section.title),
-              section,
-            ],
-          },
+          backMatter: applyNexusLMBackMatter(
+            baseManifest.backMatter,
+            pendingMatter.fields,
+          ),
         };
-    const parsedManifest = EbookManifestSchema.safeParse(nextManifest);
-    if (!parsedManifest.success) {
-      setAttachmentError("The generated matter could not be added because the book data was invalid.");
-      return;
-    }
+      const parsedManifest = EbookManifestSchema.safeParse(nextManifest);
+      if (!parsedManifest.success) {
+        setAttachmentError("The generated matter could not be added because the book data was invalid.");
+        return;
+      }
 
-    const frontMatterText = pendingMatter.kind === "frontMatter" ? pendingMatter.content : manuscript.frontMatterText ?? "";
-    const backMatterText = pendingMatter.kind === "backMatter" ? pendingMatter.content : manuscript.backMatterText ?? "";
-    const completedChapterNumbers = [
-      ...manuscript.chapters.map((chapter) => chapter.number),
-      ...parsedManifest.data.chapters.map((chapter) => chapter.number),
-    ];
-    const nextContinuation = getNextOutlineContinuation(
-      manuscript.outline,
-      completedChapterNumbers,
-      frontMatterText,
-      backMatterText,
-      pendingMatter.transcriptLabel,
-    );
-    setManuscript((current) => ({
-      ...current,
-      frontMatterText,
-      backMatterText,
-      outlineContinuation: nextContinuation ?? undefined,
-    }));
-    onManifestChange(
-      parsedManifest.data,
-      `${pendingMatter.kind === "frontMatter" ? "Front" : "Back"} matter added to the book.`,
-    );
-    const followUp = nextContinuation
-      ? ` ${formatOutlineContinuation(nextContinuation, manuscript.outline)} is next. Reply “yes” to continue.`
-      : " All chapters and outlined front and back matter are complete.";
-    setMessages((current) => [...current, {
-      role: "assistant",
-      content: `${pendingMatter.kind === "frontMatter" ? "Front" : "Back"} matter added to the book.${followUp}`,
-    }]);
-    setPendingMatter(null);
-  }
-
-  function updateAddedMatter(kind: "frontMatter" | "backMatter", content: string): void {
-    const baseManifest = manifest;
-    if (!baseManifest) return;
-    const title = kind === "frontMatter" ? "Front Matter" : "Back Matter";
-    const nextManifest = kind === "frontMatter"
-      ? {
-          ...baseManifest,
-          frontMatter: {
-            ...baseManifest.frontMatter,
-            additionalSections: [
-              ...(baseManifest.frontMatter.additionalSections ?? []).filter((section) => section.title !== title),
-              ...(content.trim() ? [{ title, content }] : []),
-            ],
-          },
-        }
-      : {
-          ...baseManifest,
-          backMatter: baseManifest.backMatter
-            ? {
-                ...baseManifest.backMatter,
-                additionalSections: [
-                  ...(baseManifest.backMatter.additionalSections ?? []).filter((section) => section.title !== title),
-                  ...(content.trim() ? [{ title, content }] : []),
-                ],
-              }
-            : null,
-        };
-    const parsed = EbookManifestSchema.safeParse(nextManifest);
-    if (!parsed.success) {
-      setAttachmentError("The edited matter could not be saved to the book because its content was invalid.");
-      return;
+      const frontMatterText = pendingMatter.kind === "frontMatter" ? pendingMatter.content : manuscript.frontMatterText ?? "";
+      const backMatterText = pendingMatter.kind === "backMatter" ? pendingMatter.content : manuscript.backMatterText ?? "";
+      const completedChapterNumbers = [
+        ...manuscript.chapters.map((chapter) => chapter.number),
+        ...parsedManifest.data.chapters.map((chapter) => chapter.number),
+      ];
+      const nextContinuation = getNextOutlineContinuation(
+        manuscript.outline,
+        completedChapterNumbers,
+        frontMatterText,
+        backMatterText,
+        pendingMatter.transcriptLabel,
+      );
+      setManuscript((current) => ({
+        ...current,
+        frontMatterText,
+        backMatterText,
+        outlineContinuation: nextContinuation ?? undefined,
+      }));
+      onManifestChange(
+        parsedManifest.data,
+        `${pendingMatter.kind === "frontMatter" ? "Front" : "Back"} matter added to the book.`,
+      );
+      const followUp = nextContinuation
+        ? ` ${formatOutlineContinuation(nextContinuation, manuscript.outline)} is next. Reply “yes” to continue.`
+        : " All chapters and outlined front and back matter are complete.";
+      setMessages((current) => [...current, {
+        role: "assistant",
+        content: `${pendingMatter.kind === "frontMatter" ? "Front" : "Back"} matter added to the book.${followUp}`,
+      }]);
+      setPendingMatter(null);
+      setAttachmentError(null);
+    } catch (error) {
+      setAttachmentError(`Generated matter could not be mapped to the manuscript fields: ${readableError(error)}`);
     }
-    onManifestChange(parsed.data, `${kind === "frontMatter" ? "Front" : "Back"} matter updated.`);
   }
 
   function togglePendingPath(path: string): void {
@@ -2855,28 +2836,6 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
                   Continue outline
                 </button>
               </div>
-            )}
-            {manuscript.frontMatterText && (
-              <label className="mt-3 block text-xs font-semibold text-slate-300">
-                Written front matter
-                <textarea
-                  value={manuscript.frontMatterText}
-                  onChange={(event) => setManuscript((current) => ({ ...current, frontMatterText: event.target.value }))}
-                  onBlur={(event) => updateAddedMatter("frontMatter", event.currentTarget.value)}
-                  className="mt-2 min-h-40 w-full resize-y rounded-xl border border-slate-700 bg-slate-950 p-3 text-base leading-6 text-slate-300"
-                />
-              </label>
-            )}
-            {manuscript.backMatterText && (
-              <label className="mt-3 block text-xs font-semibold text-slate-300">
-                Written back matter
-                <textarea
-                  value={manuscript.backMatterText}
-                  onChange={(event) => setManuscript((current) => ({ ...current, backMatterText: event.target.value }))}
-                  onBlur={(event) => updateAddedMatter("backMatter", event.currentTarget.value)}
-                  className="mt-2 min-h-40 w-full resize-y rounded-xl border border-slate-700 bg-slate-950 p-3 text-base leading-6 text-slate-300"
-                />
-              </label>
             )}
           </section>
           <details className="mt-3 rounded-xl border border-slate-800 bg-slate-900/50">

@@ -3,6 +3,7 @@ import { generateObject } from "ai";
 import { z } from "zod";
 import { deepSeekModel } from "@/lib/ai-providers";
 import {
+  includeWorkspaceFrontMatterItems,
   includeRequiredBackMatterItems,
   NexusLMBookOutlineSchema,
   NexusLMOutlineChapterSchema,
@@ -102,6 +103,7 @@ Draft the complete outline object now.`,
     const parsed = validatedOutlineSchema.safeParse({
       ...object,
       chapters: object.chapters.map((chapter, index) => ({ ...chapter, number: index + 1 })),
+      frontMatter: includeWorkspaceFrontMatterItems(),
       backMatter: includeRequiredBackMatterItems(object.backMatter),
     });
     if (!parsed.success) throw new Error("NexusLM returned an invalid book outline.");

@@ -254,14 +254,7 @@ PLACEMENT AND SEQUENCING:
 • Never add biblical background (historical setting, authorial intent, cultural or manuscript context) unless the source explicitly stated it.
 • Every scripture must complete TEXT → TRUTH → APPLICATION within 2–3 paragraphs of the quotation.`;
 
-export const NEXUSLM_SCRIPTURE_FORMATTING_RULES = `SCRIPTURE PRESENTATION — MANDATORY BLOCKQUOTES:
-• In every NexusLM book-writing response, every quoted Scripture passage—including a single verse or short phrase—MUST be a standalone Markdown blockquote, whether or not the user repeats this instruction.
-• Put the Scripture wording on blockquote line(s), then put its reference on a separate blockquote line in the form "> — Book Chapter:Verse (Translation)".
-• Never place quoted Scripture inline in prose, in a heading, or inside a list. Surrounding explanation remains normal prose.
-• Preserve Scripture wording, punctuation, capitalization, translation, and source-provided omissions exactly. Do not invent verse wording, a translation, or a reference, and do not silently substitute another passage.
-• If the source provides only a reference and no verse wording, leave it as a prose citation or mark it for verification; do not turn the reference into a quote.
-• Do not add speculative biblical allusions or background unsupported by the source.
-• Keep the surrounding prose natural, finished, and in the exact Markdown/JSON field requested by the user.`;
+export const NEXUSLM_SCRIPTURE_FORMATTING_RULES = "ALL SCRIPTURES MUST BE IN BLOCK QUOTES.";
 
 export function requestsStandaloneScriptureBlockquotes(instruction: string): boolean {
   const normalized = instruction.toLowerCase();

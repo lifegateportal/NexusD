@@ -1,11 +1,19 @@
 import { NextRequest, NextResponse } from "next/server";
-import { generateText } from "ai";
+import { generateObject } from "ai";
 import { z } from "zod";
 import { deepSeekModel } from "@/lib/ai-providers";
 import { includeRequiredBackMatterItems, NexusLMBookOutlineSchema } from "@/lib/nexuslm-book-outline";
 import { EM_DASH_MINIMIZATION_RULES } from "@/lib/editorial-style-bible";
-import { normalizeScriptureBlockquotes, NEXUSLM_SCRIPTURE_FORMATTING_RULES } from "@/lib/scripture-formatter";
-import { NexusLMResponseLengthSchema, NEXUSLM_RESPONSE_LENGTHS, sanitizeNexusLMText } from "@/lib/nexuslm-response";
+import { NEXUSLM_SCRIPTURE_FORMATTING_RULES } from "@/lib/scripture-formatter";
+import { NexusLMResponseLengthSchema, NEXUSLM_RESPONSE_LENGTHS } from "@/lib/nexuslm-response";
+import { QuoteSchema } from "@/lib/schemas/ebook";
+import { buildEbookScriptureIndex } from "@/lib/ebook-scripture-index";
+import {
+  formatNexusLMBackMatter,
+  formatNexusLMFrontMatter,
+  NexusLMBackMatterFieldsSchema,
+  NexusLMFrontMatterFieldsSchema,
+} from "@/lib/nexuslm-matter-mapping";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
@@ -20,6 +28,7 @@ const RequestSchema = z.object({
     title: z.string().trim().min(1).max(300),
     content: z.string().max(600_000),
   }).strict()).max(100),
+  allQuotes: z.array(QuoteSchema).optional().default([]),
   transcripts: z.array(z.object({
     label: z.string().trim().min(1).max(200),
     text: z.string().max(250_000),
@@ -64,26 +73,21 @@ export async function POST(request: NextRequest) {
     .join("\n\n---\n\n");
   const responseLength = NEXUSLM_RESPONSE_LENGTHS[input.responseLength];
   const backMatterInstruction = input.kind === "backMatter"
-    ? `For Study Questions, provide chapter-grouped questions drawn only from the completed chapters. For the Glossary, define only terms whose meaning is supported by the completed chapters. For the Index of Scripture, list only references actually cited in those chapters and identify the chapter number(s) where each appears; do not add verse wording or uncited references.`
+    ? `Return the existing manuscript back-matter fields: a glossary with first appearances, a reading-group guide with 3–7 questions for every outlined chapter, and recommended resources only when present in the sources. The Scripture index is built from the completed chapter citations after generation.`
     : "";
 
   try {
-    const { text } = await generateText({
-      model: deepSeekModel,
-      maxRetries: 2,
-      maxTokens: responseLength.draftTokens,
-      system: `You are NexusLM, writing the ${matterLabel} for a completed book.
-Write only the requested matter items, in the exact outline order, using each item title as a heading. This material is written after all chapters; do not draft or revise chapters.
-Treat the completed manuscript and supplied transcripts as the only authority for factual claims. Be faithful to their meaning and emphasis. Do not invent, infer, embellish, or add facts, examples, quotations, doctrine, biography, acknowledgements, publication details, resources, or scripture not explicitly supported by the sources. If an outline item requires unavailable information, use a brief clearly marked [Author input needed] placeholder rather than filling the gap.
+    const system = `You are NexusLM, writing the ${matterLabel} for a completed book.
+Write only the requested matter. This material is written after all chapters; do not draft or revise chapters.
+Treat the completed manuscript and supplied transcripts as the only authority for factual claims. Be faithful to their meaning and emphasis. Do not invent, infer, embellish, or add facts, examples, quotations, doctrine, biography, acknowledgements, publication details, resources, or scripture not explicitly supported by the sources. If a requested field requires unavailable information, leave it empty rather than filling the gap.
 ${backMatterInstruction}
 ${EM_DASH_MINIMIZATION_RULES}
 ${NEXUSLM_SCRIPTURE_FORMATTING_RULES}
-Every quoted Scripture passage, even one verse or a short phrase, MUST be a standalone Markdown blockquote with its reference on a separate blockquote line; never put Scripture in inline prose. Quote only wording present in the supplied source. If the source provides only a reference, do not invent verse wording.
-${responseLength.instruction}`,
-      prompt: `BOOK: ${input.bookTitle}
+${responseLength.instruction}`;
+    const prompt = `BOOK: ${input.bookTitle}
 AUTHOR: ${input.authorName || "Not specified"}
 
-${matterLabel.toUpperCase()} OUTLINE:
+${matterLabel.toUpperCase()} FIELDS:
 ${matterItems.map((item, index) => `${index + 1}. ${item.title}\nPurpose: ${item.purpose}`).join("\n\n")}
 
 COMPLETED CHAPTERS:
@@ -92,11 +96,44 @@ ${chapterContext}
 TRANSCRIPT SOURCES:
 ${transcriptContext || "No transcript sources supplied."}
 
-Write the complete ${matterLabel} now. Return reader-facing content only.`,
+Write complete, polished reader-facing content for these fields, grounded in the completed book.`;
+    if (input.kind === "frontMatter") {
+      const { object } = await generateObject({
+        model: deepSeekModel,
+        schema: NexusLMFrontMatterFieldsSchema,
+        mode: "json",
+        maxRetries: 2,
+        maxTokens: responseLength.draftTokens,
+        system,
+        prompt,
+      });
+      const fields = NexusLMFrontMatterFieldsSchema.parse(object);
+      return NextResponse.json({
+        content: formatNexusLMFrontMatter(fields),
+        matter: { kind: "frontMatter", fields },
+      });
+    }
+
+    const { object } = await generateObject({
+      model: deepSeekModel,
+      schema: NexusLMBackMatterFieldsSchema.omit({ scriptureIndex: true }),
+      mode: "json",
+      maxRetries: 2,
+      maxTokens: responseLength.draftTokens,
+      system,
+      prompt,
     });
-    const content = normalizeScriptureBlockquotes(sanitizeNexusLMText(text.trim()));
-    if (!content) throw new Error(`NexusLM returned empty ${matterLabel}.`);
-    return NextResponse.json({ content });
+    const fields = NexusLMBackMatterFieldsSchema.parse({
+      ...object,
+      scriptureIndex: buildEbookScriptureIndex(
+        input.chapters.map(({ number, content }) => ({ number, content })),
+        input.allQuotes,
+      ),
+    });
+    return NextResponse.json({
+      content: formatNexusLMBackMatter(fields),
+      matter: { kind: "backMatter", fields },
+    });
   } catch (error) {
     return NextResponse.json({ error: error instanceof Error ? error.message : `NexusLM could not draft the ${matterLabel}.` }, { status: 500 });
   }

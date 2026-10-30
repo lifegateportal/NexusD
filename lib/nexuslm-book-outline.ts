@@ -62,31 +62,47 @@ const REQUIRED_BACK_MATTER = [
     aliases: ["indexofscripture", "scriptureindex", "indexofscripturereferences", "scripturereferenceindex"],
     purpose: "List Scripture references actually cited in the completed chapters and identify where each appears; do not add uncited references or verse text.",
   },
+  {
+    title: "Recommended Resources",
+    aliases: ["recommendedresources", "resources", "resourceslist"],
+    purpose: "List only resources explicitly mentioned in the completed book or supplied sources.",
+  },
 ] as const;
+
+export const NEXUSLM_FRONT_MATTER_ITEMS: NexusLMBookOutline["frontMatter"] = [
+  { title: "Preface", purpose: "Introduce the author's purpose and perspective using only information supported by the source material." },
+  { title: "Introduction", purpose: "Introduce the book's subject and guide the reader into its chapters." },
+  { title: "Conclusion", purpose: "Close the book by synthesizing its source-supported central teaching." },
+  { title: "About the Author", purpose: "Provide author information only when it is present in the supplied sources; otherwise use [Author input needed]." },
+  { title: "Resources List", purpose: "List only resources explicitly mentioned in the supplied sources; do not invent recommendations." },
+];
+
+export function includeWorkspaceFrontMatterItems(): NexusLMBookOutline["frontMatter"] {
+  return NEXUSLM_FRONT_MATTER_ITEMS;
+}
 
 export function includeRequiredBackMatterItems(
   items: NexusLMBookOutline["backMatter"],
 ): NexusLMBookOutline["backMatter"] {
   const requiredItems = new Map<string, NexusLMBookOutline["backMatter"][number]>();
-  const additionalItems: NexusLMBookOutline["backMatter"] = [];
 
   for (const item of items) {
     const normalizedTitle = item.title.toLowerCase().replace(/[^a-z0-9]/g, "");
     const required = REQUIRED_BACK_MATTER.find((entry) => entry.aliases.some((alias) => alias === normalizedTitle));
-    if (!required) {
-      additionalItems.push(item);
-    } else if (!requiredItems.has(required.title)) {
+    if (required && !requiredItems.has(required.title)) {
       requiredItems.set(required.title, { ...item, title: required.title });
     }
   }
 
-  return [
-    ...additionalItems,
-    ...REQUIRED_BACK_MATTER.map((item) => requiredItems.get(item.title) ?? {
+  const result = [
+    ...REQUIRED_BACK_MATTER.slice(0, 3).map((item) => requiredItems.get(item.title) ?? {
       title: item.title,
       purpose: item.purpose,
     }),
   ];
+  const resources = requiredItems.get("Recommended Resources");
+  if (resources) result.push(resources);
+  return result;
 }
 
 const NUMBER_WORDS: Record<string, number> = {

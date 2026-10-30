@@ -6,6 +6,7 @@ import { EbookManifestSchema, BackMatterSchema } from "@/lib/schemas/ebook";
 import type { BackMatter } from "@/lib/schemas/ebook";
 import { SOURCE_LOCK_RULES, READER_NORMALIZATION_RULES, PREMIUM_BOOK_STYLE_RULES } from "@/lib/editorial-style-bible";
 import { getEbookModel, getEbookTemperature } from "@/lib/ebook-model-selector";
+import { buildEbookScriptureIndex } from "@/lib/ebook-scripture-index";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
@@ -19,51 +20,6 @@ const BackMatterRequestSchema = z.object({
 });
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
-
-function buildScriptureIndex(manifest: z.infer<typeof EbookManifestSchema>): BackMatter["scriptureIndex"] {
-  // Collect all quotes from manifest.allQuotes and chapter sections
-  const refMap = new Map<string, { translation: string; chapters: Set<number> }>();
-
-  const addRef = (reference: string, translation: string, chapterNumber: number) => {
-    if (!reference?.trim()) return;
-    const key = `${reference.trim()} (${translation?.trim() || "translation unspecified"})`;
-    if (!refMap.has(key)) refMap.set(key, { translation: translation?.trim() || "translation unspecified", chapters: new Set() });
-    refMap.get(key)!.chapters.add(chapterNumber);
-  };
-
-  for (const q of manifest.allQuotes ?? []) {
-    if (q.type === "scripture") {
-      // Determine chapter from position — use chapter 0 as fallback
-      addRef(q.reference, q.translation, 0);
-    }
-  }
-
-  for (const chapter of manifest.chapters) {
-    for (const section of chapter.sections) {
-      // Scan section body for scripture references, capturing the translation
-      // abbreviation when it appears alongside the reference (inline "(John 3:16 NIV)"
-      // or block "— John 3:16 (NIV)"). Only fall back to the placeholder when the
-      // body genuinely carries no translation next to that citation.
-      const body = section.body ?? "";
-      const refPattern = /\b([1-3]?\s?[A-Z][a-z]+(?:\s[A-Z][a-z]+)?\s+\d+:\d+(?:[\u2013-]\d+)?)\)?\s*\(?\s*(NIV|ESV|KJV|NKJV|NASB|NLT|CSB|NRSV|RSV|AMP|MSG|CEV|GNT|NET|HCSB)?\s*\)?/g;
-      let m;
-      while ((m = refPattern.exec(body)) !== null) {
-        addRef(m[1].trim(), m[2] ?? "translation unspecified", chapter.number);
-      }
-    }
-  }
-
-  return Array.from(refMap.entries())
-    .map(([reference, { translation, chapters }]) => ({
-      reference,
-      translation,
-      chapters: Array.from(chapters).sort((a, b) => a - b),
-    }))
-    .sort((a, b) => {
-      // Sort by book name, then chapter, then verse (simplified)
-      return a.reference.localeCompare(b.reference);
-    });
-}
 
 export async function POST(req: NextRequest) {
   const body = await req.json() as unknown;
@@ -79,7 +35,7 @@ export async function POST(req: NextRequest) {
   const voiceDNA = manifest.voiceDNA;
 
   // Build scripture index from the manifest (deterministic, no LLM needed)
-  const scriptureIndex = buildScriptureIndex(manifest);
+  const scriptureIndex = buildEbookScriptureIndex(manifest.chapters, manifest.allQuotes ?? []);
 
   // Build chapter summaries for the LLM tasks
   const chapterSummaries = manifest.chapters.map((ch) => {

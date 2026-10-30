@@ -507,6 +507,44 @@ export function ManuscriptEditor({ manifest, onChange }: Props) {
               className="w-full rounded-xl border border-slate-700/60 bg-slate-950/70 px-3 py-2 font-mono text-sm text-slate-100 outline-none focus:border-cyan-500/40"
             />
           </div>
+
+          <div>
+            <label className="mb-1 block text-[10px] font-bold uppercase tracking-widest text-slate-500">
+              Study Questions by Chapter (JSON format)
+            </label>
+            <textarea
+              value={JSON.stringify(manifest.backMatter?.readingGroupGuide ?? [], null, 2)}
+              onChange={(e) => {
+                try {
+                  updateBackMatter("readingGroupGuide", JSON.parse(e.target.value));
+                } catch {
+                  // Invalid JSON - don't update
+                }
+              }}
+              rows={8}
+              placeholder='[{"chapterNumber":1,"chapterTitle":"","questions":[]}]'
+              className="w-full rounded-xl border border-slate-700/60 bg-slate-950/70 px-3 py-2 font-mono text-base text-slate-100 outline-none focus:border-cyan-500/40"
+            />
+          </div>
+
+          <div>
+            <label className="mb-1 block text-[10px] font-bold uppercase tracking-widest text-slate-500">
+              Index of Scripture (JSON format)
+            </label>
+            <textarea
+              value={JSON.stringify(manifest.backMatter?.scriptureIndex ?? [], null, 2)}
+              onChange={(e) => {
+                try {
+                  updateBackMatter("scriptureIndex", JSON.parse(e.target.value));
+                } catch {
+                  // Invalid JSON - don't update
+                }
+              }}
+              rows={8}
+              placeholder='[{"reference":"","translation":"","chapters":[]}]'
+              className="w-full rounded-xl border border-slate-700/60 bg-slate-950/70 px-3 py-2 font-mono text-base text-slate-100 outline-none focus:border-cyan-500/40"
+            />
+          </div>
         </div>
       )}
     </div>
