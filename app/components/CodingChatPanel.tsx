@@ -398,6 +398,7 @@ export function CodingChatPanel() {
   const [activeChatThreadId, setActiveChatThreadId] = useState<string | null>(null);
   const [chatHistoryWorkspaceId, setChatHistoryWorkspaceId] = useState<string | null>(null);
   const [showChatHistory, setShowChatHistory] = useState(false);
+  const [mobileActionsOpen, setMobileActionsOpen] = useState(false);
   const [files, setFiles] = useState<CodingFile[]>([]);
   const [workspaces, setWorkspaces] = useState<CodingWorkspace[]>([]);
   const [workspaceId, setWorkspaceId] = useState<string | null>(null);
@@ -2954,10 +2955,29 @@ export function CodingChatPanel() {
       <header className="relative z-20 shrink-0 border-b border-cyan-500/20 bg-slate-950/90 px-3 py-2 backdrop-blur sm:px-4">
         <div className="flex min-h-12 flex-wrap items-center justify-between gap-2">
           <h1 className="min-w-0 truncate text-base font-bold text-slate-100 sm:text-lg">Nexus Code</h1>
-          <div className="flex shrink-0 flex-wrap items-center justify-end gap-1.5">
-            <div className={`rounded-full border px-2 py-1 text-[10px] font-semibold ${loading ? "border-amber-400/40 text-amber-300" : "border-emerald-400/30 text-emerald-300"}`} aria-live="polite">
-              {status}
-            </div>
+          <div className={`rounded-full border px-2 py-1 text-[10px] font-semibold ${loading ? "border-amber-400/40 text-amber-300" : "border-emerald-400/30 text-emerald-300"}`} aria-live="polite">
+            {status}
+          </div>
+          <button
+            type="button"
+            onClick={() => setMobileActionsOpen((open) => !open)}
+            aria-expanded={mobileActionsOpen}
+            aria-controls="coding-workspace-actions"
+            aria-label={mobileActionsOpen ? "Hide workspace actions" : "Show workspace actions"}
+            className="flex min-h-12 min-w-12 items-center justify-center rounded-xl border border-slate-700 text-slate-200 lg:hidden"
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true" className="h-6 w-6 fill-none stroke-current stroke-2">
+              {mobileActionsOpen
+                ? <path d="m6 6 12 12M18 6 6 18" strokeLinecap="round" />
+                : <path d="M4 6h16M4 12h16M4 18h16" strokeLinecap="round" />}
+            </svg>
+          </button>
+        </div>
+        <div
+          id="coding-workspace-actions"
+          className={`${mobileActionsOpen ? "flex" : "hidden"} flex-col gap-1 lg:flex`}
+        >
+          <div className="flex min-h-12 flex-wrap items-center justify-end gap-1.5">
             <button
               type="button"
               onClick={() => void undoWorkspace()}
@@ -2984,8 +3004,7 @@ export function CodingChatPanel() {
               New chat
             </button>
           </div>
-        </div>
-        <div className="mt-1 flex min-h-12 flex-wrap items-center gap-2">
+        <div className="flex min-h-12 flex-wrap items-center gap-2">
           <select
             value={workspaceId ?? ""}
             onChange={(event) => void openWorkspace(event.target.value)}
@@ -3243,6 +3262,7 @@ export function CodingChatPanel() {
             </div>
           </details>
         </div>
+        </div>
       </header>
 
       <div className="flex min-h-0 flex-1 flex-col lg:flex-row">
@@ -3313,15 +3333,8 @@ export function CodingChatPanel() {
               {zipExporting ? "Preparing…" : "Download ZIP"}
             </button>
           </div>
-          <p className="shrink-0 border-b border-slate-800 px-3 py-2 text-[10px] leading-4 text-slate-500">
-            Upload ZIP creates a new project; Open folder merges here. Imports support UTF-8 source files up to 4 MB, not binary assets. Device-local .env.local stays in browser storage (not encrypted) and is excluded from sync, AI, ZIPs, GitHub, and deployment. Browser-facing values are not private secrets.
-          </p>
           <div className="min-h-0 flex-1 overflow-y-auto p-2" style={{ WebkitOverflowScrolling: "touch" }}>
-            {fileTree.length > 0 ? renderTreeNodes(fileTree) : (
-              <div className="rounded-xl border border-dashed border-slate-700 p-4 text-xs leading-5 text-slate-500">
-                Open a folder, attach files, or let Nexus Code generate components to build the tree.
-              </div>
-            )}
+            {fileTree.length > 0 && renderTreeNodes(fileTree)}
           </div>
         </aside>
 
@@ -3416,8 +3429,8 @@ export function CodingChatPanel() {
               </div>
             ) : (
               <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto px-3 py-4 sm:px-5 lg:px-8" style={{ WebkitOverflowScrolling: "touch" }}>
-                <div className={`mx-auto flex min-h-full w-full max-w-5xl flex-col gap-4 ${messages.length === 1 ? "justify-center" : "justify-end"}`}>
-                  {messages.map((message) => (
+                <div className={`mx-auto flex min-h-full w-full max-w-5xl flex-col gap-4 ${messages.every((message) => message.role === "system") ? "justify-center" : "justify-end"}`}>
+                  {messages.filter((message) => message.role !== "system").map((message) => (
                     <article
                       key={message.id}
                       className={message.role === "user"
