@@ -21,21 +21,17 @@ import { NEXUSLM_WRITING_STYLES, type NexusLMWritingStyle } from "@/lib/nexuslm-
 import { NEXUSLM_AGENTS, type NexusLMAgent } from "@/lib/nexuslm-agents";
 import { isNexusLMLongFormRequest, NEXUSLM_RESPONSE_LENGTHS, sanitizeNexusLMText, type NexusLMResponseLength } from "@/lib/nexuslm-response";
 import { safeNexusLMFilename, type NexusLMArtifactFormat } from "@/lib/nexuslm-artifacts";
-import { pickVoice } from "@/lib/audio-player-context";
-import { formatNexusLMImageObservation, inspectNexusLMImage } from "@/lib/nexuslm-vision";
-import { NEXUSLM_BOOK_STREAM_METADATA_END, NEXUSLM_BOOK_STREAM_METADATA_START } from "@/lib/nexuslm-stream";
-import { normalizeScriptureBlockquotes } from "@/lib/scripture-formatter";
 import {
-  cleanNexusVoiceText,
-  buildNexusGreetingResponse,
-  buildNexusSpokenResponse,
-  createNexusVoiceRecognition,
-  extractNexusWakeCommand,
-  getNexusRecognitionText,
-  isNexusGreeting,
-  splitNexusVoiceText,
-  type NexusVoiceRecognition,
-} from "@/lib/nexuslm-voice";
+  explicitTranscriptSlotNumber,
+  formatOutlineContinuation,
+  getNextOutlineContinuation,
+  isOutlineContinuationAffirmative,
+  isOutlineContinuationDecline,
+  NexusLMBookOutlineSchema,
+  transcriptForExplicitSlot,
+  type NexusLMBookOutline,
+  type NexusLMOutlineContinuation,
+} from "@/lib/nexuslm-book-outline";
 import {
   buildManifestChangeEntries,
   clearEbookUndoSnapshot,
@@ -53,7 +49,7 @@ type NexusLMPanelProps = {
   onOpenManuscript: () => void;
 };
 
-type Mode = "ask" | "socratic" | "plan" | "draft" | "edit";
+type Mode = "ask" | "socratic" | "plan" | "outline" | "draft" | "edit";
 type ContextMode = "auto" | "general" | "book";
 type Persona = "editorial-coach" | "skeptical-reviewer" | "socratic-teacher" | "voice-guardian";
 type Message = {
@@ -116,22 +112,6 @@ type BookAuditReport = {
   totalRepetitionPhrases: number;
   totalOverusedWords: number;
 };
-type NexusVoiceStatus = "off" | "waiting" | "capturing" | "thinking" | "speaking" | "error";
-const NEXUS_VOICE_MODE_STORAGE_KEY = "nexuslm-voice-mode";
-
-function nexusVoiceStatusLabel(status: NexusVoiceStatus): string {
-  return status === "waiting"
-    ? "Listening for “Nexus”"
-    : status === "capturing"
-      ? "Listening for your instruction"
-      : status === "thinking"
-        ? "Nexus is thinking"
-        : status === "speaking"
-          ? "Nexus is speaking"
-          : status === "error"
-            ? "Voice mode needs attention"
-            : "Voice mode off";
-}
 
 function cleanAssistantLine(line: string): string {
   return sanitizeNexusLMText(line);
@@ -161,12 +141,14 @@ const MODES: Record<Mode, { label: string; prompt: string }> = {
   ask: { label: "Ask", prompt: "Answer using the loaded manuscript. State uncertainty clearly." },
   socratic: { label: "Socratic Vetting", prompt: "Do not rush to rewrite. Surface assumptions, gaps, contradictions, and probing questions." },
   plan: { label: "Plan Whole Book", prompt: "Design the whole book before drafting. Use every transcript slot to build a source-grounded architecture, chapter progression, and writing plan." },
+  outline: { label: "Draft Book Outline", prompt: "Create a concise, source-grounded book outline with chapters, sections, and front/back matter scheduled after all chapters." },
   draft: { label: "Draft Chapter", prompt: "Write a complete chapter from the manuscript and transcript sources, then show the full draft for review." },
   edit: { label: "Edit / Enrich", prompt: "Propose precise manuscript improvements and apply only the requested changes." },
 };
 
 function inferMode(instruction: string, selectedMode: Mode): Mode {
   const text = instruction.toLowerCase();
+  if (/\b(outline|table of contents)\b/.test(text)) return "outline";
   if (/\b(plan|outline|architect|roadmap|structure|whole book|entire book|book arc)\b/.test(text)) return "plan";
   if (/\b(write|draft|compose|create)\b.*\bchapter\b|\bchapter\b.*\b(write|draft|compose|create)\b/.test(text)) return "draft";
   if (/\b(vet|challenge|question|assumption|contradiction|weak|gap|skeptic|critique)\b/.test(text)) return "socratic";
@@ -232,7 +214,7 @@ function compactHistory(history: Message[]): Array<{ role: "user" | "assistant";
 function initialMessage(manifest: EbookManifest | null): Message {
   return manifest
     ? { role: "system", content: `NexusLM is connected to “${manifest.bookTitle}”. Ask about the manuscript, challenge its thinking, or request a focused edit.` }
-    : { role: "system", content: "NexusLM is ready for general conversation. Ask anything, attach a text, HTML, PDF, or image file, or connect a book when you want source-grounded manuscript help." };
+    : { role: "system", content: "NexusLM is ready for general conversation. Ask anything, attach a text, HTML, or PDF document, or connect a book when you want source-grounded manuscript help." };
 }
 
 function createEmptyManuscript(manifest: EbookManifest | null, pipelineSnapshot: EbookPipelineSnapshot | null): NexusLMManuscript {
@@ -412,6 +394,50 @@ function formatChapterDraft(chapter: ChapterDraft): string {
     .map((section) => `${section.heading ? `## ${sanitizeNexusLMText(section.heading)}\n\n` : ""}${sanitizeNexusLMText(section.body)}`)
     .join("\n\n");
   return `# CHAPTER ${chapter.number}: ${sanitizeNexusLMText(chapter.title)}\n\n${chapter.intro ? `${sanitizeNexusLMText(chapter.intro)}\n\n` : ""}${sections}${chapter.forwardQuestion ? `\n\nForward question: ${sanitizeNexusLMText(chapter.forwardQuestion)}` : ""}`.trim();
+}
+
+function formatBookOutline(outline: NexusLMBookOutline): string {
+  const chapters = outline.chapters.map((chapter) => [
+    `### Chapter ${chapter.number}: ${chapter.title}`,
+    chapter.purpose,
+    ...chapter.sections.map((section) => `- ${section.heading}: ${section.purpose}`),
+  ].join("\n")).join("\n\n");
+  const matter = (title: string, items: NexusLMBookOutline["frontMatter"]) => [
+    `## ${title}`,
+    ...items.map((item) => `- ${item.title}: ${item.purpose}`),
+  ].join("\n");
+  return [
+    `# Book outline: ${outline.bookTitle}`,
+    outline.subtitle ? `_${outline.subtitle}_` : "",
+    `**Core thesis:** ${outline.coreThesis}`,
+    `**Target reader:** ${outline.targetReader}`,
+    "## Chapters",
+    chapters,
+    matter("Front matter (written after all chapters)", outline.frontMatter),
+    matter("Back matter (written after all chapters)", outline.backMatter),
+  ].filter(Boolean).join("\n\n");
+}
+
+function outlineTaskInstruction(continuation: NexusLMOutlineContinuation, outline: NexusLMBookOutline): string {
+  const label = formatOutlineContinuation(continuation, outline);
+  if (continuation.kind === "chapter") {
+    return `Write ${label} now, following the saved book outline exactly.`;
+  }
+  return `Write ${label} now, after all outlined chapters are complete.`;
+}
+
+function manuscriptChaptersForMatter(
+  manuscript: NexusLMManuscript,
+  manifest: EbookManifest | null,
+): Array<{ number: number; title: string; content: string }> {
+  const chapters = new Map<number, { number: number; title: string; content: string }>();
+  for (const chapter of manifest?.chapters ?? []) {
+    chapters.set(chapter.number, { number: chapter.number, title: chapter.title, content: formatChapterDraft(chapter) });
+  }
+  for (const chapter of manuscript.chapters) {
+    chapters.set(chapter.number, { number: chapter.number, title: chapter.title, content: chapter.content });
+  }
+  return [...chapters.values()].sort((left, right) => left.number - right.number);
 }
 
 function CopyMessageButton({ content }: { content: string }) {
@@ -628,25 +654,6 @@ function DocumentPreview({
     );
   }
 
-  if (kind === "image") {
-    return attachment.previewDataUrl ? (
-      <div className="space-y-3">
-        <img
-          src={attachment.previewDataUrl}
-          alt={`Local preview of ${attachment.name}`}
-          className="max-h-[52dvh] min-h-[12rem] w-full rounded-xl border border-slate-800 bg-slate-950 object-contain"
-        />
-        <pre className="max-h-[24dvh] overflow-auto whitespace-pre-wrap rounded-xl border border-slate-800 bg-slate-950 p-4 text-xs leading-6 text-slate-300">
-          {attachment.content}
-        </pre>
-      </div>
-    ) : (
-      <pre className="max-h-[52dvh] overflow-auto whitespace-pre-wrap rounded-xl border border-slate-800 bg-slate-950 p-4 text-xs leading-6 text-slate-300">
-        {attachment.content}
-      </pre>
-    );
-  }
-
   if (kind === "html") {
     return (
       <div className={fullscreen ? "flex min-h-0 flex-1 flex-col gap-2" : "space-y-2"}>
@@ -707,7 +714,6 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
   const [attachments, setAttachments] = useState<ChatAttachment[]>([]);
   const [processEntireDocument, setProcessEntireDocument] = useState(false);
   const [attachmentError, setAttachmentError] = useState<string | null>(null);
-  const [visionStatus, setVisionStatus] = useState<string | null>(null);
   const [lastGeneralRequest, setLastGeneralRequest] = useState<GeneralRequest | null>(null);
   const [selectedAttachmentId, setSelectedAttachmentId] = useState<string | null>(null);
   const [generatedPreview, setGeneratedPreview] = useState<PreviewDocument | null>(null);
@@ -720,6 +726,8 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
   const [sources, setSources] = useState<Source[]>([]);
   const [pendingEdit, setPendingEdit] = useState<PendingEdit | null>(null);
   const [pendingDraft, setPendingDraft] = useState<ChapterDraft | null>(null);
+  const [pendingDraftSourceLabel, setPendingDraftSourceLabel] = useState<string | null>(null);
+  const [activeOutlineChapterNumber, setActiveOutlineChapterNumber] = useState<number | null>(null);
   const [auditReport, setAuditReport] = useState<BookAuditReport | null>(null);
   const [undoSnapshot, setUndoSnapshot] = useState<EbookUndoSnapshot | null>(null);
   const [showProposalDiff, setShowProposalDiff] = useState(false);
@@ -727,9 +735,6 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
   const [selectedTranscriptLabel, setSelectedTranscriptLabel] = useState("");
   const [showMobileContext, setShowMobileContext] = useState(false);
   const [showScrollToLatest, setShowScrollToLatest] = useState(false);
-  const [voiceModeEnabled, setVoiceModeEnabled] = useState(false);
-  const [voiceStatus, setVoiceStatus] = useState<NexusVoiceStatus>("off");
-  const [voiceError, setVoiceError] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const stickToBottomRef = useRef(true);
@@ -739,18 +744,7 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const activeScopeRef = useRef(conversationKey);
   const historyLoadedRef = useRef(false);
-  const voiceModeRef = useRef(false);
-  const voiceRecognitionRef = useRef<NexusVoiceRecognition | null>(null);
-  const voiceSessionRef = useRef(0);
-  const voiceRestartTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const voiceCommandRef = useRef("");
-  const voiceSpeakCursorRef = useRef(0);
-  const spokenMessageRef = useRef<string | null>(null);
-  const voiceInstructionRef = useRef("");
-  const speechGenerationRef = useRef(0);
-  const speechUnlockedRef = useRef(false);
-  const voiceResumeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const hasBookContext = Boolean(manifest || transcripts.length > 0);
+  const hasBookContext = Boolean(manifest || transcripts.length > 0 || manuscript.outline);
   const useBookContext = contextMode === "book" || (contextMode === "auto" && hasBookContext);
 
   function clearGeneratedPreview(): void {
@@ -772,408 +766,8 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
     setGeneratedPreview(preview);
   }
 
-  function clearVoiceRestartTimer(): void {
-    if (!voiceRestartTimerRef.current) return;
-    clearTimeout(voiceRestartTimerRef.current);
-    voiceRestartTimerRef.current = null;
-  }
-
-  function clearVoiceResumeTimer(): void {
-    if (!voiceResumeTimerRef.current) return;
-    clearTimeout(voiceResumeTimerRef.current);
-    voiceResumeTimerRef.current = null;
-  }
-
-  function persistVoiceMode(enabled: boolean): void {
-    try {
-      window.localStorage.setItem(NEXUS_VOICE_MODE_STORAGE_KEY, enabled ? "on" : "off");
-    } catch (error) {
-      setVoiceError(`Voice mode preference could not be saved: ${readableError(error)}`);
-    }
-  }
-
-  function stopVoiceRecognition(): void {
-    voiceSessionRef.current += 1;
-    const recognition = voiceRecognitionRef.current;
-    voiceRecognitionRef.current = null;
-    if (!recognition) return;
-    try {
-      recognition.abort();
-    } catch {
-      // The browser may already have ended the recognition session.
-    }
-  }
-
-  function stopVoiceOutput(): void {
-    speechGenerationRef.current += 1;
-    clearVoiceResumeTimer();
-    if (typeof window !== "undefined") window.speechSynthesis?.cancel();
-  }
-
-  function speakVoiceNotice(text: string, onFinished?: () => void): void {
-    if (typeof window === "undefined" || !window.speechSynthesis || typeof SpeechSynthesisUtterance === "undefined") {
-      setVoiceError("Spoken responses are not supported in this browser. Written responses will continue normally.");
-      onFinished?.();
-      return;
-    }
-    stopVoiceOutput();
-    window.speechSynthesis.resume();
-    const utterance = new SpeechSynthesisUtterance(text);
-    const voice = pickVoice(window.speechSynthesis.getVoices());
-    if (voice) utterance.voice = voice;
-    utterance.rate = 1;
-    utterance.pitch = 1;
-    utterance.onstart = () => {
-      speechUnlockedRef.current = true;
-    };
-    utterance.onend = () => {
-      speechUnlockedRef.current = true;
-      onFinished?.();
-    };
-    utterance.onerror = (event) => {
-      if (event.error !== "canceled" && event.error !== "interrupted") {
-        setVoiceError("Nexus could not start spoken responses. Tap the mic again to enable audio.");
-      }
-      onFinished?.();
-    };
-    window.speechSynthesis.speak(utterance);
-  }
-
-  function failVoiceMode(message: string): void {
-    voiceModeRef.current = false;
-    setVoiceModeEnabled(false);
-    persistVoiceMode(false);
-    stopVoiceRecognition();
-    stopVoiceOutput();
-    clearVoiceRestartTimer();
-    setVoiceStatus("error");
-    setVoiceError(message);
-  }
-
-  function scheduleWakeRecognition(): void {
-    if (!voiceModeRef.current || voiceRestartTimerRef.current) return;
-    voiceRestartTimerRef.current = setTimeout(() => {
-      voiceRestartTimerRef.current = null;
-      startWakeRecognition();
-    }, 250);
-  }
-
-  function finishVoiceSpeech(generation: number): void {
-    if (generation !== speechGenerationRef.current || !voiceModeRef.current) return;
-    if (typeof window !== "undefined" && (window.speechSynthesis?.speaking || window.speechSynthesis?.pending)) {
-      clearVoiceResumeTimer();
-      voiceResumeTimerRef.current = setTimeout(() => finishVoiceSpeech(generation), 1000);
-      return;
-    }
-    clearVoiceResumeTimer();
-    setVoiceStatus("waiting");
-    scheduleWakeRecognition();
-  }
-
-  function startWakeRecognition(): void {
-    if (!voiceModeRef.current) return;
-    clearVoiceRestartTimer();
-    stopVoiceRecognition();
-    const recognition = createNexusVoiceRecognition();
-    if (!recognition) {
-      failVoiceMode("Voice mode is not supported in this browser. Try Safari or Chrome with microphone access enabled.");
-      return;
-    }
-
-    const session = voiceSessionRef.current;
-    recognition.continuous = true;
-    recognition.interimResults = true;
-    recognition.lang = "en-US";
-    recognition.onresult = (event) => {
-      if (session !== voiceSessionRef.current || !voiceModeRef.current) return;
-      const { isFinal, transcript } = getNexusRecognitionText(event);
-      if (!isFinal) return;
-      const command = extractNexusWakeCommand(transcript);
-      if (command === null) return;
-      if (command) {
-        submitVoiceCommand(command);
-      } else {
-        startVoiceCommandCapture();
-      }
-    };
-    recognition.onerror = (event) => {
-      if (session !== voiceSessionRef.current || !voiceModeRef.current) return;
-      if (event.error === "not-allowed" || event.error === "service-not-allowed") {
-        failVoiceMode("Microphone permission was denied. Allow microphone access and turn Nexus mode on again.");
-        return;
-      }
-      if (event.error !== "no-speech" && event.error !== "aborted") {
-        setVoiceError(event.message || "Voice listening was interrupted. Nexus will keep trying.");
-      }
-    };
-    recognition.onend = () => {
-      if (session !== voiceSessionRef.current || !voiceModeRef.current) return;
-      voiceRecognitionRef.current = null;
-      scheduleWakeRecognition();
-    };
-    voiceRecognitionRef.current = recognition;
-    setVoiceStatus("waiting");
-    setVoiceError(null);
-    try {
-      recognition.start();
-    } catch (error) {
-      failVoiceMode(readableError(error));
-    }
-  }
-
-  function startVoiceCommandCapture(initialCommand = ""): void {
-    if (!voiceModeRef.current) return;
-    clearVoiceRestartTimer();
-    stopVoiceRecognition();
-    const recognition = createNexusVoiceRecognition();
-    if (!recognition) {
-      failVoiceMode("Voice command capture is not supported in this browser.");
-      return;
-    }
-
-    const session = voiceSessionRef.current;
-    voiceCommandRef.current = initialCommand;
-    setInput(initialCommand);
-    setVoiceStatus("capturing");
-    recognition.continuous = false;
-    recognition.interimResults = true;
-    recognition.lang = "en-US";
-    recognition.onresult = (event) => {
-      if (session !== voiceSessionRef.current || !voiceModeRef.current) return;
-      const { transcript } = getNexusRecognitionText(event);
-      if (!transcript) return;
-      voiceCommandRef.current = transcript.slice(0, 12_000);
-      setInput(voiceCommandRef.current);
-    };
-    recognition.onerror = (event) => {
-      if (session !== voiceSessionRef.current || !voiceModeRef.current) return;
-      if (event.error !== "no-speech" && event.error !== "aborted") {
-        setVoiceError(event.message || "Nexus could not capture that instruction.");
-      }
-    };
-    recognition.onend = () => {
-      if (session !== voiceSessionRef.current || !voiceModeRef.current) return;
-      voiceRecognitionRef.current = null;
-      const command = voiceCommandRef.current.trim();
-      if (command) {
-        submitVoiceCommand(command);
-      } else {
-        setVoiceStatus("waiting");
-        scheduleWakeRecognition();
-      }
-    };
-    voiceRecognitionRef.current = recognition;
-    try {
-      recognition.start();
-    } catch (error) {
-      failVoiceMode(readableError(error));
-    }
-  }
-
-  function handleVoiceControlCommand(command: string): boolean {
-    const normalized = command.replace(/[?.!]+$/, "").trim().toLowerCase();
-    const modeMatch = normalized.match(/^(?:switch|change|set|use)(?:\s+to)?\s+(ask|socratic|plan|draft|edit)(?:\s+mode)?$/);
-    if (modeMatch) {
-      const nextMode = modeMatch[1] as Mode;
-      setMode(nextMode);
-      setVoiceStatus("waiting");
-      speakAssistantResponse(`${MODES[nextMode].label} mode enabled.`);
-      return true;
-    }
-
-    const personaMatch = normalized.match(/^(?:switch|change|set|use)(?:\s+to)?\s+(editorial coach|skeptical reviewer|socratic teacher|voice guardian)(?:\s+persona)?$/);
-    if (personaMatch) {
-      const nextPersona = Object.entries(PERSONAS).find(([, item]) => item.label.toLowerCase() === personaMatch[1])?.[0] as Persona | undefined;
-      if (nextPersona) {
-        setPersona(nextPersona);
-        setVoiceStatus("waiting");
-        speakAssistantResponse(`${PERSONAS[nextPersona].label} selected.`);
-        return true;
-      }
-    }
-
-    const contextMatch = normalized.match(/^(?:switch|change|set)(?:\s+context)?(?:\s+to)?\s+(auto|general|book)$/);
-    if (contextMatch) {
-      setContextMode(contextMatch[1] as ContextMode);
-      setVoiceStatus("waiting");
-      speakAssistantResponse(`${contextMatch[1]} context selected.`);
-      return true;
-    }
-
-    if (/^(?:answer|respond|reply)\s+(?:more\s+)?(?:briefly|concisely|short|shorter)$/.test(normalized)) {
-      setResponseLength("shorter");
-      setVoiceStatus("waiting");
-      speakAssistantResponse("Shorter responses selected.");
-      return true;
-    }
-    if (/^(?:answer|respond|reply)\s+(?:with\s+)?(?:more detail|in detail|longer)$/.test(normalized)) {
-      setResponseLength("longer");
-      setVoiceStatus("waiting");
-      speakAssistantResponse("Longer responses selected.");
-      return true;
-    }
-    if (/^(?:go|jump|show)\s+(?:to\s+)?(?:the\s+)?latest message$/.test(normalized)) {
-      scrollToLatest();
-      setVoiceStatus("waiting");
-      speakAssistantResponse("Showing the latest message.");
-      return true;
-    }
-    return false;
-  }
-
-  function submitVoiceCommand(command: string): void {
-    const normalized = command.replace(/\s+/g, " ").trim().slice(0, 12_000);
-    stopVoiceRecognition();
-    voiceCommandRef.current = "";
-    if (!normalized) {
-      setVoiceStatus("waiting");
-      scheduleWakeRecognition();
-      return;
-    }
-    if (/^(cancel|never mind)$/i.test(normalized)) {
-      setInput("");
-      setVoiceStatus("waiting");
-      scheduleWakeRecognition();
-      return;
-    }
-    if (/^(stop listening|turn off voice mode)$/i.test(normalized)) {
-      stopVoiceMode();
-      return;
-    }
-    voiceInstructionRef.current = normalized;
-    if (handleVoiceControlCommand(normalized)) {
-      setInput("");
-      return;
-    }
-    if (loading) {
-      setVoiceError("NexusLM is still responding. Wait for it to finish before giving another instruction.");
-      setVoiceStatus("waiting");
-      scheduleWakeRecognition();
-      return;
-    }
-    voiceSpeakCursorRef.current = messages.length;
-    spokenMessageRef.current = null;
-    setInput(normalized);
-    setVoiceStatus("thinking");
-    void send(normalized, undefined, "all", { voiceInput: true });
-  }
-
-  function speakAssistantResponse(content: string): void {
-    if (!voiceModeRef.current) return;
-    if (typeof window === "undefined" || !window.speechSynthesis || typeof SpeechSynthesisUtterance === "undefined") {
-      setVoiceError("Spoken responses are not supported in this browser. Written responses will continue normally.");
-      setVoiceStatus("waiting");
-      scheduleWakeRecognition();
-      return;
-    }
-    const spokenResponse = buildNexusSpokenResponse(content, voiceInstructionRef.current);
-    const chunks = splitNexusVoiceText(spokenResponse);
-    if (chunks.length === 0) {
-      setVoiceStatus("waiting");
-      scheduleWakeRecognition();
-      return;
-    }
-
-    stopVoiceOutput();
-    window.speechSynthesis.resume();
-    const generation = speechGenerationRef.current;
-    let chunkIndex = 0;
-    setVoiceStatus("speaking");
-    const speakNext = () => {
-      if (generation !== speechGenerationRef.current || !voiceModeRef.current) return;
-      if (chunkIndex >= chunks.length) {
-        finishVoiceSpeech(generation);
-        return;
-      }
-      const utterance = new SpeechSynthesisUtterance(chunks[chunkIndex]);
-      chunkIndex += 1;
-      const voice = pickVoice(window.speechSynthesis.getVoices());
-      if (voice) utterance.voice = voice;
-      utterance.rate = 1;
-      utterance.pitch = 1;
-      utterance.onend = () => {
-        speakNext();
-      };
-      utterance.onerror = (event) => {
-        if (generation !== speechGenerationRef.current || event.error === "canceled" || event.error === "interrupted") return;
-        setVoiceError("Nexus could not play the spoken response. The written response is still available.");
-        finishVoiceSpeech(generation);
-      };
-      window.speechSynthesis.speak(utterance);
-    };
-    const estimatedDurationMs = Math.min(120_000, Math.max(4_000, cleanNexusVoiceText(content).length * 65 + 2_000));
-    voiceResumeTimerRef.current = setTimeout(() => finishVoiceSpeech(generation), estimatedDurationMs);
-    speakNext();
-  }
-
-  function stopVoiceMode(): void {
-    voiceModeRef.current = false;
-    setVoiceModeEnabled(false);
-    persistVoiceMode(false);
-    stopVoiceRecognition();
-    stopVoiceOutput();
-    speechUnlockedRef.current = false;
-    clearVoiceRestartTimer();
-    setVoiceStatus("off");
-    setVoiceError(null);
-  }
-
-  function toggleVoiceMode(): void {
-    if (voiceModeRef.current) {
-      if (!speechUnlockedRef.current) {
-        setVoiceError(null);
-        setVoiceStatus("speaking");
-        speakVoiceNotice("Nexus voice mode is on.", () => {
-          if (!voiceModeRef.current) return;
-          setVoiceStatus("waiting");
-          startWakeRecognition();
-        });
-        return;
-      }
-      stopVoiceMode();
-      return;
-    }
-    if (!createNexusVoiceRecognition()) {
-      setVoiceStatus("error");
-      setVoiceError("Voice mode is not supported in this browser. Try Safari or Chrome with microphone access enabled.");
-      return;
-    }
-    voiceModeRef.current = true;
-    setVoiceModeEnabled(true);
-    persistVoiceMode(true);
-    setVoiceError(null);
-    voiceSpeakCursorRef.current = messages.length;
-    spokenMessageRef.current = null;
-    setVoiceStatus("speaking");
-    speakVoiceNotice("Nexus voice mode is on.", () => {
-      if (!voiceModeRef.current) return;
-      setVoiceStatus("waiting");
-      startWakeRecognition();
-    });
-  }
-
   useEffect(() => () => {
-    voiceModeRef.current = false;
-    stopVoiceRecognition();
-    stopVoiceOutput();
-    clearVoiceRestartTimer();
-    clearVoiceResumeTimer();
     if (generatedPreviewUrlRef.current) URL.revokeObjectURL(generatedPreviewUrlRef.current);
-  }, []);
-
-  useEffect(() => {
-    let shouldRestore = false;
-    try {
-      shouldRestore = window.localStorage.getItem(NEXUS_VOICE_MODE_STORAGE_KEY) === "on";
-    } catch (error) {
-      setVoiceError(`Voice mode preference could not be loaded: ${readableError(error)}`);
-    }
-    if (!shouldRestore) return;
-    voiceModeRef.current = true;
-    setVoiceModeEnabled(true);
-    setVoiceError("Tap the microphone once to enable spoken responses on this device.");
-    const timer = setTimeout(() => startWakeRecognition(), 0);
-    return () => clearTimeout(timer);
   }, []);
 
   useEffect(() => {
@@ -1203,6 +797,10 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
   }, [manifest?.jobId]);
 
   const selectedTranscript = transcripts.find((transcript) => transcript.label === selectedTranscriptLabel) ?? transcripts[0] ?? null;
+  const outlineFocusChapterNumber = activeOutlineChapterNumber
+    ?? pendingDraft?.number
+    ?? (manuscript.outlineContinuation?.kind === "chapter" ? manuscript.outlineContinuation.chapterNumber : null);
+  const outlineFocusChapter = manuscript.outline?.chapters.find((chapter) => chapter.number === outlineFocusChapterNumber) ?? null;
 
   useEffect(() => {
     let cancelled = false;
@@ -1212,12 +810,12 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
     void getNexusLMChat(activeConversationKey)
       .then((archive) => {
         if (cancelled) return;
-        const loadedMessages = archive?.messages?.length ? archive.messages : [initialMessage(manifest)];
-        setMessages(loadedMessages);
-        voiceSpeakCursorRef.current = loadedMessages.length;
-        spokenMessageRef.current = null;
+        setMessages(archive?.messages?.length ? archive.messages : [initialMessage(manifest)]);
         setAttachments(archive?.attachments ?? []);
         setManuscript(archive?.manuscript ?? createEmptyManuscript(manifest, pipelineSnapshot));
+        setPendingDraft(null);
+        setPendingDraftSourceLabel(null);
+        setActiveOutlineChapterNumber(null);
         setProcessEntireDocument(false);
         setSelectedAttachmentId(archive?.attachments?.[0]?.id ?? null);
         clearGeneratedPreview();
@@ -1272,24 +870,6 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
     });
     return () => window.cancelAnimationFrame(frame);
   }, [activeConversationKey, messages, loading]);
-
-  useEffect(() => {
-    if (!voiceModeEnabled || loading) return;
-    let latestIndex = -1;
-    for (let index = messages.length - 1; index >= 0; index -= 1) {
-      if (messages[index].role === "assistant" && messages[index].content.trim()) {
-        latestIndex = index;
-        break;
-      }
-    }
-    if (latestIndex < voiceSpeakCursorRef.current) return;
-    const latest = messages[latestIndex];
-    const messageKey = `${activeConversationKey}:${latestIndex}:${latest.content}`;
-    if (spokenMessageRef.current === messageKey) return;
-    spokenMessageRef.current = messageKey;
-    voiceSpeakCursorRef.current = messages.length;
-    speakAssistantResponse(latest.content);
-  }, [activeConversationKey, loading, messages, voiceModeEnabled]);
 
   useEffect(() => {
     const textarea = inputRef.current;
@@ -1391,16 +971,14 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
       const isPdf = extension === "pdf" || file.type === "application/pdf";
       const isHtmlFilename = /\.(?:html?|xhtml)(?:\.txt)?$/i.test(file.name);
       const isHtml = isHtmlFilename || file.type === "text/html";
-      const isImage = file.type.startsWith("image/")
-        || ["avif", "gif", "jpeg", "jpg", "png", "webp"].includes(extension);
       const isText = file.type.startsWith("text/")
         || ["csv", "css", "json", "js", "jsx", "md", "tsx", "ts", "xml", "yaml", "yml", "srt", "log"].includes(extension);
-      if (!isText && !isHtml && !isPdf && !isImage) {
-        setAttachmentError(`${file.name} is not supported yet. Use text, HTML, Markdown, PDF, or image files.`);
+      if (!isText && !isHtml && !isPdf) {
+        setAttachmentError(`${file.name} is not supported yet. Use text, HTML, Markdown, or PDF documents.`);
         continue;
       }
-      if ((!isPdf && !isImage && file.size > 6_000_000) || (isPdf && file.size > 20_000_000) || (isImage && file.size > 12_000_000)) {
-        setAttachmentError(`${file.name} is too large. Text/HTML files may be up to 6 MB, images up to 12 MB, and PDFs up to 20 MB.`);
+      if ((!isPdf && file.size > 6_000_000) || (isPdf && file.size > 20_000_000)) {
+        setAttachmentError(`${file.name} is too large. Text/HTML files may be up to 6 MB; PDFs may be up to 20 MB.`);
         continue;
       }
       try {
@@ -1416,11 +994,6 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
           }
           content = payload.text;
           previewDataUrl = await readDataUrl(file);
-        } else if (isImage) {
-          setVisionStatus(`Analyzing ${file.name} locally...`);
-          const observation = await inspectNexusLMImage(file, (message) => setVisionStatus(`${file.name} · ${message}`));
-          content = formatNexusLMImageObservation(file.name, observation);
-          previewDataUrl = await readDataUrl(file);
         } else {
           content = await file.text();
         }
@@ -1428,25 +1001,20 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
           setAttachmentError(`${file.name} is empty.`);
           continue;
         }
-        const detectedKind = isImage
-          ? "image"
-          : isPdf || !looksLikeHtmlDocument(content)
-            ? (isPdf ? "pdf" : "text")
-            : "html";
+        const detectedKind = isPdf || !looksLikeHtmlDocument(content) ? (isPdf ? "pdf" : "text") : "html";
         accepted.push({
           id: `${file.name}-${file.lastModified}-${accepted.length}`,
           name: file.name,
           content,
           size: file.size,
-          kind: isImage ? "image" : isPdf ? "pdf" : isHtml || detectedKind === "html" ? "html" : "text",
-          mimeType: file.type || (isImage ? "image/*" : isPdf ? "application/pdf" : isHtml || detectedKind === "html" ? "text/html" : "text/plain"),
+          kind: isPdf ? "pdf" : isHtml || detectedKind === "html" ? "html" : "text",
+          mimeType: file.type || (isPdf ? "application/pdf" : isHtml || detectedKind === "html" ? "text/html" : "text/plain"),
           previewDataUrl,
         });
       } catch (error) {
         setAttachmentError(`${file.name} could not be read: ${readableError(error)}`);
       }
     }
-    setVisionStatus(null);
 
     if (accepted.length > 0) {
       const totalCharacters = [...attachments, ...accepted].reduce((total, attachment) => total + attachment.content.length, 0);
@@ -1821,7 +1389,6 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
     requestAttachments: ChatAttachment[],
     shouldProcessEntireDocument: boolean,
     requestResponseLength: NexusLMResponseLength,
-    voiceInput: boolean,
   ): Promise<void> {
     const controller = new AbortController();
     abortControllerRef.current = controller;
@@ -1855,7 +1422,6 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
           processEntireDocument: shouldProcessEntireDocument,
           attachments: requestAttachments.map(({ name, content, kind, mimeType }) => ({ name, content, kind, mimeType })),
           history: compactHistory(nextMessages),
-          voiceMode: voiceInput,
         }),
       });
 
@@ -1895,125 +1461,6 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
           }]);
         }
       }
-    } catch (error) {
-      const stopped = error instanceof DOMException && error.name === "AbortError";
-      const status = stopped ? "Response stopped." : readableError(error);
-      updateAnswer(answer.trim() ? `${answer}\n\n${status}` : status);
-    } finally {
-      abortControllerRef.current = null;
-      setCanAbort(false);
-    }
-  }
-
-  async function streamBookResponse(
-    instruction: string,
-    activeMode: "ask" | "socratic" | "plan",
-    nextMessages: Message[],
-    requestResponseLength: NexusLMResponseLength,
-    voiceInput: boolean,
-  ): Promise<void> {
-    const controller = new AbortController();
-    abortControllerRef.current = controller;
-    setCanAbort(true);
-    setSources([]);
-    setMessages([...nextMessages, { role: "assistant", content: "", format: "markdown" }]);
-    let answer = "";
-    let pendingStreamText = "";
-    let metadataParsed = false;
-
-    const updateAnswer = (content: string) => {
-      setMessages((current) => {
-        const last = current[current.length - 1];
-        if (last?.role === "assistant" && last.format === "markdown") {
-          return [...current.slice(0, -1), { ...last, content }];
-        }
-        return [...current, { role: "assistant", content, format: "markdown" }];
-      });
-    };
-
-    const parseSources = (encoded: string): Source[] => {
-      const base64 = encoded.replace(/-/g, "+").replace(/_/g, "/");
-      const paddedBase64 = base64.padEnd(Math.ceil(base64.length / 4) * 4, "=");
-      const binary = atob(paddedBase64);
-      const bytes = Uint8Array.from(binary, (character) => character.charCodeAt(0));
-      const parsed: unknown = JSON.parse(new TextDecoder().decode(bytes));
-      if (!Array.isArray(parsed) || parsed.some((source) => {
-        if (!source || typeof source !== "object") return true;
-        const candidate = source as Record<string, unknown>;
-        return typeof candidate.id !== "string"
-          || typeof candidate.label !== "string"
-          || typeof candidate.excerpt !== "string";
-      })) {
-        throw new Error("NexusLM returned invalid book source metadata.");
-      }
-      return parsed as Source[];
-    };
-
-    const consumeStreamText = (chunk: string) => {
-      pendingStreamText += chunk;
-      if (!metadataParsed) {
-        if (!NEXUSLM_BOOK_STREAM_METADATA_START.startsWith(pendingStreamText)
-          && !pendingStreamText.startsWith(NEXUSLM_BOOK_STREAM_METADATA_START)) {
-          throw new Error("NexusLM returned an invalid book response stream.");
-        }
-        if (!pendingStreamText.startsWith(NEXUSLM_BOOK_STREAM_METADATA_START)) return;
-        const metadataEnd = pendingStreamText.indexOf(
-          NEXUSLM_BOOK_STREAM_METADATA_END,
-          NEXUSLM_BOOK_STREAM_METADATA_START.length,
-        );
-        if (metadataEnd < 0) return;
-        const encodedSources = pendingStreamText.slice(NEXUSLM_BOOK_STREAM_METADATA_START.length, metadataEnd);
-        setSources(parseSources(encodedSources));
-        pendingStreamText = pendingStreamText.slice(metadataEnd + NEXUSLM_BOOK_STREAM_METADATA_END.length);
-        metadataParsed = true;
-      }
-      if (!pendingStreamText) return;
-      answer += pendingStreamText;
-      pendingStreamText = "";
-      updateAnswer(answer);
-    };
-
-    try {
-      const response = await fetch("/api/ebook/nexuslm/chat", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        signal: controller.signal,
-        body: JSON.stringify({
-          query: instruction,
-          mode: activeMode,
-          persona: PERSONAS[persona].label,
-          agent,
-          writingStyle,
-          responseLength: requestResponseLength,
-          llmTemperature: nexusLMTemperature,
-          book: {
-            title: manifest?.bookTitle ?? pipelineSnapshot?.bookTitle ?? "Untitled book",
-            chapters: manifest?.chapters.map((chapter) => ({ number: chapter.number, title: chapter.title })) ?? [],
-          },
-          manuscript: manifest ? { frontMatter: manifest.frontMatter, chapters: manifest.chapters, backMatter: manifest.backMatter ?? null } : null,
-          transcripts,
-          history: compactHistory(nextMessages),
-          voiceMode: voiceInput,
-        }),
-      });
-      if (!response.ok) {
-        const payload = await response.json().catch(() => null) as { error?: string } | null;
-        throw new Error(payload?.error ?? `Request failed (${response.status})`);
-      }
-      if (!response.body) throw new Error("NexusLM returned no response stream.");
-
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder();
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        consumeStreamText(decoder.decode(value, { stream: true }));
-      }
-      consumeStreamText(decoder.decode());
-      if (!metadataParsed) throw new Error("NexusLM returned an incomplete book response stream.");
-      const finalAnswer = normalizeScriptureBlockquotes(sanitizeNexusLMText(answer));
-      updateAnswer(finalAnswer);
-      if (!finalAnswer) throw new Error("NexusLM returned an empty response.");
     } catch (error) {
       const stopped = error instanceof DOMException && error.name === "AbortError";
       const status = stopped ? "Response stopped." : readableError(error);
@@ -2087,44 +1534,100 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
     options?: {
       retry?: boolean;
       forceGeneral?: boolean;
+      forceBook?: boolean;
       requestAttachments?: ChatAttachment[];
       processEntireDocument?: boolean;
       responseLength?: NexusLMResponseLength;
-      voiceInput?: boolean;
     },
   ) {
-    const instruction = (requestText ?? input).trim();
-    if (!instruction || loading) return;
-    const voiceInput = options?.voiceInput ?? voiceModeRef.current;
-    const shouldUseShortGreeting = isNexusGreeting(instruction) && (voiceInput || responseLength === "default");
-    const requestResponseLength = options?.responseLength
-      ?? (shouldUseShortGreeting ? "shorter" : responseLength === "default" && isNexusLMLongFormRequest(instruction) ? "long-form" : responseLength);
-    const activeMode = requestMode ?? inferMode(instruction, mode);
-    const requestUsesBook = options?.forceGeneral ? false : useBookContext && hasBookContext;
-    if (requestUsesBook && activeMode === "edit" && !manifest) {
+    const displayInstruction = (requestText ?? input).trim();
+    if (!displayInstruction || loading) return;
+    const continuationTask = manuscript.outlineContinuation
+      && isOutlineContinuationAffirmative(displayInstruction)
+      ? manuscript.outlineContinuation
+      : null;
+    if (continuationTask && pendingDraft) {
       setMessages((current) => [...current,
-        { role: "user", content: instruction },
-        { role: "assistant", content: "Load or finish a manuscript before requesting an edit." },
+        { role: "user", content: displayInstruction },
+        { role: "assistant", content: "Add or discard the current chapter draft before continuing the outline." },
       ]);
-      if (voiceModeRef.current) {
-        setVoiceStatus("waiting");
-        scheduleWakeRecognition();
-      }
+      setInput("");
       return;
     }
-    if (requestUsesBook && attachments.length > 0 && !options?.forceGeneral) {
+    if (manuscript.outlineContinuation && isOutlineContinuationDecline(displayInstruction)) {
+      const nextLabel = manuscript.outline
+        ? formatOutlineContinuation(manuscript.outlineContinuation, manuscript.outline)
+        : "the next outlined section";
       setMessages((current) => [...current,
-        { role: "user", content: instruction },
+        { role: "user", content: displayInstruction },
+        { role: "assistant", content: `Paused. ${nextLabel} is ready whenever you are. Reply “yes” or “continue” to resume.` },
+      ]);
+      setInput("");
+      return;
+    }
+    const instruction = continuationTask && manuscript.outline
+      ? outlineTaskInstruction(continuationTask, manuscript.outline)
+      : displayInstruction;
+    const requestResponseLength = options?.responseLength
+      ?? (responseLength === "default" && isNexusLMLongFormRequest(instruction) ? "long-form" : responseLength);
+    const activeMode = continuationTask ? "draft" : requestMode ?? inferMode(instruction, mode);
+    const requestUsesBook = continuationTask || options?.forceBook
+      ? true
+      : options?.forceGeneral ? false : useBookContext && hasBookContext;
+    if (continuationTask && !manuscript.outline) {
+      setMessages((current) => [...current,
+        { role: "user", content: displayInstruction },
+        { role: "assistant", content: "The saved book outline is unavailable. Draft a new outline before continuing." },
+      ]);
+      setInput("");
+      return;
+    }
+    let draftSelectedTranscript: { label: string; text: string } | null = null;
+    const requestedSlotNumber = activeMode === "draft" ? explicitTranscriptSlotNumber(displayInstruction) : null;
+    if (requestUsesBook && (activeMode === "draft" || continuationTask)) {
+      if (requestedSlotNumber !== null) {
+        draftSelectedTranscript = transcriptForExplicitSlot(transcripts, requestedSlotNumber);
+        if (!draftSelectedTranscript) {
+          setMessages((current) => [...current,
+            { role: "user", content: displayInstruction },
+            { role: "assistant", content: `Transcript slot ${requestedSlotNumber} is not available. Choose a slot from the Transcript slots list; I did not use the highlighted slot as a fallback.` },
+          ]);
+          setInput("");
+          return;
+        }
+        setSelectedTranscriptLabel(draftSelectedTranscript.label);
+      } else if (continuationTask?.transcriptLabel) {
+        draftSelectedTranscript = transcripts.find((transcript) => transcript.label === continuationTask.transcriptLabel) ?? null;
+        if (!draftSelectedTranscript) {
+          setMessages((current) => [...current,
+            { role: "user", content: displayInstruction },
+            { role: "assistant", content: `The saved transcript slot "${continuationTask.transcriptLabel}" is no longer available. Choose a transcript slot and ask me to continue.` },
+          ]);
+          setInput("");
+          return;
+        }
+      } else if (activeMode === "draft" && draftTranscriptScope === "selected") {
+        draftSelectedTranscript = selectedTranscript;
+      }
+    }
+    const requestTranscripts = draftSelectedTranscript ? [draftSelectedTranscript] : transcripts;
+    const effectiveTranscriptScope = draftSelectedTranscript ? "selected" : "all";
+    if (requestUsesBook && activeMode === "edit" && !manifest) {
+      setMessages((current) => [...current,
+        { role: "user", content: displayInstruction },
+        { role: "assistant", content: "Load or finish a manuscript before requesting an edit." },
+      ]);
+      return;
+    }
+    if (requestUsesBook && attachments.length > 0 && !options?.forceGeneral && !continuationTask && !options?.forceBook) {
+      setMessages((current) => [...current,
+        { role: "user", content: displayInstruction },
         { role: "assistant", content: "These attached documents are ready for general chat. Switch Context to General to process them, or remove the attachments to continue with the book." },
       ]);
-      if (voiceModeRef.current) {
-        setVoiceStatus("waiting");
-        scheduleWakeRecognition();
-      }
       return;
     }
 
-    const userMessage = `${instruction}\n\n[Mode: ${MODES[activeMode].label}] [Persona: ${PERSONAS[persona].label}]`;
+    const userMessage = `${displayInstruction}\n\n[Mode: ${MODES[activeMode].label}] [Persona: ${PERSONAS[persona].label}]`;
     const retryBase = options?.retry && messages[messages.length - 1]?.role === "assistant"
       ? messages.slice(0, -1)
       : messages;
@@ -2134,26 +1637,9 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
       ? retryBase
       : [...messages, {
         role: "user" as const,
-        content: instruction,
+        content: displayInstruction,
         attachments: requestUsesBook ? undefined : requestAttachments.map(({ id, name }) => ({ id, name })),
       }];
-    if (isNexusGreeting(instruction)) {
-      if (voiceInput) {
-        stopVoiceRecognition();
-        stopVoiceOutput();
-        setVoiceStatus("thinking");
-        voiceInstructionRef.current = instruction;
-      }
-      setMessages([...nextMessages, { role: "assistant", content: buildNexusGreetingResponse(instruction) }]);
-      setInput("");
-      return;
-    }
-    if (voiceModeRef.current) {
-      stopVoiceRecognition();
-      stopVoiceOutput();
-      setVoiceStatus("thinking");
-    }
-    if (voiceInput) voiceInstructionRef.current = instruction;
     stickToBottomRef.current = true;
     setMessages(nextMessages);
     setInput("");
@@ -2185,7 +1671,100 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
         });
         setSources([]);
         setAttachmentError(null);
-        await streamGeneralResponse(instruction, generalMode, nextMessages, requestAttachmentsSnapshot, shouldProcessEntireDocument, requestResponseLength, voiceInput);
+        await streamGeneralResponse(instruction, generalMode, nextMessages, requestAttachmentsSnapshot, shouldProcessEntireDocument, requestResponseLength);
+        return;
+      }
+
+      if (activeMode === "outline") {
+        const res = await fetch("/api/ebook/nexuslm/outline", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            bookTitle: manifest?.bookTitle ?? pipelineSnapshot?.bookTitle ?? manuscript.title,
+            subtitle: manifest?.subtitle ?? manuscript.subtitle,
+            authorName: manifest?.authorName ?? manuscript.authorName,
+            transcripts,
+          }),
+        });
+        const json = await res.json() as { outline?: unknown; error?: string };
+        if (!res.ok || json.error) throw new Error(json.error ?? `Request failed (${res.status})`);
+        const parsed = NexusLMBookOutlineSchema.safeParse(json.outline);
+        if (!parsed.success) throw new Error("NexusLM returned an invalid book outline.");
+        const completedChapterNumbers = [
+          ...manuscript.chapters.map((chapter) => chapter.number),
+          ...(manifest?.chapters.map((chapter) => chapter.number) ?? []),
+        ];
+        const nextContinuation = getNextOutlineContinuation(
+          parsed.data,
+          completedChapterNumbers,
+          manuscript.frontMatterText,
+          manuscript.backMatterText,
+        );
+        setManuscript((current) => ({
+          ...current,
+          outline: parsed.data,
+          outlineContinuation: nextContinuation ?? undefined,
+        }));
+        const followUp = nextContinuation
+          ? `\n\nThe outline is saved in the manuscript workspace. Ready to write ${formatOutlineContinuation(nextContinuation, parsed.data)}? Reply “yes” to begin.`
+          : "\n\nThe outline is saved; all of its items are already present in the manuscript.";
+        setMessages((current) => [...current, {
+          role: "assistant",
+          content: `${formatBookOutline(parsed.data)}${followUp}`,
+          format: "markdown",
+        }]);
+        setShowMobileContext(true);
+        return;
+      }
+
+      if (continuationTask && continuationTask.kind !== "chapter") {
+        if (!manuscript.outline) throw new Error("The saved book outline is unavailable.");
+        const chapters = manuscriptChaptersForMatter(manuscript, manifest);
+        const res = await fetch("/api/ebook/nexuslm/matter", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            kind: continuationTask.kind,
+            bookTitle: manifest?.bookTitle ?? manuscript.title,
+            authorName: manifest?.authorName ?? manuscript.authorName,
+            outline: manuscript.outline,
+            chapters,
+            transcripts: requestTranscripts,
+            responseLength: requestResponseLength,
+          }),
+        });
+        const json = await res.json() as { content?: unknown; error?: string };
+        if (!res.ok || json.error) throw new Error(json.error ?? `Request failed (${res.status})`);
+        if (typeof json.content !== "string" || !json.content.trim()) throw new Error("NexusLM returned empty book matter.");
+        const content = sanitizeNexusLMText(json.content);
+        const frontMatterText = continuationTask.kind === "frontMatter" ? content : manuscript.frontMatterText ?? "";
+        const backMatterText = continuationTask.kind === "backMatter" ? content : manuscript.backMatterText ?? "";
+        const completedChapterNumbers = [
+          ...manuscript.chapters.map((chapter) => chapter.number),
+          ...(manifest?.chapters.map((chapter) => chapter.number) ?? []),
+        ];
+        const nextContinuation = getNextOutlineContinuation(
+          manuscript.outline,
+          completedChapterNumbers,
+          frontMatterText,
+          backMatterText,
+          draftSelectedTranscript?.label ?? continuationTask.transcriptLabel ?? null,
+        );
+        setManuscript((current) => ({
+          ...current,
+          frontMatterText,
+          backMatterText,
+          outlineContinuation: nextContinuation ?? undefined,
+        }));
+        const completedLabel = continuationTask.kind === "frontMatter" ? "Front matter" : "Back matter";
+        const followUp = nextContinuation
+          ? `\n\n${formatOutlineContinuation(nextContinuation, manuscript.outline)} is next. Reply “yes” to continue.`
+          : "\n\nAll chapters and outlined front and back matter are complete.";
+        setMessages((current) => [...current, {
+          role: "assistant",
+          content: `## ${completedLabel}\n\n${content}${followUp}`,
+          format: "markdown",
+        }]);
         return;
       }
 
@@ -2196,6 +1775,7 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
           setMessages((current) => [...current, { role: "assistant", content: "Tell me which chapter number to draft, for example: Write chapter 4 from the manuscript." }]);
           return;
         }
+        setActiveOutlineChapterNumber(chapterNumber);
         const res = await fetch("/api/ebook/nexuslm/draft", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -2209,12 +1789,15 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
             llmTemperature: nexusLMTemperature,
             book: {
               title: manifest?.bookTitle ?? pipelineSnapshot?.bookTitle ?? "Untitled book",
-              chapters: manifest?.chapters.map((chapter) => ({ number: chapter.number, title: chapter.title })) ?? [],
+              chapters: manuscript.outline?.chapters.map((chapter) => ({ number: chapter.number, title: chapter.title }))
+                ?? manifest?.chapters.map((chapter) => ({ number: chapter.number, title: chapter.title }))
+                ?? [],
               manuscriptChapter: manifest?.chapters.find((chapter) => chapter.number === chapterNumber) ?? null,
             },
-            transcripts: draftTranscriptScope === "selected" && selectedTranscript ? [selectedTranscript] : transcripts,
-            transcriptScope: draftTranscriptScope,
-            voiceMode: voiceInput,
+            outline: manuscript.outline ?? null,
+            transcripts: requestTranscripts,
+            transcriptScope: effectiveTranscriptScope,
+            selectedTranscriptLabel: draftSelectedTranscript?.label ?? null,
           }),
         });
         const json = await res.json() as { chapter?: unknown; error?: string };
@@ -2222,12 +1805,34 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
         const parsed = ChapterDraftSchema.safeParse(json.chapter);
         if (!parsed.success) throw new Error("NexusLM returned an invalid chapter draft.");
         setPendingDraft(parsed.data);
+        setPendingDraftSourceLabel(draftSelectedTranscript?.label ?? null);
         setMessages((current) => [...current, { role: "assistant", content: formatChapterDraft(parsed.data) }]);
         return;
       }
 
       if (activeMode !== "edit") {
-        await streamBookResponse(instruction, activeMode, nextMessages, requestResponseLength, voiceInput);
+        const res = await fetch("/api/ebook/nexuslm/chat", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            query: instruction,
+            mode: activeMode,
+            persona: PERSONAS[persona].label,
+            agent,
+            writingStyle,
+            responseLength: requestResponseLength,
+            llmTemperature: nexusLMTemperature,
+            book: { title: manifest?.bookTitle ?? pipelineSnapshot?.bookTitle ?? "Untitled book", chapters: manifest?.chapters.map((chapter) => ({ number: chapter.number, title: chapter.title })) ?? [] },
+            manuscript: manifest ? { frontMatter: manifest.frontMatter, chapters: manifest.chapters, backMatter: manifest.backMatter ?? null } : null,
+            transcripts,
+            history: compactHistory(nextMessages),
+          }),
+        });
+        const json = await res.json() as { answer?: string; sources?: Source[]; error?: string };
+        if (!res.ok || json.error) throw new Error(json.error ?? `Request failed (${res.status})`);
+        setSources(json.sources ?? []);
+        const answer = sanitizeNexusLMText(json.answer ?? "NexusLM returned no answer.");
+        setMessages((current) => [...current, { role: "assistant", content: answer }]);
         return;
       }
 
@@ -2244,7 +1849,6 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
           manifestVersion: (manifest as Record<string, unknown>).__version as string | undefined,
           transcriptSources: transcripts,
           selectedTranscriptLabel: selectedTranscript?.label,
-          voiceMode: voiceInput,
           dryRun: true,
         }),
       });
@@ -2305,6 +1909,7 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
       setMessages((current) => [...current, { role: "assistant", content: readableError(error) }]);
     } finally {
       setLoading(false);
+      setActiveOutlineChapterNumber(null);
     }
   }
 
@@ -2346,9 +1951,50 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
       ? baseManifest.chapters.map((chapter) => chapter.number === pendingDraft.number ? pendingDraft : chapter)
       : [...baseManifest.chapters, pendingDraft].sort((a, b) => a.number - b.number);
     const totalWordCount = chapters.reduce((sum, chapter) => sum + (chapter.totalWordCount ?? 0), 0);
+    const now = new Date().toISOString();
+    const manuscriptChapter: ManuscriptChapter = {
+      id: manuscript.chapters.find((chapter) => chapter.number === pendingDraft.number)?.id
+        ?? `nexuslm-chapter-${Date.now()}-${pendingDraft.number}`,
+      number: pendingDraft.number,
+      title: pendingDraft.title,
+      content: formatChapterDraft(pendingDraft),
+      createdAt: manuscript.chapters.find((chapter) => chapter.number === pendingDraft.number)?.createdAt ?? now,
+      updatedAt: now,
+    };
+    const manuscriptChapters = [
+      ...manuscript.chapters.filter((chapter) => chapter.number !== pendingDraft.number),
+      manuscriptChapter,
+    ].sort((left, right) => left.number - right.number);
+    const completedChapterNumbers = [
+      ...chapters.map((chapter) => chapter.number),
+      ...manuscriptChapters.map((chapter) => chapter.number),
+    ];
+    const nextContinuation = manuscript.outline
+      ? getNextOutlineContinuation(
+        manuscript.outline,
+        completedChapterNumbers,
+        manuscript.frontMatterText,
+        manuscript.backMatterText,
+        pendingDraftSourceLabel,
+      )
+      : null;
     onManifestChange({ ...baseManifest, chapters, totalWordCount }, `Chapter ${pendingDraft.number} added to the manuscript.`);
-    setMessages((current) => [...current, { role: "assistant", content: `Chapter ${pendingDraft.number} added to the manuscript.` }]);
+    setManuscript((current) => ({
+      ...current,
+      chapters: manuscriptChapters,
+      outlineContinuation: nextContinuation ?? undefined,
+    }));
+    const followUp = manuscript.outline
+      ? nextContinuation
+        ? ` Would you like me to write ${formatOutlineContinuation(nextContinuation, manuscript.outline)} next? Reply “yes” to continue.`
+        : " All chapters and outlined front and back matter are complete."
+      : "";
+    setMessages((current) => [...current, {
+      role: "assistant",
+      content: `Chapter ${pendingDraft.number} added to the manuscript.${followUp}`,
+    }]);
     setPendingDraft(null);
+    setPendingDraftSourceLabel(null);
   }
 
   function togglePendingPath(path: string): void {
@@ -2461,6 +2107,69 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
           style={{ WebkitOverflowScrolling: "touch" }}
         >
           <div className="mx-auto flex max-w-6xl flex-col gap-5">
+            {manuscript.outline && (
+              <section className="rounded-2xl border border-violet-400/30 bg-violet-950/20 p-4" aria-label="Saved book outline">
+                <p className="text-xs font-bold uppercase tracking-widest text-violet-200">
+                  Outline in use · {manuscript.outline.chapters.length} chapters
+                </p>
+                {outlineFocusChapter && (
+                  <div className="mt-2">
+                    <p className="text-sm font-semibold text-slate-100">
+                      Chapter {outlineFocusChapter.number}: {outlineFocusChapter.title}
+                    </p>
+                    <p className="mt-1 text-xs leading-5 text-slate-300">{outlineFocusChapter.purpose}</p>
+                    <ul className="mt-2 space-y-1">
+                      {outlineFocusChapter.sections.map((section) => (
+                        <li key={section.heading} className="text-xs leading-5 text-violet-100">
+                          <span className="font-semibold">{section.heading}:</span> {section.purpose}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+                {!outlineFocusChapter && manuscript.outlineContinuation && (
+                  <p className="mt-2 text-xs leading-5 text-slate-300">
+                    Next: {formatOutlineContinuation(manuscript.outlineContinuation, manuscript.outline)}
+                  </p>
+                )}
+                <details className="mt-3 border-t border-violet-400/20 pt-2">
+                  <summary className="flex min-h-12 cursor-pointer items-center text-xs font-semibold text-violet-200">
+                    View full outline
+                  </summary>
+                  <div className="space-y-4 pb-2">
+                    <div>
+                      <p className="text-xs font-semibold text-slate-200">Core thesis</p>
+                      <p className="mt-1 text-xs leading-5 text-slate-400">{manuscript.outline.coreThesis}</p>
+                    </div>
+                    {manuscript.outline.chapters.map((chapter) => (
+                      <div key={chapter.number} className="rounded-xl border border-slate-800 bg-slate-950/50 p-3">
+                        <p className="text-xs font-semibold text-slate-200">Chapter {chapter.number}: {chapter.title}</p>
+                        <p className="mt-1 text-xs leading-5 text-slate-400">{chapter.purpose}</p>
+                        <ul className="mt-2 space-y-1">
+                          {chapter.sections.map((section) => (
+                            <li key={section.heading} className="text-xs leading-5 text-slate-400">
+                              <span className="font-semibold text-violet-200">{section.heading}:</span> {section.purpose}
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    ))}
+                    <div>
+                      <p className="text-xs font-semibold text-slate-200">Front matter · write after all chapters</p>
+                      {manuscript.outline.frontMatter.map((item) => (
+                        <p key={item.title} className="mt-1 text-xs leading-5 text-slate-400">{item.title}: {item.purpose}</p>
+                      ))}
+                    </div>
+                    <div>
+                      <p className="text-xs font-semibold text-slate-200">Back matter · write after all chapters</p>
+                      {manuscript.outline.backMatter.map((item) => (
+                        <p key={item.title} className="mt-1 text-xs leading-5 text-slate-400">{item.title}: {item.purpose}</p>
+                      ))}
+                    </div>
+                  </div>
+                </details>
+              </section>
+            )}
             {messages.map((message, index) => (
               <div key={`${message.role}-${index}`} className={message.role === "user"
                 ? "max-w-[88%] self-end rounded-2xl border border-cyan-500/30 bg-cyan-500/10 px-4 py-3 text-sm leading-6 text-cyan-50"
@@ -2578,10 +2287,10 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
               <div className="mb-3 rounded-2xl border border-cyan-500/30 bg-cyan-500/10 p-4">
                 <p className="text-xs font-bold uppercase tracking-widest text-cyan-300">Chapter draft ready</p>
                 <p className="mt-2 text-sm leading-6 text-cyan-50">Chapter {pendingDraft.number}: {pendingDraft.title}</p>
-                <p className="mt-1 text-xs text-cyan-200/70">Review the complete draft in the conversation, then choose whether to add this exact version.</p>
+                <p className="mt-1 text-xs text-cyan-200/70">Review the complete draft in the conversation, then add this version. After it is added, NexusLM will ask whether to write the next outlined item.</p>
                 <div className="mt-3 flex gap-2">
                   <button type="button" onClick={addPendingDraft} disabled={loading} className="min-h-12 rounded-xl bg-cyan-300 px-4 text-sm font-bold text-slate-950 disabled:opacity-40">Add to manuscript</button>
-                  <button type="button" onClick={() => setPendingDraft(null)} disabled={loading} className="min-h-12 rounded-xl border border-slate-700 px-4 text-sm font-semibold text-slate-300 disabled:opacity-40">Discard draft</button>
+                  <button type="button" onClick={() => { setPendingDraft(null); setPendingDraftSourceLabel(null); }} disabled={loading} className="min-h-12 rounded-xl border border-slate-700 px-4 text-sm font-semibold text-slate-300 disabled:opacity-40">Discard draft</button>
                 </div>
               </div>
             )}
@@ -2707,7 +2416,7 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
               <input
                 ref={fileInputRef}
                 type="file"
-                accept=".txt,.md,.csv,.json,.css,.js,.jsx,.ts,.tsx,.xml,.yaml,.yml,.srt,.log,.html,.htm,.pdf,.avif,.gif,.jpeg,.jpg,.png,.webp,text/*,application/pdf,image/*"
+                accept=".txt,.md,.csv,.json,.css,.js,.jsx,.ts,.tsx,.xml,.yaml,.yml,.srt,.log,.html,.htm,.pdf,text/*,application/pdf"
                 multiple
                 className="hidden"
                 onChange={(event) => {
@@ -2753,12 +2462,6 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
               )}
               {attachmentError && (
                 <p className="px-3 pt-2 text-xs text-amber-300" role="alert">{attachmentError}</p>
-              )}
-              {visionStatus && (
-                <p className="px-3 pt-2 text-xs text-cyan-300" role="status" aria-live="polite">{visionStatus}</p>
-              )}
-              {voiceError && (
-                <p className="px-3 pt-2 text-xs text-amber-300" role="alert">{voiceError}</p>
               )}
               <div className="px-2 pb-2 pt-2 lg:px-3">
                 <textarea
@@ -2880,22 +2583,6 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
                   </button>
                   <button
                     type="button"
-                    role="switch"
-                    aria-checked={voiceModeEnabled}
-                    onClick={toggleVoiceMode}
-                    aria-label={voiceModeEnabled ? "Turn Nexus voice mode off" : "Turn Nexus voice mode on"}
-                    title={voiceModeEnabled ? `${nexusVoiceStatusLabel(voiceStatus)}. Click to turn off.` : "Turn on Nexus voice mode"}
-                    className={`relative flex min-h-12 min-w-12 shrink-0 items-center justify-center rounded-xl border px-3 text-xs font-semibold ${voiceModeEnabled ? "border-cyan-400/60 bg-cyan-400/15 text-cyan-200" : "border-slate-700 text-slate-400"}`}
-                  >
-                    <svg viewBox="0 0 24 24" aria-hidden="true" className="h-5 w-5 fill-none stroke-current stroke-2">
-                      <path d="M12 3a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3Z" strokeLinecap="round" strokeLinejoin="round" />
-                      <path d="M5 11a7 7 0 0 0 14 0M12 18v3M9 21h6" strokeLinecap="round" strokeLinejoin="round" />
-                    </svg>
-                    <span className="sr-only">{voiceModeEnabled ? "Nexus voice mode on" : "Nexus voice mode off"}</span>
-                    {voiceModeEnabled && <span className="absolute right-1.5 top-1.5 h-1.5 w-1.5 rounded-full bg-cyan-300" aria-hidden="true" />}
-                  </button>
-                  <button
-                    type="button"
                     onClick={() => (loading ? stopGenerating() : void send())}
                     disabled={loading ? !canAbort : !input.trim()}
                     className={`min-h-12 shrink-0 rounded-xl px-4 text-sm font-bold disabled:cursor-not-allowed disabled:opacity-40 ${loading && canAbort ? "border border-rose-400/40 bg-rose-500/10 text-rose-200" : "bg-cyan-400 text-slate-950"}`}
@@ -3009,6 +2696,61 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
               ))}
             </select>
           </div>
+          <section className="mt-4 rounded-xl border border-violet-400/30 bg-violet-950/20 p-3" aria-label="Book outline workspace">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <p className="text-xs font-bold uppercase tracking-widest text-violet-200">Book outline</p>
+                <p className="mt-1 text-[11px] leading-5 text-slate-400">
+                  {manuscript.outline
+                    ? `${manuscript.outline.chapters.length} chapters · front and back matter follow the chapters`
+                    : "Draft a fresh outline from the transcript sources, separate from Plan Whole Book."}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => void send("Draft a concise book outline with chapter sections and front/back matter scheduled after all chapters.", "outline", "all", { forceBook: true })}
+                disabled={loading || Boolean(pendingDraft)}
+                className="min-h-12 rounded-xl border border-violet-300/40 px-3 text-xs font-semibold text-violet-100 disabled:opacity-40"
+              >
+                {manuscript.outline ? "Redraft outline" : "Draft outline"}
+              </button>
+            </div>
+            {manuscript.outlineContinuation && manuscript.outline && !pendingDraft && (
+              <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-violet-400/20 pt-3">
+                <p className="text-xs leading-5 text-slate-300">
+                  Next: {formatOutlineContinuation(manuscript.outlineContinuation, manuscript.outline)}
+                </p>
+                <button
+                  type="button"
+                  onClick={() => void send("yes")}
+                  disabled={loading}
+                  className="min-h-12 rounded-xl bg-violet-300 px-3 text-xs font-bold text-slate-950 disabled:opacity-40"
+                >
+                  Continue outline
+                </button>
+              </div>
+            )}
+            {manuscript.frontMatterText && (
+              <label className="mt-3 block text-xs font-semibold text-slate-300">
+                Written front matter
+                <textarea
+                  value={manuscript.frontMatterText}
+                  onChange={(event) => setManuscript((current) => ({ ...current, frontMatterText: event.target.value }))}
+                  className="mt-2 min-h-40 w-full resize-y rounded-xl border border-slate-700 bg-slate-950 p-3 text-base leading-6 text-slate-300"
+                />
+              </label>
+            )}
+            {manuscript.backMatterText && (
+              <label className="mt-3 block text-xs font-semibold text-slate-300">
+                Written back matter
+                <textarea
+                  value={manuscript.backMatterText}
+                  onChange={(event) => setManuscript((current) => ({ ...current, backMatterText: event.target.value }))}
+                  className="mt-2 min-h-40 w-full resize-y rounded-xl border border-slate-700 bg-slate-950 p-3 text-base leading-6 text-slate-300"
+                />
+              </label>
+            )}
+          </section>
           <details className="mt-3 rounded-xl border border-slate-800 bg-slate-900/50">
             <summary className="flex min-h-12 cursor-pointer list-none items-center justify-between gap-3 px-3 text-xs font-semibold text-slate-300">
               <span>Custom HTML design</span>
@@ -3262,14 +3004,14 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
             ) : (
               <>
                 <div className="grid grid-cols-2 gap-2">
-                  {transcripts.map((transcript) => (
+                  {transcripts.map((transcript, index) => (
                     <button
                       key={transcript.label}
                       type="button"
                       onClick={() => setSelectedTranscriptLabel(transcript.label)}
                       className={`min-h-12 rounded-xl border px-3 text-left text-xs font-semibold ${selectedTranscript?.label === transcript.label ? "border-cyan-400/60 bg-cyan-400/10 text-cyan-300" : "border-slate-700 text-slate-400"}`}
                     >
-                      {transcript.label}
+                      Slot {index + 1} · {transcript.label}
                       <span className="mt-1 block font-normal text-slate-500">{transcript.text.trim().split(/\s+/).filter(Boolean).length.toLocaleString()} words</span>
                     </button>
                   ))}

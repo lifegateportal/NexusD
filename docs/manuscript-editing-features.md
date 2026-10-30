@@ -52,6 +52,13 @@ General conversation accepts the user's instruction directly without requiring a
 
 Book-mode Scripture is user-directed rather than locked to one sermon template. Ask for every passage in standalone blockquotes when that is the desired presentation; ask for inline citations, lists, devotional prose, or another form when that better fits the chapter. Scripture wording remains source-grounded, and unavailable-provider notices are never presented as Bible text.
 
+### Outline-guided book writing
+
+- Ask NexusLM to **draft a book outline**, or use **Draft outline** in the Manuscript workspace. This uses a dedicated outline workflow rather than the existing Plan Whole Book instructions.
+- The saved outline includes a thesis, target reader, chapter purposes and section headings, plus front- and back-matter items. It is persisted with the browser-based manuscript and remains visible in the conversation and workspace.
+- Chapter drafts use the saved chapter purpose and section order. After reviewing and adding a chapter to the manuscript, reply **yes** to draft the next outlined item. The sequence reaches front matter and then back matter only after all outlined chapters are present.
+- A request such as **“write chapter 2 from slot 2”** selects that numbered transcript slot regardless of which slot is highlighted. An unavailable slot is reported instead of silently substituting the highlighted one.
+
 Simple Direct Book Mode uses the same NexusLM finished-prose standard: full Voice DNA is applied to each slot, source boundaries remain enforced, long-form chapter budgets are available, and supported chapter elements such as epigraphs, takeaways, reflection questions, and forward questions are preserved into the manuscript.
 
 ### Long-form and format-preserving workflow

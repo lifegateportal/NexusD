@@ -8,6 +8,7 @@ import { normalizeScriptureBlockquotes, NEXUSLM_SCRIPTURE_FORMATTING_RULES } fro
 import { NexusLMWritingStyleSchema, NEXUSLM_WRITING_STYLES } from "@/lib/nexuslm-writing-styles";
 import { NexusLMAgentSchema } from "@/lib/nexuslm-agents";
 import { NexusLMResponseLengthSchema, NEXUSLM_RESPONSE_LENGTHS, sanitizeNexusLMText } from "@/lib/nexuslm-response";
+import { NexusLMBookOutlineSchema } from "@/lib/nexuslm-book-outline";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
@@ -20,6 +21,7 @@ const RequestSchema = z.object({
     chapters: z.array(z.object({ number: z.number().int().positive(), title: z.string().max(300) })).max(100),
     manuscriptChapter: ChapterDraftSchema.nullable(),
   }),
+  outline: NexusLMBookOutlineSchema.nullable().optional(),
   transcripts: z.array(z.object({ label: z.string().min(1).max(200), text: z.string().max(250000) })).max(20),
   persona: z.string().min(1).max(80),
   agent: NexusLMAgentSchema.default("nexusR1"),
@@ -27,10 +29,20 @@ const RequestSchema = z.object({
   responseLength: NexusLMResponseLengthSchema.default("default"),
   llmTemperature: z.number().min(0).max(1).optional(),
   transcriptScope: z.enum(["all", "selected"]).default("all"),
-  memories: z.array(z.string().trim().min(1).max(1000)).max(40).optional(),
+  selectedTranscriptLabel: z.string().trim().min(1).max(200).nullable().optional(),
 }).superRefine((value, context) => {
   const totalCharacters = value.transcripts.reduce((sum, transcript) => sum + transcript.text.length, 0);
   if (totalCharacters > 1000000) context.addIssue({ code: z.ZodIssueCode.custom, message: "Transcript context is too large." });
+  if (value.transcriptScope === "selected" && (
+    !value.selectedTranscriptLabel ||
+    value.transcripts.length !== 1 ||
+    value.transcripts[0]?.label !== value.selectedTranscriptLabel
+  )) {
+    context.addIssue({ code: z.ZodIssueCode.custom, message: "The selected transcript slot was not supplied exactly." });
+  }
+  if (value.outline && !value.outline.chapters.some((chapter) => chapter.number === value.chapterNumber)) {
+    context.addIssue({ code: z.ZodIssueCode.custom, message: `Chapter ${value.chapterNumber} is not in the saved book outline.` });
+  }
 });
 
 type DraftObject = z.infer<typeof ChapterDraftSchema>;
@@ -44,6 +56,14 @@ export async function POST(request: NextRequest) {
   }
 
   const chapterTitles = input.book.chapters.map((chapter) => `${chapter.number}. ${chapter.title}`).join("\n");
+  const outlineChapter = input.outline?.chapters.find((chapter) => chapter.number === input.chapterNumber);
+  const outlineInstruction = outlineChapter
+    ? `Follow the saved book outline for this chapter. Preserve its title, purpose, and section sequence. Use every listed section heading, develop each section according to its purpose, and do not add, remove, reorder, or rename outlined sections.
+OUTLINED CHAPTER ${outlineChapter.number}: ${outlineChapter.title}
+PURPOSE: ${outlineChapter.purpose}
+SECTIONS:
+${outlineChapter.sections.map((section, index) => `${index + 1}. ${section.heading}\nPurpose: ${section.purpose}`).join("\n\n")}`
+    : "No saved book outline was supplied. Choose a coherent chapter structure freely.";
   const manuscriptChapter = input.book.manuscriptChapter
     ? JSON.stringify(input.book.manuscriptChapter)
     : "No existing chapter text is available.";
@@ -53,20 +73,16 @@ export async function POST(request: NextRequest) {
   const writingStyle = NEXUSLM_WRITING_STYLES[input.writingStyle];
   const responseLength = NEXUSLM_RESPONSE_LENGTHS[input.responseLength];
   const transcriptScopeInstruction = input.transcriptScope === "selected"
-    ? "Use only the selected transcript slot supplied below as source material for this chapter."
+    ? `Use only the selected transcript slot "${input.selectedTranscriptLabel}" supplied below as source material for this chapter.`
     : "Use all transcript slots supplied below as source material, choosing the strongest material for this chapter.";
-  const memoryContext = input.memories?.length
-    ? `APPROVED PROJECT MEMORY:\n${input.memories.map((memory, index) => `M${index + 1}. ${memory}`).join("\n")}`
-    : "NO APPROVED PROJECT MEMORY.";
 
   try {
     const system = `Return only one valid JSON object matching the ChapterDraft schema. Do not wrap it in markdown fences and do not include reasoning outside the JSON object.
 You are NexusLM, a professional book ghostwriter. Selected agent: ${input.agent}. Persona: ${input.persona}.
 Presentation form: ${writingStyle.label}. ${writingStyle.instruction}
-  ${transcriptScopeInstruction} The source material constrains factual, theological, biographical, and scriptural truth, but it does not constrain your creative judgment about the chapter's title, introduction, section architecture, body prose, transitions, emphasis, or ending. Do not treat an existing outline, manuscript chapter, chapter premise, key point, or prior wording as mandatory. Choose the strongest material and shape a coherent chapter freely.
+${transcriptScopeInstruction} The source material constrains factual, theological, biographical, and scriptural truth. ${outlineChapter ? "The saved book outline is the required structure for this chapter; follow it exactly while writing polished prose." : "Choose the strongest material and shape a coherent chapter freely. Do not treat an existing manuscript chapter, chapter premise, key point, or prior wording as mandatory."}
   You may create original framing, synthesis, transitions, imagery, rhetorical movement, and reader-facing introduction when these clarify and develop ideas supported by the sources. Do not invent concrete facts, quotations, scripture references, testimonies, doctrine, or claims that the sources do not support.
   Write polished reader-facing book prose and remove live-audience language. Trust your editorial judgment about what the chapter needs instead of mechanically preserving transcript order or filling a predetermined premise.
-  Honor the approved project memory below when it applies, without treating it as a substitute for source evidence.
   CHAPTER OPENING PLACEMENT: Leave the ChapterDraft intro field empty. Do not write a separate premise, overview, thesis summary, or chapter-preview block before the body. The actual chapter introduction belongs in the opening paragraphs of Section 1, written as finished reader-facing prose that enters the chapter's material directly. Section 1 must begin with the chapter body, not planning language or a summary of what the chapter will discuss.
   SERIES-SERMON TO BOOK TRANSFORMATION: Sermon transcripts may recap earlier messages. Treat that recap as source context, not as mandatory chapter-opening material. Do not open with "last week," "as we saw," "continuing this series," or a replay of an earlier chapter. If the recap helps orient the reader, compress it into the shortest useful bridge and pivot quickly to this chapter's new movement. Write for a reader who may not have attended the sermon, and do not make the book repeat live-series catch-up.
   ${EM_DASH_MINIMIZATION_RULES}
@@ -79,6 +95,8 @@ BOOK: ${input.book.title}
 EXISTING CHAPTER OUTLINE:
 ${chapterTitles || "No outline available."}
 
+${outlineInstruction}
+
 REQUEST:
 Write Chapter ${input.chapterNumber} based on this request: ${input.instruction}
 
@@ -88,8 +106,6 @@ Treat this as optional background only. You may substantially reshape or replace
 
 TRANSCRIPT SOURCES:
 ${transcriptContext || "No transcript sources were uploaded. State that source material is insufficient in the chapter draft."}
-
-${memoryContext}
 
 Return JSON only.`;
 
