@@ -3004,7 +3004,7 @@ export function CodingChatPanel() {
               New chat
             </button>
           </div>
-        <div className="flex min-h-12 flex-wrap items-center gap-2">
+        <div className="mt-1 flex min-h-12 flex-wrap items-center gap-2">
           <select
             value={workspaceId ?? ""}
             onChange={(event) => void openWorkspace(event.target.value)}
@@ -3333,8 +3333,15 @@ export function CodingChatPanel() {
               {zipExporting ? "Preparing…" : "Download ZIP"}
             </button>
           </div>
+          <p className="hidden shrink-0 border-b border-slate-800 px-3 py-2 text-[10px] leading-4 text-slate-500 lg:block">
+            Upload ZIP creates a new project; Open folder merges here. Imports support UTF-8 source files up to 4 MB, not binary assets. Device-local .env.local stays in browser storage (not encrypted) and is excluded from sync, AI, ZIPs, GitHub, and deployment. Browser-facing values are not private secrets.
+          </p>
           <div className="min-h-0 flex-1 overflow-y-auto p-2" style={{ WebkitOverflowScrolling: "touch" }}>
-            {fileTree.length > 0 && renderTreeNodes(fileTree)}
+            {fileTree.length > 0 ? renderTreeNodes(fileTree) : (
+              <div className="hidden rounded-xl border border-dashed border-slate-700 p-4 text-xs leading-5 text-slate-500 lg:block">
+                Open a folder, attach files, or let Nexus Code generate components to build the tree.
+              </div>
+            )}
           </div>
         </aside>
 
@@ -3430,14 +3437,14 @@ export function CodingChatPanel() {
             ) : (
               <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto px-3 py-4 sm:px-5 lg:px-8" style={{ WebkitOverflowScrolling: "touch" }}>
                 <div className={`mx-auto flex min-h-full w-full max-w-5xl flex-col gap-4 ${messages.every((message) => message.role === "system") ? "justify-center" : "justify-end"}`}>
-                  {messages.filter((message) => message.role !== "system").map((message) => (
+                  {messages.map((message) => (
                     <article
                       key={message.id}
-                      className={message.role === "user"
+                      className={`${message.role === "system" ? "hidden lg:block " : ""}${message.role === "user"
                         ? "max-w-[92%] self-end rounded-2xl border border-cyan-500/30 bg-cyan-500/10 px-4 py-3 text-sm leading-6 text-cyan-50"
                         : message.role === "system"
                           ? "rounded-2xl border border-cyan-500/20 bg-cyan-950/20 px-4 py-3 text-sm leading-6 text-slate-300"
-                          : "rounded-2xl border border-slate-800 bg-slate-900/60 px-4 py-4 text-sm leading-6 text-slate-200"}
+                          : "rounded-2xl border border-slate-800 bg-slate-900/60 px-4 py-4 text-sm leading-6 text-slate-200"}`}
                     >
                       <div className="mb-2 flex items-center justify-between gap-3 text-[10px] font-bold uppercase tracking-widest text-slate-500">
                         <span>{message.role === "user" ? "You" : message.role === "system" ? "Pipeline" : "Nexus Code"}</span>
@@ -3691,17 +3698,17 @@ export function CodingChatPanel() {
             </button>
           </div>
         </div>
-        <p className="mt-2 text-[10px] text-slate-600">
-          Ctrl/⌘ + Enter to send · {focusedContextEnabled
-            ? "Focused context may omit files; switch to Full Context or attach files if needed."
-            : "Full Context sends the entire workspace, recent chat, and attached files."}
-        </p>
         {contextScopeNotice && (
           <p role="status" className="mt-1 text-[10px] text-amber-300">
             {contextScopeNotice}
           </p>
         )}
-        <p className="mt-1 text-[10px] text-slate-600">
+        <p className="mt-2 hidden text-[10px] text-slate-600 lg:block">
+          Ctrl/⌘ + Enter to send · {focusedContextEnabled
+            ? "Focused context may omit files; switch to Full Context or attach files if needed."
+            : "Full Context sends the entire workspace, recent chat, and attached files."}
+        </p>
+        <p className="mt-1 hidden text-[10px] text-slate-600 lg:block">
           Each message sends project files, up to 20 prior chat messages, the active file and view
           {previewRuntime === "webcontainer" ? ", and recent WebContainer terminal output" : ""}
           {" to the selected AI provider."}
