@@ -55,6 +55,10 @@ function manuscriptPartText(manuscript: ManuscriptInput): Array<{ label: string;
   return [
     { label: "Manuscript · Preface", text: manuscript.frontMatter.preface },
     { label: "Manuscript · Introduction", text: manuscript.frontMatter.introduction },
+    ...(manuscript.frontMatter.additionalSections ?? []).map((section) => ({
+      label: `Manuscript · Front matter · ${section.title}`,
+      text: section.content,
+    })),
     ...manuscript.chapters.flatMap((chapter) => [
       {
         label: `Manuscript · Chapter ${chapter.number} · ${chapter.title} · Intro`,
@@ -84,6 +88,10 @@ function manuscriptPartText(manuscript: ManuscriptInput): Array<{ label: string;
     { label: "Manuscript · Conclusion", text: manuscript.frontMatter.conclusion },
     { label: "Manuscript · About the author", text: manuscript.frontMatter.aboutAuthor ?? "" },
     { label: "Manuscript · Resources", text: manuscript.frontMatter.resourcesList.join("\n") },
+    ...(manuscript.backMatter?.additionalSections ?? []).map((section) => ({
+      label: `Manuscript · Back matter · ${section.title}`,
+      text: section.content,
+    })),
     {
       label: "Manuscript · Scripture index",
       text: manuscript.backMatter?.scriptureIndex.map((item) => `${item.reference} (${item.translation}) · Chapters ${item.chapters.join(", ")}`).join("\n") ?? "",
@@ -295,7 +303,7 @@ export async function POST(request: NextRequest) {
       system: `You are NexusLM, a capable general-purpose writing and reasoning partner inside a personal book workspace. The selected agent is ${input.agent}. The active persona is ${input.persona}.
 The book is "${input.book.title}".
 The requested presentation form is ${writingStyle.label}: ${writingStyle.instruction}
-    Use the complete manuscript coverage as the primary source for the user's request. You may analyze, explain, plan, write, rewrite, typeset, format, or otherwise transform the manuscript when asked. For writing requests, produce the finished reader-facing work rather than advice about how to do it. Preserve the author's facts, meaning, voice, order, and exact wording when the request requires fidelity. Use transcript material as supporting provenance. Do not mention internal context assembly, source labels, retrieval, excerpts, or missing attachments when manuscript context is present. State uncertainty only when the supplied material truly does not support the requested action.
+    Use the complete manuscript coverage as the primary source for the user's request. You may analyze, explain, plan, write, rewrite, typeset, format, or otherwise transform the manuscript when asked. For writing requests, produce the finished reader-facing work rather than advice about how to do it. Preserve the author's facts, meaning, voice, order, and exact wording when the request requires fidelity. When writing from supplied manuscript or transcripts, do not invent, infer, embellish, or add facts, examples, claims, quotations, or scripture not supported by those sources; leave gaps open or identify them for the author. All quoted Scripture, even a short phrase or single verse, must be a standalone Markdown blockquote with its reference on a separate blockquote line. Never invent verse wording; if only a reference is supplied, use the reference without a quotation or mark it for verification. Use transcript material as supporting provenance. Do not mention internal context assembly, source labels, retrieval, excerpts, or missing attachments when manuscript context is present. State uncertainty only when the supplied material truly does not support the requested action.
   ${modeInstruction}
   ${EM_DASH_MINIMIZATION_RULES}
   ${NEXUSLM_SCRIPTURE_FORMATTING_RULES}`,

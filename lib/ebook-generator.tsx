@@ -527,6 +527,12 @@ export async function generatePdfBuffer(manifest: EbookManifest, templateId?: st
       writeIntroduction(doc, manifest.frontMatter, manifest.allQuotes ?? [], fonts, scaledTpl, sectionOrnament, adjustedBodyFontSizeScaled);
     }
 
+    for (const section of manifest.frontMatter.additionalSections ?? []) {
+      forceNextRecto();
+      currentChapterTitle = section.title;
+      writeAdditionalMatterSection(doc, section.title, section.content, manifest.allQuotes ?? [], fonts, scaledTpl, sectionOrnament, adjustedBodyFontSizeScaled);
+    }
+
     // ── Chapter body pages (each recto-forced) ────────────────────────────────
     for (const chapter of manifest.chapters) {
       forceNextRecto();
@@ -564,6 +570,12 @@ export async function generatePdfBuffer(manifest: EbookManifest, templateId?: st
       forceNextRecto();
       currentChapterTitle = "Study Guide";
       writeReadingGroupGuide(doc, manifest.backMatter, fonts, scaledTpl, sectionOrnament, adjustedBodyFontSizeScaled);
+    }
+
+    for (const section of manifest.backMatter?.additionalSections ?? []) {
+      forceNextRecto();
+      currentChapterTitle = section.title;
+      writeAdditionalMatterSection(doc, section.title, section.content, manifest.allQuotes ?? [], fonts, scaledTpl, sectionOrnament, adjustedBodyFontSizeScaled);
     }
 
     // ── Second pass ───────────────────────────────────────────────────────────
@@ -1542,6 +1554,16 @@ function writeIntroduction(doc: any, fm: FrontBackMatter, quotes: Quote[], fonts
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
+function writeAdditionalMatterSection(doc: any, title: string, content: string, quotes: Quote[], fonts: PdfFontSet, tpl: BookTemplateConfig, ornamentStyle: "rule" | "fleuron" | "asterism" | "dinkus" | "none", bodyFontSize?: number) {
+  doc.addPage();
+  doc.x = doc.page.margins.left;
+  const textW = doc.page.width - doc.page.margins.left - doc.page.margins.right;
+  doc.fontSize(tpl.matterTitleSize).font(fonts.serifBold).fillColor(tpl.chapterTitleColor).text(title, { width: textW, align: tpl.matterTitleAlign });
+  writeDivider(doc, tpl, ornamentStyle);
+  writeRichBody(doc, content, quotes, fonts, tpl, { noIndentFirstParagraph: true }, bodyFontSize);
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 function writeChapter(doc: any, chapter: ChapterDraft, quotes: Quote[], fonts: PdfFontSet, tpl: BookTemplateConfig, ornamentStyle: "rule" | "fleuron" | "asterism" | "dinkus" | "none", bodyFontSize?: number) {
   doc.addPage();
   doc.x = doc.page.margins.left;
@@ -1874,6 +1896,9 @@ function frontMatterChapters(fm: FrontBackMatter, quotes: Quote[]): Array<{ titl
       content: quoteParagraphsToHtml(fm.introduction, quotes),
     });
   }
+  for (const section of fm.additionalSections ?? []) {
+    chapters.push({ title: section.title, content: quoteParagraphsToHtml(section.content, quotes) });
+  }
   return chapters;
 }
 
@@ -1944,6 +1969,9 @@ function backMatterChapters(fm: FrontBackMatter, quotes: Quote[], bm?: BackMatte
   }
 
   if (bm) {
+    for (const section of bm.additionalSections ?? []) {
+      chapters.push({ title: section.title, content: quoteParagraphsToHtml(section.content, quotes) });
+    }
     if ((bm.glossary ?? []).length > 0) {
       const glossaryHtml = (bm.glossary ?? []).map((entry) =>
         `<dt><strong>${escapeHtml(entry.term)}</strong></dt><dd>${escapeHtml(entry.definition)}<br/><em>${escapeHtml(entry.firstAppearance)}</em></dd>`
@@ -2437,6 +2465,16 @@ export async function generateDocxBuffer(manifest: EbookManifest, templateId?: s
       ],
     });
   }
+  for (const section of frontMatter.additionalSections ?? []) {
+    frontMatterSections.push({
+      title: section.title,
+      children: [
+        new Paragraph({ text: section.title, heading: HeadingLevel.HEADING_1, spacing: { before: 400, after: 240 } }),
+        makeDocxDivider(),
+        ...textToStyledParagraphs(section.content, true),
+      ],
+    });
+  }
 
   // ── Per-chapter children ──────────────────────────────────────────────────
   const chapterChildrenMap: Map<number, (Paragraph | TableOfContents)[]> = new Map();
@@ -2675,6 +2713,17 @@ export async function generateDocxBuffer(manifest: EbookManifest, templateId?: s
       );
     }
     backMatterSections.push({ title: "Scripture Index", children });
+  }
+
+  for (const section of manifest.backMatter?.additionalSections ?? []) {
+    backMatterSections.push({
+      title: section.title,
+      children: [
+        new Paragraph({ text: section.title, heading: HeadingLevel.HEADING_1, spacing: { before: 400, after: 240 } }),
+        makeDocxDivider(),
+        ...textToStyledParagraphs(section.content, true),
+      ],
+    });
   }
 
   // ── Build sections array ──────────────────────────────────────────────────

@@ -283,6 +283,10 @@ export const FrontBackMatterSchema = z.object({
   aboutAuthor: z.string().nullable(),           // null if not mentioned in audio
   resourcesList: z.array(z.string()).default([]), // resources mentioned in the audio
   scriptureIndex: z.array(z.string()).default([]), // sorted list of all scripture references used
+  additionalSections: z.array(z.object({
+    title: z.string().trim().min(1).max(200),
+    content: z.string().min(1).max(600_000),
+  }).strict()).optional(),
 });
 
 // ─── Back Matter (generated separately after manuscript is complete) ──────────
@@ -304,6 +308,10 @@ export const BackMatterSchema = z.object({
     questions: z.array(z.string()),
   })).default([]),
   recommendedResources: z.array(z.string()).default([]),
+  additionalSections: z.array(z.object({
+    title: z.string().trim().min(1).max(200),
+    content: z.string().min(1).max(600_000),
+  }).strict()).optional(),
 });
 
 export type BackMatter = z.infer<typeof BackMatterSchema>;

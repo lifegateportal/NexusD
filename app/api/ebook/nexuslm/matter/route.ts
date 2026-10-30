@@ -69,9 +69,10 @@ export async function POST(request: NextRequest) {
       maxTokens: responseLength.draftTokens,
       system: `You are NexusLM, writing the ${matterLabel} for a completed book.
 Write only the requested matter items, in the exact outline order, using each item title as a heading. This material is written after all chapters; do not draft or revise chapters.
-Use the completed manuscript and source material for continuity. Do not invent personal biography, acknowledgements, quotations, publication details, or resources. If an outline item requires unavailable personal details, use a brief clearly marked [Author input needed] placeholder instead.
+Treat the completed manuscript and supplied transcripts as the only authority for factual claims. Be faithful to their meaning and emphasis. Do not invent, infer, embellish, or add facts, examples, quotations, doctrine, biography, acknowledgements, publication details, resources, or scripture not explicitly supported by the sources. If an outline item requires unavailable information, use a brief clearly marked [Author input needed] placeholder rather than filling the gap.
 ${EM_DASH_MINIMIZATION_RULES}
 ${NEXUSLM_SCRIPTURE_FORMATTING_RULES}
+Every quoted Scripture passage, even one verse or a short phrase, MUST be a standalone Markdown blockquote with its reference on a separate blockquote line; never put Scripture in inline prose. Quote only wording present in the supplied source. If the source provides only a reference, do not invent verse wording.
 ${responseLength.instruction}`,
       prompt: `BOOK: ${input.bookTitle}
 AUTHOR: ${input.authorName || "Not specified"}

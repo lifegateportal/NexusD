@@ -70,6 +70,7 @@ type GeneralRequest = {
   responseLength: NexusLMResponseLength;
 };
 type ManuscriptChapter = NexusLMManuscriptChapter;
+type PendingMatter = { kind: "frontMatter" | "backMatter"; content: string; transcriptLabel: string | null };
 type LibraryPatch = {
   slug: string;
   title?: string;
@@ -727,6 +728,7 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
   const [pendingEdit, setPendingEdit] = useState<PendingEdit | null>(null);
   const [pendingDraft, setPendingDraft] = useState<ChapterDraft | null>(null);
   const [pendingDraftSourceLabel, setPendingDraftSourceLabel] = useState<string | null>(null);
+  const [pendingMatter, setPendingMatter] = useState<PendingMatter | null>(null);
   const [activeOutlineChapterNumber, setActiveOutlineChapterNumber] = useState<number | null>(null);
   const [auditReport, setAuditReport] = useState<BookAuditReport | null>(null);
   const [undoSnapshot, setUndoSnapshot] = useState<EbookUndoSnapshot | null>(null);
@@ -815,6 +817,7 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
         setManuscript(archive?.manuscript ?? createEmptyManuscript(manifest, pipelineSnapshot));
         setPendingDraft(null);
         setPendingDraftSourceLabel(null);
+        setPendingMatter(null);
         setActiveOutlineChapterNumber(null);
         setProcessEntireDocument(false);
         setSelectedAttachmentId(archive?.attachments?.[0]?.id ?? null);
@@ -1546,10 +1549,10 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
       && isOutlineContinuationAffirmative(displayInstruction)
       ? manuscript.outlineContinuation
       : null;
-    if (continuationTask && pendingDraft) {
+    if (continuationTask && (pendingDraft || pendingMatter)) {
       setMessages((current) => [...current,
         { role: "user", content: displayInstruction },
-        { role: "assistant", content: "Add or discard the current chapter draft before continuing the outline." },
+        { role: "assistant", content: "Add the current draft or matter to the book before continuing the outline." },
       ]);
       setInput("");
       return;
@@ -1737,32 +1740,15 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
         if (!res.ok || json.error) throw new Error(json.error ?? `Request failed (${res.status})`);
         if (typeof json.content !== "string" || !json.content.trim()) throw new Error("NexusLM returned empty book matter.");
         const content = sanitizeNexusLMText(json.content);
-        const frontMatterText = continuationTask.kind === "frontMatter" ? content : manuscript.frontMatterText ?? "";
-        const backMatterText = continuationTask.kind === "backMatter" ? content : manuscript.backMatterText ?? "";
-        const completedChapterNumbers = [
-          ...manuscript.chapters.map((chapter) => chapter.number),
-          ...(manifest?.chapters.map((chapter) => chapter.number) ?? []),
-        ];
-        const nextContinuation = getNextOutlineContinuation(
-          manuscript.outline,
-          completedChapterNumbers,
-          frontMatterText,
-          backMatterText,
-          draftSelectedTranscript?.label ?? continuationTask.transcriptLabel ?? null,
-        );
-        setManuscript((current) => ({
-          ...current,
-          frontMatterText,
-          backMatterText,
-          outlineContinuation: nextContinuation ?? undefined,
-        }));
+        setPendingMatter({
+          kind: continuationTask.kind,
+          content,
+          transcriptLabel: draftSelectedTranscript?.label ?? continuationTask.transcriptLabel ?? null,
+        });
         const completedLabel = continuationTask.kind === "frontMatter" ? "Front matter" : "Back matter";
-        const followUp = nextContinuation
-          ? `\n\n${formatOutlineContinuation(nextContinuation, manuscript.outline)} is next. Reply “yes” to continue.`
-          : "\n\nAll chapters and outlined front and back matter are complete.";
         setMessages((current) => [...current, {
           role: "assistant",
-          content: `## ${completedLabel}\n\n${content}${followUp}`,
+          content: `## ${completedLabel}\n\n${content}\n\nReview and add this matter to the book to continue.`,
           format: "markdown",
         }]);
         return;
@@ -1995,6 +1981,112 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
     }]);
     setPendingDraft(null);
     setPendingDraftSourceLabel(null);
+  }
+
+  function addPendingMatter() {
+    if (!pendingMatter || !manuscript.outline) return;
+    const baseManifest = manifest ?? createEmptyManifest(conversationKey, pipelineSnapshot);
+    const section = {
+      title: pendingMatter.kind === "frontMatter" ? "Front Matter" : "Back Matter",
+      content: pendingMatter.content,
+    };
+    const nextManifest = pendingMatter.kind === "frontMatter"
+      ? {
+          ...baseManifest,
+          frontMatter: {
+            ...baseManifest.frontMatter,
+            additionalSections: [
+              ...(baseManifest.frontMatter.additionalSections ?? []).filter((item) => item.title !== section.title),
+              section,
+            ],
+          },
+        }
+      : {
+          ...baseManifest,
+          backMatter: {
+            scriptureIndex: [],
+            glossary: [],
+            readingGroupGuide: [],
+            recommendedResources: [],
+            ...baseManifest.backMatter,
+            additionalSections: [
+              ...(baseManifest.backMatter?.additionalSections ?? []).filter((item) => item.title !== section.title),
+              section,
+            ],
+          },
+        };
+    const parsedManifest = EbookManifestSchema.safeParse(nextManifest);
+    if (!parsedManifest.success) {
+      setAttachmentError("The generated matter could not be added because the book data was invalid.");
+      return;
+    }
+
+    const frontMatterText = pendingMatter.kind === "frontMatter" ? pendingMatter.content : manuscript.frontMatterText ?? "";
+    const backMatterText = pendingMatter.kind === "backMatter" ? pendingMatter.content : manuscript.backMatterText ?? "";
+    const completedChapterNumbers = [
+      ...manuscript.chapters.map((chapter) => chapter.number),
+      ...parsedManifest.data.chapters.map((chapter) => chapter.number),
+    ];
+    const nextContinuation = getNextOutlineContinuation(
+      manuscript.outline,
+      completedChapterNumbers,
+      frontMatterText,
+      backMatterText,
+      pendingMatter.transcriptLabel,
+    );
+    setManuscript((current) => ({
+      ...current,
+      frontMatterText,
+      backMatterText,
+      outlineContinuation: nextContinuation ?? undefined,
+    }));
+    onManifestChange(
+      parsedManifest.data,
+      `${pendingMatter.kind === "frontMatter" ? "Front" : "Back"} matter added to the book.`,
+    );
+    const followUp = nextContinuation
+      ? ` ${formatOutlineContinuation(nextContinuation, manuscript.outline)} is next. Reply “yes” to continue.`
+      : " All chapters and outlined front and back matter are complete.";
+    setMessages((current) => [...current, {
+      role: "assistant",
+      content: `${pendingMatter.kind === "frontMatter" ? "Front" : "Back"} matter added to the book.${followUp}`,
+    }]);
+    setPendingMatter(null);
+  }
+
+  function updateAddedMatter(kind: "frontMatter" | "backMatter", content: string): void {
+    const baseManifest = manifest;
+    if (!baseManifest) return;
+    const title = kind === "frontMatter" ? "Front Matter" : "Back Matter";
+    const nextManifest = kind === "frontMatter"
+      ? {
+          ...baseManifest,
+          frontMatter: {
+            ...baseManifest.frontMatter,
+            additionalSections: [
+              ...(baseManifest.frontMatter.additionalSections ?? []).filter((section) => section.title !== title),
+              ...(content.trim() ? [{ title, content }] : []),
+            ],
+          },
+        }
+      : {
+          ...baseManifest,
+          backMatter: baseManifest.backMatter
+            ? {
+                ...baseManifest.backMatter,
+                additionalSections: [
+                  ...(baseManifest.backMatter.additionalSections ?? []).filter((section) => section.title !== title),
+                  ...(content.trim() ? [{ title, content }] : []),
+                ],
+              }
+            : null,
+        };
+    const parsed = EbookManifestSchema.safeParse(nextManifest);
+    if (!parsed.success) {
+      setAttachmentError("The edited matter could not be saved to the book because its content was invalid.");
+      return;
+    }
+    onManifestChange(parsed.data, `${kind === "frontMatter" ? "Front" : "Back"} matter updated.`);
   }
 
   function togglePendingPath(path: string): void {
@@ -2291,6 +2383,24 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
                 <div className="mt-3 flex gap-2">
                   <button type="button" onClick={addPendingDraft} disabled={loading} className="min-h-12 rounded-xl bg-cyan-300 px-4 text-sm font-bold text-slate-950 disabled:opacity-40">Add to manuscript</button>
                   <button type="button" onClick={() => { setPendingDraft(null); setPendingDraftSourceLabel(null); }} disabled={loading} className="min-h-12 rounded-xl border border-slate-700 px-4 text-sm font-semibold text-slate-300 disabled:opacity-40">Discard draft</button>
+                </div>
+              </div>
+            )}
+            {pendingMatter && (
+              <div className="mb-3 rounded-2xl border border-violet-400/30 bg-violet-950/30 p-4">
+                <p className="text-xs font-bold uppercase tracking-widest text-violet-200">
+                  {pendingMatter.kind === "frontMatter" ? "Front matter ready" : "Back matter ready"}
+                </p>
+                <p className="mt-1 text-xs leading-5 text-slate-300">
+                  Review it in the conversation, then add it to the book. It will appear in the book's {pendingMatter.kind === "frontMatter" ? "front matter" : "back matter"} and exports.
+                </p>
+                <div className="mt-3 flex gap-2">
+                  <button type="button" onClick={addPendingMatter} disabled={loading} className="min-h-12 rounded-xl bg-violet-300 px-4 text-sm font-bold text-slate-950 disabled:opacity-40">
+                    Add to book
+                  </button>
+                  <button type="button" onClick={() => setPendingMatter(null)} disabled={loading} className="min-h-12 rounded-xl border border-slate-700 px-4 text-sm font-semibold text-slate-300 disabled:opacity-40">
+                    Discard
+                  </button>
                 </div>
               </div>
             )}
@@ -2709,13 +2819,13 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
               <button
                 type="button"
                 onClick={() => void send("Draft a concise book outline with chapter sections and front/back matter scheduled after all chapters.", "outline", "all", { forceBook: true })}
-                disabled={loading || Boolean(pendingDraft)}
+                disabled={loading || Boolean(pendingDraft) || Boolean(pendingMatter)}
                 className="min-h-12 rounded-xl border border-violet-300/40 px-3 text-xs font-semibold text-violet-100 disabled:opacity-40"
               >
                 {manuscript.outline ? "Redraft outline" : "Draft outline"}
               </button>
             </div>
-            {manuscript.outlineContinuation && manuscript.outline && !pendingDraft && (
+            {manuscript.outlineContinuation && manuscript.outline && !pendingDraft && !pendingMatter && (
               <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-violet-400/20 pt-3">
                 <p className="text-xs leading-5 text-slate-300">
                   Next: {formatOutlineContinuation(manuscript.outlineContinuation, manuscript.outline)}
@@ -2736,6 +2846,7 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
                 <textarea
                   value={manuscript.frontMatterText}
                   onChange={(event) => setManuscript((current) => ({ ...current, frontMatterText: event.target.value }))}
+                  onBlur={(event) => updateAddedMatter("frontMatter", event.currentTarget.value)}
                   className="mt-2 min-h-40 w-full resize-y rounded-xl border border-slate-700 bg-slate-950 p-3 text-base leading-6 text-slate-300"
                 />
               </label>
@@ -2746,6 +2857,7 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
                 <textarea
                   value={manuscript.backMatterText}
                   onChange={(event) => setManuscript((current) => ({ ...current, backMatterText: event.target.value }))}
+                  onBlur={(event) => updateAddedMatter("backMatter", event.currentTarget.value)}
                   className="mt-2 min-h-40 w-full resize-y rounded-xl border border-slate-700 bg-slate-950 p-3 text-base leading-6 text-slate-300"
                 />
               </label>

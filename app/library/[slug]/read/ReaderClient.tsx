@@ -1185,10 +1185,11 @@ export function ReaderClient({ manifest, slug, initialChapter }: Props) {
   // ── Build virtual section list (copyright → preface → intro → chapters → conclusion → about → backmatter) ──
   type VirtualSection =
     | { kind: "copyright" }
-    | { kind: "frontmatter"; key: "preface" | "introduction" | "conclusion"; title: string; body: string }
+    | { kind: "frontmatter"; key: "preface" | "introduction" | "conclusion" | "additional"; title: string; body: string }
     | { kind: "chapter"; chapter: ChapterDraft }
     | { kind: "about"; body: string }
-    | { kind: "backmatter"; key: "glossary" | "guide" | "resources" | "scripture"; title: string };
+    | { kind: "backmatter"; key: "glossary" | "guide" | "resources" | "scripture"; title: string }
+    | { kind: "custom"; title: string; body: string };
 
   const virtualSections: VirtualSection[] = [];
   virtualSections.push({ kind: "copyright" });
@@ -1196,6 +1197,8 @@ export function ReaderClient({ manifest, slug, initialChapter }: Props) {
     virtualSections.push({ kind: "frontmatter", key: "preface", title: "Preface", body: manifest.frontMatter.preface });
   if (manifest.frontMatter.introduction?.trim())
     virtualSections.push({ kind: "frontmatter", key: "introduction", title: "Introduction", body: manifest.frontMatter.introduction });
+  for (const section of manifest.frontMatter.additionalSections ?? [])
+    virtualSections.push({ kind: "frontmatter", key: "additional", title: section.title, body: section.content });
   for (const ch of manifest.chapters)
     virtualSections.push({ kind: "chapter", chapter: ch });
   if (manifest.frontMatter.conclusion?.trim())
@@ -1210,6 +1213,8 @@ export function ReaderClient({ manifest, slug, initialChapter }: Props) {
     virtualSections.push({ kind: "backmatter", key: "resources", title: "Recommended Resources" });
   if ((manifest.backMatter?.scriptureIndex?.length ?? 0) > 0)
     virtualSections.push({ kind: "backmatter", key: "scripture", title: "Scripture Index" });
+  for (const section of manifest.backMatter?.additionalSections ?? [])
+    virtualSections.push({ kind: "custom", title: section.title, body: section.content });
 
   const totalSections = virtualSections.length;
   const currentSection = virtualSections[chapterIndex] ?? virtualSections[0];
@@ -1680,6 +1685,7 @@ export function ReaderClient({ manifest, slug, initialChapter }: Props) {
     if (s.kind === "frontmatter")  return { label: s.title.slice(0, 5).toUpperCase(), title: s.title };
     if (s.kind === "about")        return { label: "ABOUT",     title: "About the Author" };
     if (s.kind === "backmatter")   return { label: s.title.slice(0, 4).toUpperCase(), title: s.title };
+    if (s.kind === "custom")      return { label: s.title.slice(0, 5).toUpperCase(), title: s.title };
     // chapter
     const chNum = (s as { kind: "chapter"; chapter: ChapterDraft }).chapter.number;
     return { label: `Ch ${chNum}`, title: (s as { kind: "chapter"; chapter: ChapterDraft }).chapter.title };
@@ -1691,6 +1697,7 @@ export function ReaderClient({ manifest, slug, initialChapter }: Props) {
     if (currentSection.kind === "frontmatter") return currentSection.title;
     if (currentSection.kind === "about")       return "About the Author";
     if (currentSection.kind === "backmatter")  return currentSection.title;
+    if (currentSection.kind === "custom")      return currentSection.title;
     return `Ch ${currentSection.chapter.number} · ${currentSection.chapter.title}`;
   })();
 
@@ -1925,10 +1932,10 @@ export function ReaderClient({ manifest, slug, initialChapter }: Props) {
                 lineHeight={lineHeight}
               />
             )}
-            {(currentSection.kind === "frontmatter" || currentSection.kind === "about") && (
+            {(currentSection.kind === "frontmatter" || currentSection.kind === "about" || currentSection.kind === "custom") && (
               <FrontMatterView
                 title={currentSection.kind === "about" ? "About the Author" : currentSection.title}
-                body={currentSection.kind === "about" ? currentSection.body : currentSection.body}
+                body={currentSection.body}
                 theme={theme}
                 fontFamily={fontFamily}
                 fontSize={fontSize}
