@@ -165,6 +165,15 @@ function isBookCreationRequest(instruction: string): boolean {
     || /\b(?:turn|transform|adapt)\b[\s\S]{0,100}\binto\s+(?:a\s+)?(?:complete\s+)?book\b/i.test(instruction);
 }
 
+function isChapterRewriteRequest(instruction: string): boolean {
+  const identifiesChapter = /\bchapter(?:\s+\d+)?\b/i.test(instruction);
+  if (!identifiesChapter && /\boutline\b/i.test(instruction)) return false;
+  const rewriteVerb = /\b(?:rewrite|redraft|redo|revise|regenerate|expand|lengthen|shorten|tighten|improve)\b/i.test(instruction);
+  const identifiesDraft = /\b(?:chapter(?:\s+\d+)?|draft|it|this|that)\b/i.test(instruction);
+  return (rewriteVerb && identifiesDraft && !/\boutline\b/i.test(instruction))
+    || /\b(?:too short|too brief|needs? more detail|make it longer|make it shorter)\b/i.test(instruction);
+}
+
 function inferMode(instruction: string, selectedMode: Mode): Mode {
   const text = instruction.toLowerCase();
   if (/\b(outline|table of contents)\b/.test(text)) return "outline";
@@ -728,6 +737,7 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
   const [activeConversationKey, setActiveConversationKey] = useState(conversationKey);
   const [chatHistory, setChatHistory] = useState<NexusLMChatSummary[]>([]);
   const [showChatHistory, setShowChatHistory] = useState(false);
+  const [showOutline, setShowOutline] = useState(false);
   const [input, setInput] = useState("");
   const [contextMode, setContextMode] = useState<ContextMode>("auto");
   const [mode, setMode] = useState<Mode>("ask");
@@ -755,7 +765,6 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
   const [pendingDraft, setPendingDraft] = useState<ChapterDraft | null>(null);
   const [pendingDraftSourceLabel, setPendingDraftSourceLabel] = useState<string | null>(null);
   const [pendingMatter, setPendingMatter] = useState<PendingMatter | null>(null);
-  const [activeOutlineChapterNumber, setActiveOutlineChapterNumber] = useState<number | null>(null);
   const [auditReport, setAuditReport] = useState<BookAuditReport | null>(null);
   const [undoSnapshot, setUndoSnapshot] = useState<EbookUndoSnapshot | null>(null);
   const [showProposalDiff, setShowProposalDiff] = useState(false);
@@ -794,6 +803,16 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
     setGeneratedPreview(preview);
   }
 
+  async function persistChatSnapshot(nextMessages: Message[], nextManuscript: NexusLMManuscript): Promise<void> {
+    if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+    await saveNexusLMChat(activeConversationKey, nextMessages, {
+      scope: conversationKey,
+      attachments,
+      manuscript: nextManuscript,
+    });
+    setChatHistory(await listNexusLMChats(conversationKey));
+  }
+
   useEffect(() => () => {
     if (generatedPreviewUrlRef.current) URL.revokeObjectURL(generatedPreviewUrlRef.current);
   }, []);
@@ -825,11 +844,6 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
   }, [manifest?.jobId]);
 
   const selectedTranscript = transcripts.find((transcript) => transcript.label === selectedTranscriptLabel) ?? transcripts[0] ?? null;
-  const outlineFocusChapterNumber = activeOutlineChapterNumber
-    ?? pendingDraft?.number
-    ?? (manuscript.outlineContinuation?.kind === "chapter" ? manuscript.outlineContinuation.chapterNumber : null);
-  const outlineFocusChapter = manuscript.outline?.chapters.find((chapter) => chapter.number === outlineFocusChapterNumber) ?? null;
-
   useEffect(() => {
     let cancelled = false;
     historyLoadedRef.current = false;
@@ -851,10 +865,11 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
             },
           }
           : restoredManuscript);
-        setPendingDraft(null);
-        setPendingDraftSourceLabel(null);
+        setMode(restoredManuscript.outline ? "outline" : "ask");
+        setShowOutline(false);
+        setPendingDraft(restoredManuscript.pendingDraft ?? null);
+        setPendingDraftSourceLabel(restoredManuscript.pendingDraftSourceLabel ?? null);
         setPendingMatter(null);
-        setActiveOutlineChapterNumber(null);
         setProcessEntireDocument(false);
         setSelectedAttachmentId(archive?.attachments?.[0]?.id ?? null);
         clearGeneratedPreview();
@@ -944,6 +959,10 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
       setMessages([initialMessage(manifest)]);
       setAttachments([]);
       setManuscript(createEmptyManuscript(manifest, pipelineSnapshot));
+      setPendingDraft(null);
+      setPendingDraftSourceLabel(null);
+      setMode("ask");
+      setShowOutline(false);
       setProcessEntireDocument(false);
       setSelectedAttachmentId(null);
       clearGeneratedPreview();
@@ -1608,9 +1627,13 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
       ? outlineTaskInstruction(continuationTask, manuscript.outline)
       : displayInstruction;
     const automaticBookOutline = !continuationTask && transcripts.length > 0 && isBookCreationRequest(instruction);
+    const requestedChapterNumber = Number(instruction.match(/\bchapter\s+(\d+)\b/i)?.[1]) || null;
+    const rewriteTargetChapter = manuscript.outline && isChapterRewriteRequest(instruction)
+      ? requestedChapterNumber ?? pendingDraft?.number ?? manuscript.lastDraftedChapterNumber ?? null
+      : null;
     const activeMode = continuationTask
       ? "draft"
-      : automaticBookOutline ? "outline" : requestMode ?? inferMode(instruction, mode);
+      : rewriteTargetChapter !== null ? "draft" : automaticBookOutline ? "outline" : requestMode ?? inferMode(instruction, mode);
     if (automaticBookOutline) setMode("outline");
     const requestResponseLength = options?.responseLength
       ?? (activeMode !== "draft" && responseLength === "default" && isNexusLMLongFormRequest(instruction) ? "long-form" : responseLength);
@@ -1645,6 +1668,17 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
           setMessages((current) => [...current,
             { role: "user", content: displayInstruction },
             { role: "assistant", content: `The saved transcript slot "${continuationTask.transcriptLabel}" is no longer available. Choose a transcript slot and ask me to continue.` },
+          ]);
+          setInput("");
+          return;
+        }
+      } else if (rewriteTargetChapter !== null && manuscript.outlineTranscriptLabels?.[rewriteTargetChapter - 1]) {
+        const transcriptLabel = manuscript.outlineTranscriptLabels[rewriteTargetChapter - 1];
+        draftSelectedTranscript = transcripts.find((transcript) => transcript.label === transcriptLabel) ?? null;
+        if (!draftSelectedTranscript) {
+          setMessages((current) => [...current,
+            { role: "user", content: displayInstruction },
+            { role: "assistant", content: `The transcript slot "${transcriptLabel}" for chapter ${rewriteTargetChapter} is no longer available. Restore that source slot before redrafting the chapter.` },
           ]);
           setInput("");
           return;
@@ -1741,25 +1775,37 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
           ...manuscript.chapters.map((chapter) => chapter.number),
           ...(manifest?.chapters.map((chapter) => chapter.number) ?? []),
         ];
+        const outlineTranscriptLabels = outlineChapterRequest.oneChapterPerSlot
+          ? transcripts.map((transcript) => transcript.label)
+          : undefined;
+        const nextChapter = parsed.data.chapters.find((chapter) => !completedChapterNumbers.includes(chapter.number));
         const nextContinuation = getNextOutlineContinuation(
           parsed.data,
           completedChapterNumbers,
           manuscript.frontMatterText,
           manuscript.backMatterText,
+          nextChapter && outlineTranscriptLabels
+            ? outlineTranscriptLabels[nextChapter.number - 1] ?? null
+            : null,
         );
-        setManuscript((current) => ({
-          ...current,
+        const updatedManuscript: NexusLMManuscript = {
+          ...manuscript,
           outline: parsed.data,
+          outlineTranscriptLabels,
           outlineContinuation: nextContinuation ?? undefined,
-        }));
+          lastDraftedChapterNumber: undefined,
+        };
         const followUp = nextContinuation
           ? `\n\nThe outline is saved in the manuscript workspace. Ready to write ${formatOutlineContinuation(nextContinuation, parsed.data)}? Reply “yes” to begin.`
           : "\n\nThe outline is saved; all of its items are already present in the manuscript.";
-        setMessages((current) => [...current, {
+        const updatedMessages: Message[] = [...nextMessages, {
           role: "assistant",
           content: `${formatBookOutline(parsed.data)}${followUp}`,
           format: "markdown",
-        }]);
+        }];
+        setManuscript(updatedManuscript);
+        setMessages(updatedMessages);
+        await persistChatSnapshot(updatedMessages, updatedManuscript);
         setShowMobileContext(true);
         return;
       }
@@ -1811,13 +1857,11 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
       }
 
       if (activeMode === "draft") {
-        const chapterMatch = instruction.match(/\bchapter\s+(\d+)\b/i);
-        const chapterNumber = chapterMatch ? Number(chapterMatch[1]) : 0;
+        const chapterNumber = requestedChapterNumber ?? rewriteTargetChapter ?? 0;
         if (!chapterNumber) {
           setMessages((current) => [...current, { role: "assistant", content: "Tell me which chapter number to draft, for example: Write chapter 4 from the manuscript." }]);
           return;
         }
-        setActiveOutlineChapterNumber(chapterNumber);
         const res = await fetch("/api/ebook/nexuslm/draft", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -1847,9 +1891,20 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
         if (!res.ok || json.error) throw new Error(json.error ?? `Request failed (${res.status})`);
         const parsed = ChapterDraftSchema.safeParse(json.chapter);
         if (!parsed.success) throw new Error("NexusLM returned an invalid chapter draft.");
+        const updatedManuscript = {
+          ...manuscript,
+          lastDraftedChapterNumber: chapterNumber,
+          pendingDraft: parsed.data,
+          pendingDraftSourceLabel: draftSelectedTranscript?.label ?? null,
+        };
+        const updatedMessages: Message[] = [...nextMessages, { role: "assistant", content: formatChapterDraft(parsed.data) }];
+        setManuscript(updatedManuscript);
         setPendingDraft(parsed.data);
         setPendingDraftSourceLabel(draftSelectedTranscript?.label ?? null);
-        setMessages((current) => [...current, { role: "assistant", content: formatChapterDraft(parsed.data) }]);
+        setMessages(updatedMessages);
+        void persistChatSnapshot(updatedMessages, updatedManuscript).catch((error) => {
+          setAttachmentError(`Chapter draft is ready, but chat progress could not be saved: ${readableError(error)}`);
+        });
         return;
       }
 
@@ -1953,7 +2008,6 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
       setMessages((current) => [...current, { role: "assistant", content: readableError(error) }]);
     } finally {
       setLoading(false);
-      setActiveOutlineChapterNumber(null);
     }
   }
 
@@ -2013,32 +2067,57 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
       ...chapters.map((chapter) => chapter.number),
       ...manuscriptChapters.map((chapter) => chapter.number),
     ];
+    const nextOutlinedChapter = manuscript.outline?.chapters.find((chapter) => !completedChapterNumbers.includes(chapter.number));
     const nextContinuation = manuscript.outline
       ? getNextOutlineContinuation(
         manuscript.outline,
         completedChapterNumbers,
         manuscript.frontMatterText,
         manuscript.backMatterText,
-        pendingDraftSourceLabel,
+        nextOutlinedChapter && manuscript.outlineTranscriptLabels
+          ? manuscript.outlineTranscriptLabels[nextOutlinedChapter.number - 1] ?? null
+          : null,
       )
       : null;
     onManifestChange({ ...baseManifest, chapters, totalWordCount }, `Chapter ${pendingDraft.number} added to the manuscript.`);
-    setManuscript((current) => ({
-      ...current,
+    const updatedManuscript: NexusLMManuscript = {
+      ...manuscript,
       chapters: manuscriptChapters,
       outlineContinuation: nextContinuation ?? undefined,
-    }));
+      pendingDraft: undefined,
+      pendingDraftSourceLabel: undefined,
+    };
     const followUp = manuscript.outline
       ? nextContinuation
         ? ` Would you like me to write ${formatOutlineContinuation(nextContinuation, manuscript.outline)} next? Reply “yes” to continue.`
         : " All chapters and outlined front and back matter are complete."
       : "";
-    setMessages((current) => [...current, {
+    const updatedMessages: Message[] = [...messages, {
       role: "assistant",
       content: `Chapter ${pendingDraft.number} added to the manuscript.${followUp}`,
-    }]);
+    }];
+    setManuscript(updatedManuscript);
+    setMessages(updatedMessages);
     setPendingDraft(null);
     setPendingDraftSourceLabel(null);
+    void persistChatSnapshot(updatedMessages, updatedManuscript).catch((error) => {
+      setAttachmentError(`Chapter was added, but chat progress could not be saved: ${readableError(error)}`);
+    });
+  }
+
+  function discardPendingDraft(): void {
+    if (!pendingDraft) return;
+    const updatedManuscript: NexusLMManuscript = {
+      ...manuscript,
+      pendingDraft: undefined,
+      pendingDraftSourceLabel: undefined,
+    };
+    setPendingDraft(null);
+    setPendingDraftSourceLabel(null);
+    setManuscript(updatedManuscript);
+    void persistChatSnapshot(messages, updatedManuscript).catch((error) => {
+      setAttachmentError(`Draft was discarded, but chat progress could not be saved: ${readableError(error)}`);
+    });
   }
 
   function addPendingMatter() {
@@ -2079,14 +2158,16 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
         completedChapterNumbers,
         frontMatterText,
         backMatterText,
-        pendingMatter.transcriptLabel,
+        manuscript.outlineContinuation?.kind === "chapter" && manuscript.outlineTranscriptLabels
+          ? manuscript.outlineTranscriptLabels[manuscript.outlineContinuation.chapterNumber - 1] ?? null
+          : null,
       );
-      setManuscript((current) => ({
-        ...current,
+      const updatedManuscript: NexusLMManuscript = {
+        ...manuscript,
         frontMatterText,
         backMatterText,
         outlineContinuation: nextContinuation ?? undefined,
-      }));
+      };
       onManifestChange(
         parsedManifest.data,
         `${pendingMatter.kind === "frontMatter" ? "Front" : "Back"} matter added to the book.`,
@@ -2094,12 +2175,17 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
       const followUp = nextContinuation
         ? ` ${formatOutlineContinuation(nextContinuation, manuscript.outline)} is next. Reply “yes” to continue.`
         : " All chapters and outlined front and back matter are complete.";
-      setMessages((current) => [...current, {
+      const updatedMessages: Message[] = [...messages, {
         role: "assistant",
         content: `${pendingMatter.kind === "frontMatter" ? "Front" : "Back"} matter added to the book.${followUp}`,
-      }]);
+      }];
+      setManuscript(updatedManuscript);
+      setMessages(updatedMessages);
       setPendingMatter(null);
       setAttachmentError(null);
+      void persistChatSnapshot(updatedMessages, updatedManuscript).catch((error) => {
+        setAttachmentError(`Matter was added, but chat progress could not be saved: ${readableError(error)}`);
+      });
     } catch (error) {
       setAttachmentError(`Generated matter could not be mapped to the manuscript fields: ${readableError(error)}`);
     }
@@ -2198,15 +2284,105 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
   return (
     <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden bg-shell-950 lg:flex-row">
       <section className="flex min-h-0 min-w-0 flex-1 flex-col border-b border-slate-800 lg:border-b-0 lg:border-r" aria-label="NexusLM conversation">
-        <div className="flex min-h-12 shrink-0 items-center justify-between border-b border-slate-800 px-4 lg:hidden">
-          <p className="text-xs font-semibold uppercase tracking-widest text-slate-500">NexusLM conversation</p>
+        <div className="flex min-h-12 shrink-0 items-center justify-between gap-2 border-b border-slate-800 px-3 sm:px-4">
+          <p className="hidden text-xs font-semibold uppercase tracking-widest text-slate-500 sm:block">NexusLM conversation</p>
           <div className="flex items-center gap-2">
-            <button type="button" onClick={() => void clearConversation()} className="min-h-12 px-2 text-xs font-semibold text-slate-500">Clear</button>
-            <button type="button" onClick={() => setShowMobileContext((current) => !current)} className="min-h-12 px-2 text-xs font-semibold text-cyan-300">
+            {manuscript.outline && (
+              <button
+                type="button"
+                onClick={() => setShowOutline(true)}
+                className="min-h-12 rounded-xl border border-violet-300/40 px-3 text-xs font-semibold text-violet-100"
+              >
+                Book outline · {manuscript.outline.chapters.length}
+              </button>
+            )}
+            <button type="button" onClick={() => void clearConversation()} className="min-h-12 px-2 text-xs font-semibold text-slate-500 lg:hidden">Clear</button>
+            <button type="button" onClick={() => setShowMobileContext((current) => !current)} className="min-h-12 px-2 text-xs font-semibold text-cyan-300 lg:hidden">
               {showMobileContext ? "Hide workspace" : "Workspace"}
             </button>
           </div>
         </div>
+        {showOutline && manuscript.outline && (
+          <div className="fixed inset-0 z-[80] flex items-center justify-center bg-black/70 p-3 pb-20 lg:p-8" role="presentation">
+            <section
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="nexuslm-outline-dialog-title"
+              className="flex max-h-[calc(100dvh-6rem)] w-full max-w-3xl flex-col overflow-hidden rounded-2xl border border-violet-300/40 bg-shell-950 shadow-2xl lg:max-h-[85dvh]"
+            >
+              <header className="flex shrink-0 items-center justify-between gap-3 border-b border-slate-800 p-4">
+                <div>
+                  <h2 id="nexuslm-outline-dialog-title" className="text-sm font-bold text-violet-100">{manuscript.outline.bookTitle}</h2>
+                  <p className="mt-1 text-xs text-slate-400">Saved book outline · {manuscript.outline.chapters.length} chapters</p>
+                </div>
+                <button type="button" onClick={() => setShowOutline(false)} className="min-h-12 min-w-12 rounded-xl border border-slate-700 text-sm font-semibold text-slate-200">
+                  Close
+                </button>
+              </header>
+              <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-4" style={{ WebkitOverflowScrolling: "touch" }}>
+                <section className="rounded-xl border border-slate-800 bg-slate-900/50 p-3">
+                  <h3 className="text-xs font-bold uppercase tracking-wider text-slate-300">Core thesis</h3>
+                  <p className="mt-2 text-sm leading-6 text-slate-300">{manuscript.outline.coreThesis}</p>
+                  <p className="mt-3 text-xs leading-5 text-slate-400">Target reader: {manuscript.outline.targetReader}</p>
+                </section>
+                {manuscript.outline.chapters.map((chapter) => (
+                  <section key={chapter.number} className="rounded-xl border border-slate-800 bg-slate-900/50 p-3">
+                    <div className="flex flex-wrap items-start justify-between gap-2">
+                      <div className="min-w-0 flex-1">
+                        <h3 className="text-sm font-semibold text-slate-100">Chapter {chapter.number}: {chapter.title}</h3>
+                        <p className="mt-1 text-xs leading-5 text-slate-400">{chapter.purpose}</p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setShowOutline(false);
+                          void send(`Rewrite chapter ${chapter.number} from its outlined purpose using its assigned transcript source. Replace the previous draft with a complete, well-developed chapter.`, "draft", "all", { forceBook: true });
+                        }}
+                        disabled={loading}
+                        className="min-h-12 rounded-xl border border-violet-300/40 px-3 text-xs font-semibold text-violet-100 disabled:opacity-40"
+                      >
+                        Draft / rewrite
+                      </button>
+                    </div>
+                    <ol className="mt-3 list-decimal space-y-2 pl-5">
+                      {chapter.sections.map((section) => (
+                        <li key={section.heading} className="text-xs leading-5 text-slate-300">
+                          <span className="font-semibold text-violet-200">{section.heading}:</span> {section.purpose}
+                        </li>
+                      ))}
+                    </ol>
+                  </section>
+                ))}
+                <section className="grid gap-3 lg:grid-cols-2">
+                  <div className="rounded-xl border border-slate-800 p-3">
+                    <h3 className="text-xs font-bold uppercase tracking-wider text-slate-300">Front matter · after chapters</h3>
+                    {manuscript.outline.frontMatter.map((item) => <p key={item.title} className="mt-2 text-xs leading-5 text-slate-400">{item.title}: {item.purpose}</p>)}
+                  </div>
+                  <div className="rounded-xl border border-slate-800 p-3">
+                    <h3 className="text-xs font-bold uppercase tracking-wider text-slate-300">Back matter · after chapters</h3>
+                    {manuscript.outline.backMatter.map((item) => <p key={item.title} className="mt-2 text-xs leading-5 text-slate-400">{item.title}: {item.purpose}</p>)}
+                  </div>
+                </section>
+              </div>
+              {manuscript.outlineContinuation && !pendingDraft && !pendingMatter && (
+                <footer className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-t border-slate-800 p-4">
+                  <p className="text-xs text-slate-300">Next: {formatOutlineContinuation(manuscript.outlineContinuation, manuscript.outline)}</p>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowOutline(false);
+                      void send("yes");
+                    }}
+                    disabled={loading}
+                    className="min-h-12 rounded-xl bg-violet-300 px-4 text-xs font-bold text-slate-950 disabled:opacity-40"
+                  >
+                    Continue outline
+                  </button>
+                </footer>
+              )}
+            </section>
+          </div>
+        )}
         <div
           ref={scrollRef}
           onScroll={handleConversationScroll}
@@ -2215,69 +2391,6 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
           style={{ WebkitOverflowScrolling: "touch" }}
         >
           <div className="mx-auto flex max-w-6xl flex-col gap-5">
-            {manuscript.outline && (
-              <section className="rounded-2xl border border-violet-400/30 bg-violet-950/20 p-4" aria-label="Saved book outline">
-                <p className="text-xs font-bold uppercase tracking-widest text-violet-200">
-                  Outline in use · {manuscript.outline.chapters.length} chapters
-                </p>
-                {outlineFocusChapter && (
-                  <div className="mt-2">
-                    <p className="text-sm font-semibold text-slate-100">
-                      Chapter {outlineFocusChapter.number}: {outlineFocusChapter.title}
-                    </p>
-                    <p className="mt-1 text-xs leading-5 text-slate-300">{outlineFocusChapter.purpose}</p>
-                    <ul className="mt-2 space-y-1">
-                      {outlineFocusChapter.sections.map((section) => (
-                        <li key={section.heading} className="text-xs leading-5 text-violet-100">
-                          <span className="font-semibold">{section.heading}:</span> {section.purpose}
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                )}
-                {!outlineFocusChapter && manuscript.outlineContinuation && (
-                  <p className="mt-2 text-xs leading-5 text-slate-300">
-                    Next: {formatOutlineContinuation(manuscript.outlineContinuation, manuscript.outline)}
-                  </p>
-                )}
-                <details className="mt-3 border-t border-violet-400/20 pt-2">
-                  <summary className="flex min-h-12 cursor-pointer items-center text-xs font-semibold text-violet-200">
-                    View full outline
-                  </summary>
-                  <div className="space-y-4 pb-2">
-                    <div>
-                      <p className="text-xs font-semibold text-slate-200">Core thesis</p>
-                      <p className="mt-1 text-xs leading-5 text-slate-400">{manuscript.outline.coreThesis}</p>
-                    </div>
-                    {manuscript.outline.chapters.map((chapter) => (
-                      <div key={chapter.number} className="rounded-xl border border-slate-800 bg-slate-950/50 p-3">
-                        <p className="text-xs font-semibold text-slate-200">Chapter {chapter.number}: {chapter.title}</p>
-                        <p className="mt-1 text-xs leading-5 text-slate-400">{chapter.purpose}</p>
-                        <ul className="mt-2 space-y-1">
-                          {chapter.sections.map((section) => (
-                            <li key={section.heading} className="text-xs leading-5 text-slate-400">
-                              <span className="font-semibold text-violet-200">{section.heading}:</span> {section.purpose}
-                            </li>
-                          ))}
-                        </ul>
-                      </div>
-                    ))}
-                    <div>
-                      <p className="text-xs font-semibold text-slate-200">Front matter · write after all chapters</p>
-                      {manuscript.outline.frontMatter.map((item) => (
-                        <p key={item.title} className="mt-1 text-xs leading-5 text-slate-400">{item.title}: {item.purpose}</p>
-                      ))}
-                    </div>
-                    <div>
-                      <p className="text-xs font-semibold text-slate-200">Back matter · write after all chapters</p>
-                      {manuscript.outline.backMatter.map((item) => (
-                        <p key={item.title} className="mt-1 text-xs leading-5 text-slate-400">{item.title}: {item.purpose}</p>
-                      ))}
-                    </div>
-                  </div>
-                </details>
-              </section>
-            )}
             {messages.map((message, index) => (
               <div key={`${message.role}-${index}`} className={message.role === "user"
                 ? "max-w-[88%] self-end rounded-2xl border border-cyan-500/30 bg-cyan-500/10 px-4 py-3 text-sm leading-6 text-cyan-50"
@@ -2398,7 +2511,7 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
                 <p className="mt-1 text-xs text-cyan-200/70">Review the complete draft in the conversation, then add this version. After it is added, NexusLM will ask whether to write the next outlined item.</p>
                 <div className="mt-3 flex gap-2">
                   <button type="button" onClick={addPendingDraft} disabled={loading} className="min-h-12 rounded-xl bg-cyan-300 px-4 text-sm font-bold text-slate-950 disabled:opacity-40">Add to manuscript</button>
-                  <button type="button" onClick={() => { setPendingDraft(null); setPendingDraftSourceLabel(null); }} disabled={loading} className="min-h-12 rounded-xl border border-slate-700 px-4 text-sm font-semibold text-slate-300 disabled:opacity-40">Discard draft</button>
+                  <button type="button" onClick={discardPendingDraft} disabled={loading} className="min-h-12 rounded-xl border border-slate-700 px-4 text-sm font-semibold text-slate-300 disabled:opacity-40">Discard draft</button>
                 </div>
               </div>
             )}
@@ -2831,7 +2944,7 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
                     ? `${manuscript.outline.chapters.length} chapters · front and back matter follow the chapters`
                     : "Draft a fresh outline from the transcript sources, separate from Plan Whole Book."}
                 </p>
-                <p className="mt-1 text-[11px] leading-5 text-slate-500">Specify “exactly four chapters” or “one chapter per slot” to lock the chapter count.</p>
+                <p className="mt-1 text-[11px] leading-5 text-slate-500">Defaults to one chapter per transcript slot. Ask for a different chapter count or topic-based grouping to change it.</p>
               </div>
               <button
                 type="button"

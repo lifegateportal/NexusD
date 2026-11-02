@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { BookTemplateEnum } from "@/lib/schemas/ebook";
+import { BookTemplateEnum, ChapterDraftSchema } from "@/lib/schemas/ebook";
 import {
   NexusLMBookOutlineSchema,
   NexusLMOutlineContinuationSchema,
@@ -41,9 +41,13 @@ export type NexusLMManuscript = {
   htmlTemplate?: string;
   chapters: NexusLMManuscriptChapter[];
   outline?: NexusLMBookOutline;
+  outlineTranscriptLabels?: string[];
+  pendingDraft?: z.infer<typeof ChapterDraftSchema>;
+  pendingDraftSourceLabel?: string | null;
   frontMatterText?: string;
   backMatterText?: string;
   outlineContinuation?: NexusLMOutlineContinuation;
+  lastDraftedChapterNumber?: number;
 };
 
 export type NexusLMChatArchive = {
@@ -101,9 +105,13 @@ const ManuscriptSchema = z.object({
   htmlTemplate: z.string().max(2_000_000).optional(),
   chapters: z.array(ManuscriptChapterSchema).max(200),
   outline: NexusLMBookOutlineSchema.optional(),
+  outlineTranscriptLabels: z.array(z.string().min(1).max(200)).max(20).optional(),
+  pendingDraft: ChapterDraftSchema.optional(),
+  pendingDraftSourceLabel: z.string().min(1).max(200).nullable().optional(),
   frontMatterText: z.string().max(600_000).optional(),
   backMatterText: z.string().max(600_000).optional(),
   outlineContinuation: NexusLMOutlineContinuationSchema.optional(),
+  lastDraftedChapterNumber: z.number().int().positive().max(100).optional(),
 }).strict();
 
 const ChatArchiveSchema = z.object({
