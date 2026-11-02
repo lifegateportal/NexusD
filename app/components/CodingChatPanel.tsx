@@ -1794,12 +1794,12 @@ export function CodingChatPanel() {
   ) => {
     if (!workspaceId || !workspaceReadyRef.current) return;
     const targetWorkspaceId = workspaceId;
-    const baseRevisionId = workspaceRevisionRef.current;
-    if (!baseRevisionId) return;
     const operation = async () => {
       if (workspaceIdRef.current !== targetWorkspaceId) return;
       setWorkspaceStatus("Saving");
       try {
+        const baseRevisionId = workspaceRevisionRef.current;
+        if (!baseRevisionId) throw new Error("The current project revision is not available.");
         const response = await fetch(`/api/coding/workspaces/${encodeURIComponent(targetWorkspaceId)}/revisions`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
