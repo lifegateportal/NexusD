@@ -43,6 +43,7 @@ import {
 import {
   CodingAgentEventSchema,
   CodingPreviewSchema,
+  CodingWorkspaceRevisionSummarySchema,
   CodingWorkspaceSchema,
   CodingWorkspaceSnapshotSchema,
   CodingWorkspaceFileSchema,
@@ -54,6 +55,7 @@ import {
   type CodingPreview,
   type CodingWorkspace,
   type CodingWorkspaceFile,
+  type CodingWorkspaceRevisionSummary,
   type CodingWorkspaceSnapshot,
 } from "@/lib/coding-workspace";
 import {
@@ -405,6 +407,10 @@ export function CodingChatPanel() {
   const [workspaceName, setWorkspaceName] = useState("Nexus Code Workspace");
   const [workspaceRevisionId, setWorkspaceRevisionId] = useState<string | null>(null);
   const [workspaceParentRevisionId, setWorkspaceParentRevisionId] = useState<string | null>(null);
+  const [revisionHistory, setRevisionHistory] = useState<CodingWorkspaceRevisionSummary[]>([]);
+  const [showRevisionHistory, setShowRevisionHistory] = useState(false);
+  const [revisionHistoryBusy, setRevisionHistoryBusy] = useState(false);
+  const [restoringRevisionId, setRestoringRevisionId] = useState<string | null>(null);
   const [workspaceStatus, setWorkspaceStatus] = useState("Loading workspace");
   const [codingDeployment, setCodingDeployment] = useState<CodingDeployment | null>(null);
   const [deploymentKind, setDeploymentKind] = useState<CodingDeploymentKind>("static");
@@ -982,6 +988,8 @@ export function CodingChatPanel() {
     setWorkspaceName(snapshot.workspace.name);
     setWorkspaceRevisionId(snapshot.workspace.currentRevisionId);
     setWorkspaceParentRevisionId(snapshot.revision.parentRevisionId);
+    setRevisionHistory([]);
+    setShowRevisionHistory(false);
     setCodingDeployment(null);
     setDeploymentEnvironmentText("");
     setDeploymentError(null);
@@ -1866,6 +1874,168 @@ export function CodingChatPanel() {
       throw new Error("The current project changes could not be saved.");
     }
   }, [files, queueWorkspaceSave, workspaceId]);
+
+  const openRevisionHistory = useCallback(async () => {
+    if (!workspaceId || loading || revisionHistoryBusy) return;
+    const targetWorkspaceId = workspaceId;
+    setRevisionHistoryBusy(true);
+    setWorkspaceStatus("Loading snapshots");
+    setError(null);
+    try {
+      await flushWorkspaceSave();
+      const response = await fetch(`/api/coding/workspaces/${encodeURIComponent(targetWorkspaceId)}/revisions`, {
+        cache: "no-store",
+        credentials: "same-origin",
+      });
+      const payload = await response.json() as { revisions?: unknown; error?: unknown };
+      if (!response.ok) {
+        throw new Error(typeof payload.error === "string" ? payload.error : "Project snapshots could not be loaded.");
+      }
+      const parsed = CodingWorkspaceRevisionSummarySchema.array().safeParse(payload.revisions);
+      if (!parsed.success || parsed.data.some((revision) => revision.workspaceId !== targetWorkspaceId)) {
+        throw new Error("Project snapshot history was invalid.");
+      }
+      if (workspaceIdRef.current !== targetWorkspaceId) {
+        throw new Error("The active project changed before snapshot history could be opened.");
+      }
+      setRevisionHistory(parsed.data);
+      setShowChatHistory(false);
+      setShowRevisionHistory(true);
+      setWorkspaceStatus("Saved");
+    } catch (historyError) {
+      setWorkspaceStatus("Needs attention");
+      setError(historyError instanceof Error ? historyError.message : "Project snapshots could not be loaded.");
+    } finally {
+      setRevisionHistoryBusy(false);
+    }
+  }, [flushWorkspaceSave, loading, revisionHistoryBusy, workspaceId]);
+
+  const saveNamedSnapshot = useCallback(async () => {
+    if (!workspaceId || loading || revisionHistoryBusy) return;
+    const name = window.prompt("Name this snapshot", "Known good version")?.trim();
+    if (!name) return;
+    if (name.length > 400) {
+      setError("Snapshot names must be 400 characters or fewer.");
+      return;
+    }
+
+    const targetWorkspaceId = workspaceId;
+    setRevisionHistoryBusy(true);
+    setWorkspaceStatus("Saving snapshot");
+    setError(null);
+    try {
+      await flushWorkspaceSave();
+      const baseRevisionId = workspaceRevisionRef.current;
+      if (!baseRevisionId) throw new Error("The current project revision is not available.");
+      const response = await fetch(`/api/coding/workspaces/${encodeURIComponent(targetWorkspaceId)}/revisions`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "same-origin",
+        body: JSON.stringify({
+          baseRevisionId,
+          files,
+          reason: name,
+          source: "user",
+        }),
+      });
+      const payload = await response.json().catch(() => null) as unknown;
+      if (!response.ok) {
+        const failure = payload as { error?: unknown } | null;
+        throw new Error(typeof failure?.error === "string" ? failure.error : "Snapshot could not be saved.");
+      }
+      const parsed = CodingWorkspaceSnapshotSchema.safeParse(payload);
+      if (!parsed.success || parsed.data.workspace.id !== targetWorkspaceId) {
+        throw new Error("Snapshot save response was invalid.");
+      }
+      if (workspaceIdRef.current !== targetWorkspaceId) {
+        throw new Error("The active project changed before the snapshot could be saved.");
+      }
+      workspaceRevisionRef.current = parsed.data.workspace.currentRevisionId;
+      workspaceSyncedFilesRef.current = JSON.stringify(parsed.data.revision.files);
+      setWorkspaceRevisionId(parsed.data.workspace.currentRevisionId);
+      setWorkspaceParentRevisionId(parsed.data.revision.parentRevisionId);
+      setWorkspaces((current) => current.map((workspace) => (
+        workspace.id === parsed.data.workspace.id ? parsed.data.workspace : workspace
+      )));
+      const summary = CodingWorkspaceRevisionSummarySchema.parse({
+        id: parsed.data.revision.id,
+        workspaceId: parsed.data.revision.workspaceId,
+        number: parsed.data.revision.number,
+        parentRevisionId: parsed.data.revision.parentRevisionId,
+        createdAt: parsed.data.revision.createdAt,
+        reason: parsed.data.revision.reason,
+        source: parsed.data.revision.source,
+        fileCount: parsed.data.revision.files.length,
+        byteCount: parsed.data.revision.byteCount,
+      });
+      setRevisionHistory((current) => [summary, ...current.filter((revision) => revision.id !== summary.id)]);
+      setWorkspaceStatus("Snapshot saved");
+    } catch (snapshotError) {
+      setWorkspaceStatus("Needs attention");
+      setError(snapshotError instanceof Error ? snapshotError.message : "Snapshot could not be saved.");
+    } finally {
+      setRevisionHistoryBusy(false);
+    }
+  }, [files, flushWorkspaceSave, loading, revisionHistoryBusy, workspaceId]);
+
+  const restoreWorkspaceSnapshot = useCallback(async (revision: CodingWorkspaceRevisionSummary) => {
+    if (!workspaceId || loading || revisionHistoryBusy || revision.workspaceId !== workspaceId) return;
+    const timestamp = new Date(revision.createdAt).toLocaleString();
+    if (!window.confirm(
+      `Restore "${workspaceName}" to "${revision.reason}" (revision ${revision.number}, ${timestamp})? Your current version will remain saved in history.`,
+    )) return;
+
+    const targetWorkspaceId = workspaceId;
+    setRevisionHistoryBusy(true);
+    setRestoringRevisionId(revision.id);
+    setWorkspaceStatus("Restoring snapshot");
+    setError(null);
+    try {
+      await flushWorkspaceSave();
+      const response = await fetch(`/api/coding/workspaces/${encodeURIComponent(targetWorkspaceId)}/revert`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "same-origin",
+        body: JSON.stringify({ revisionId: revision.id }),
+      });
+      const payload = await response.json().catch(() => null) as unknown;
+      if (!response.ok) {
+        const failure = payload as { error?: unknown } | null;
+        throw new Error(typeof failure?.error === "string" ? failure.error : "Project snapshot could not be restored.");
+      }
+      const parsed = CodingWorkspaceSnapshotSchema.safeParse(payload);
+      if (!parsed.success || parsed.data.workspace.id !== targetWorkspaceId) {
+        throw new Error("Snapshot restore response was invalid.");
+      }
+      if (workspaceIdRef.current !== targetWorkspaceId) {
+        throw new Error("The active project changed before the snapshot could be restored.");
+      }
+      applyWorkspaceSnapshot(parsed.data);
+      setWorkspaces((current) => current.map((workspace) => (
+        workspace.id === parsed.data.workspace.id ? parsed.data.workspace : workspace
+      )));
+      const summary = CodingWorkspaceRevisionSummarySchema.parse({
+        id: parsed.data.revision.id,
+        workspaceId: parsed.data.revision.workspaceId,
+        number: parsed.data.revision.number,
+        parentRevisionId: parsed.data.revision.parentRevisionId,
+        createdAt: parsed.data.revision.createdAt,
+        reason: parsed.data.revision.reason,
+        source: parsed.data.revision.source,
+        fileCount: parsed.data.revision.files.length,
+        byteCount: parsed.data.revision.byteCount,
+      });
+      setRevisionHistory((current) => [summary, ...current.filter((item) => item.id !== summary.id)]);
+      setShowRevisionHistory(false);
+      setWorkspaceStatus(`Restored revision ${revision.number}`);
+    } catch (restoreError) {
+      setWorkspaceStatus("Needs attention");
+      setError(restoreError instanceof Error ? restoreError.message : "Project snapshot could not be restored.");
+    } finally {
+      setRevisionHistoryBusy(false);
+      setRestoringRevisionId(null);
+    }
+  }, [applyWorkspaceSnapshot, flushWorkspaceSave, loading, revisionHistoryBusy, workspaceId, workspaceName]);
 
   useEffect(() => {
     if (!workspaceId || !workspaceReadyRef.current) return;
@@ -3067,7 +3237,7 @@ export function CodingChatPanel() {
           <select
             value={workspaceId ?? ""}
             onChange={(event) => void openWorkspace(event.target.value)}
-            disabled={loading || workspaces.length === 0}
+            disabled={loading || revisionHistoryBusy || workspaces.length === 0}
             aria-label="Select coding project"
             className="min-h-12 w-full min-w-0 rounded-xl border border-slate-700 bg-slate-900 px-3 text-base text-slate-200 focus:border-cyan-400/60 focus:outline-none disabled:opacity-60 lg:w-auto lg:min-w-36 lg:max-w-[min(48vw,18rem)] lg:flex-1"
           >
@@ -3079,7 +3249,7 @@ export function CodingChatPanel() {
           <button
             type="button"
             onClick={() => void createWorkspace()}
-            disabled={loading}
+            disabled={loading || revisionHistoryBusy}
             className="min-h-12 shrink-0 rounded-xl border border-cyan-400/40 px-3 text-xs font-semibold text-cyan-200 disabled:opacity-40"
           >
             <span className="sm:hidden">New</span>
@@ -3088,10 +3258,19 @@ export function CodingChatPanel() {
           <button
             type="button"
             onClick={() => void deleteWorkspace()}
-            disabled={loading || !workspaceId}
+            disabled={loading || revisionHistoryBusy || !workspaceId}
             className="min-h-12 shrink-0 rounded-xl border border-rose-400/40 px-3 text-xs font-semibold text-rose-200 disabled:opacity-40"
           >
             Delete
+          </button>
+          <button
+            type="button"
+            onClick={showRevisionHistory ? () => setShowRevisionHistory(false) : () => void openRevisionHistory()}
+            disabled={!workspaceId || loading || revisionHistoryBusy}
+            aria-expanded={showRevisionHistory}
+            className="min-h-12 shrink-0 rounded-xl border border-violet-400/40 px-3 text-xs font-semibold text-violet-200 disabled:opacity-40"
+          >
+            {showRevisionHistory ? "Back to editor" : "Snapshots"}
           </button>
           <span className="shrink-0 px-1 text-[10px] font-semibold text-slate-500" aria-live="polite">{workspaceStatus}</span>
           <button
@@ -3479,7 +3658,77 @@ export function CodingChatPanel() {
             )}
           </div>
 
-          {codingSurface === "assistant" ? (
+          {showRevisionHistory ? (
+            <div className="min-h-0 flex-1 overflow-y-auto px-3 py-4 sm:px-5 lg:px-8" style={{ WebkitOverflowScrolling: "touch" }}>
+              <div className="mx-auto w-full max-w-4xl">
+                <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <h2 className="text-base font-bold text-slate-100">Project snapshots</h2>
+                    <p className="mt-1 text-xs text-slate-500">
+                      Saved versions for {workspaceName}. Restoring creates a new revision and keeps this history.
+                    </p>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      onClick={() => void saveNamedSnapshot()}
+                      disabled={loading || revisionHistoryBusy}
+                      className="min-h-12 rounded-xl bg-violet-300 px-4 text-xs font-bold text-slate-950 disabled:opacity-40"
+                    >
+                      {revisionHistoryBusy && workspaceStatus === "Saving snapshot" ? "Saving…" : "Save current snapshot"}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setShowRevisionHistory(false)}
+                      className="min-h-12 rounded-xl border border-slate-700 px-4 text-xs font-semibold text-slate-300"
+                    >
+                      Back to editor
+                    </button>
+                  </div>
+                </div>
+                {revisionHistory.length === 0 ? (
+                  <p className="rounded-xl border border-dashed border-slate-700 p-4 text-sm text-slate-400">
+                    No saved versions are available for this project yet.
+                  </p>
+                ) : (
+                  <div className="grid gap-2" aria-label="Saved project snapshots">
+                    {revisionHistory.map((revision) => {
+                      const createdAt = new Date(revision.createdAt).toLocaleString();
+                      const isCurrent = revision.id === workspaceRevisionId;
+                      return (
+                        <article key={revision.id} className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-slate-800 bg-slate-900/60 p-3 sm:p-4">
+                          <div className="min-w-0 flex-1">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <h3 className="break-words text-sm font-semibold text-slate-100">{revision.reason}</h3>
+                              {isCurrent && (
+                                <span className="rounded-full border border-emerald-400/30 px-2 py-1 text-[10px] font-semibold text-emerald-300">
+                                  Current
+                                </span>
+                              )}
+                            </div>
+                            <p className="mt-1 text-xs text-slate-400">
+                              Revision {revision.number} · {createdAt}
+                            </p>
+                            <p className="mt-1 text-[11px] text-slate-500">
+                              {revision.fileCount} files · {revision.byteCount.toLocaleString()} bytes · {revision.source}
+                            </p>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => void restoreWorkspaceSnapshot(revision)}
+                            disabled={isCurrent || loading || revisionHistoryBusy}
+                            className="min-h-12 min-w-28 rounded-xl border border-rose-400/40 px-4 text-xs font-semibold text-rose-200 disabled:opacity-40"
+                          >
+                            {restoringRevisionId === revision.id ? "Restoring…" : isCurrent ? "Current" : "Restore"}
+                          </button>
+                        </article>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            </div>
+          ) : codingSurface === "assistant" ? (
             showChatHistory ? (
               <div className="min-h-0 flex-1 overflow-y-auto px-3 py-4 sm:px-5 lg:px-8" style={{ WebkitOverflowScrolling: "touch" }}>
                 <div className="mx-auto w-full max-w-4xl">
@@ -3676,15 +3925,19 @@ export function CodingChatPanel() {
             value={input}
             onChange={(event) => setInput(event.target.value)}
             onKeyDown={(event) => {
-              if (showChatHistory) return;
+              if (showChatHistory || showRevisionHistory) return;
               if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
                 event.preventDefault();
                 void send();
               }
             }}
-            disabled={loading || showChatHistory}
+            disabled={loading || showChatHistory || showRevisionHistory}
             rows={2}
-            placeholder={showChatHistory ? "Choose a chat or start a new one from history…" : "Describe the feature, bug, or code you want Nexus to work on…"}
+            placeholder={showRevisionHistory
+              ? "Close project snapshots to continue coding…"
+              : showChatHistory
+                ? "Choose a chat or start a new one from history…"
+                : "Describe the feature, bug, or code you want Nexus to work on…"}
             className="min-h-16 w-full resize-none border-0 bg-transparent px-2 py-2 text-base leading-6 text-slate-100 placeholder:text-slate-600 focus:outline-none disabled:opacity-50 sm:min-h-20"
           />
           {attachedFileNames.length > 0 && (

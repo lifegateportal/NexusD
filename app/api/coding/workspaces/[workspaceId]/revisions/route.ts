@@ -42,7 +42,13 @@ export async function GET(_request: NextRequest, ctx: RouteContext) {
   const workspaceId = await parseWorkspaceId(ctx);
   if (workspaceId instanceof NextResponse) return workspaceId;
   try {
-    return NextResponse.json({ revisions: await listCodingRevisions(workspaceId) }, {
+    const revisions = await listCodingRevisions(workspaceId);
+    return NextResponse.json({
+      revisions: revisions.map(({ files, ...revision }) => ({
+        ...revision,
+        fileCount: files.length,
+      })),
+    }, {
       headers: { "Cache-Control": "no-store, max-age=0" },
     });
   } catch (error) {

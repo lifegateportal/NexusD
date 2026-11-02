@@ -175,6 +175,20 @@ export const CodingWorkspaceRevisionSchema = z.object({
 
 export type CodingWorkspaceRevision = z.infer<typeof CodingWorkspaceRevisionSchema>;
 
+export const CodingWorkspaceRevisionSummarySchema = z.object({
+  id: CodingRevisionIdSchema,
+  workspaceId: CodingWorkspaceIdSchema,
+  number: z.number().int().positive(),
+  parentRevisionId: CodingRevisionIdSchema.nullable(),
+  createdAt: z.string().datetime(),
+  reason: z.string().trim().min(1).max(400),
+  source: z.enum(["user", "agent", "import", "revert"]),
+  fileCount: z.number().int().nonnegative(),
+  byteCount: z.number().int().nonnegative(),
+}).strict();
+
+export type CodingWorkspaceRevisionSummary = z.infer<typeof CodingWorkspaceRevisionSummarySchema>;
+
 export const CodingWorkspaceSnapshotSchema = z.object({
   workspace: CodingWorkspaceSchema,
   revision: CodingWorkspaceRevisionSchema,
