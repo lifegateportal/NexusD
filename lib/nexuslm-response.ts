@@ -11,6 +11,34 @@ export function isNexusLMLongFormRequest(query: string): boolean {
   return LONG_FORM_WRITING_VERBS.test(query) && LONG_FORM_OUTPUT_TYPES.test(query);
 }
 
+export function explicitNexusLMChapterWordLimit(instructions: string[]): number | undefined {
+  const patterns = [
+    /\b(?:no more than|at most|up to|under|below|less than|fewer than|not over|not exceed(?:ing)?|no greater than|maximum(?: of)?)\s*([\d,]+)\s*words?\b/gi,
+    /\b(?:cap|limit)\s+(?:(?:the|this)\s+)?(?:chapter|draft|word count|it)?\s*(?:at|to)\s*([\d,]+)\s*words?\b/gi,
+    /\b(?:reduce|shorten|cut|trim)\s+(?:(?:the|this)\s+)?(?:chapter|draft|word count|length|it|this)(?:['’]s\s+word count)?\s+(?:to|under|below)\s*([\d,]+)\s*words?\b/gi,
+    /\b(?:reduce|shorten|cut|trim)\s+(?:it\s+)?to\s*([\d,]+)\s*words?\b/gi,
+    /\b(?:write|make|keep|target|aim for)\s+(?:(?:this|the)\s+)?(?:chapter|draft|it)?\s*(?:to|at|around|about)?\s*([\d,]+)\s*words?\b/gi,
+    /\b(?:chapter|draft|it)\s+(?:should be|must be|of)?\s*(?:about|around|approximately|exactly)?\s*([\d,]+)\s*words?\b/gi,
+    /\b(?:exactly|about|approximately|around)\s+([\d,]+)\s+words?\b/gi,
+    /\b(?:i want|please give me)\s+(?:a\s+)?([\d,]+)[-\s]words?\b/gi,
+  ];
+
+  for (const instruction of instructions.slice().reverse()) {
+    let latestMatch: RegExpMatchArray | undefined;
+    for (const pattern of patterns) {
+      for (const match of instruction.matchAll(pattern)) {
+        if (match.index !== undefined && (latestMatch?.index === undefined || match.index >= latestMatch.index)) {
+          latestMatch = match;
+        }
+      }
+    }
+    if (!latestMatch) continue;
+    const wordLimit = Number(latestMatch[1]?.replace(/,/g, ""));
+    if (Number.isSafeInteger(wordLimit) && wordLimit > 0) return wordLimit;
+  }
+  return undefined;
+}
+
 export const NEXUSLM_RESPONSE_LENGTHS: Record<NexusLMResponseLength, {
   label: string;
   description: string;

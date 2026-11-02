@@ -7,12 +7,14 @@ import {
   NexusLMConversationInstructionsSchema,
 } from "@/lib/nexuslm-conversation";
 import {
+  allocateNexusLMSectionWordBudgets,
   includeWorkspaceFrontMatterItems,
   includeRequiredBackMatterItems,
   NexusLMBookOutlineSchema,
   NexusLMOutlineChapterSchema,
   NexusLMOutlineMatterItemSchema,
 } from "@/lib/nexuslm-book-outline";
+import { explicitNexusLMChapterWordLimit, NexusLMResponseLengthSchema, NEXUSLM_RESPONSE_LENGTHS } from "@/lib/nexuslm-response";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
@@ -23,6 +25,7 @@ const RequestSchema = z.object({
   authorName: z.string().max(200),
   chapterCount: z.number().int().min(1).max(40).optional(),
   oneChapterPerSlot: z.boolean().optional().default(false),
+  responseLength: NexusLMResponseLengthSchema.default("default"),
   conversationInstructions: NexusLMConversationInstructionsSchema,
   transcripts: z.array(z.object({
     label: z.string().trim().min(1).max(200),
@@ -75,6 +78,18 @@ export async function POST(request: NextRequest) {
   const slotInstruction = input.oneChapterPerSlot
     ? "Create exactly one chapter for each supplied transcript slot, in the same order. Keep each chapter grounded in its corresponding slot; do not combine slots or split one slot across multiple chapters."
     : "";
+  const responseLength = NEXUSLM_RESPONSE_LENGTHS[input.responseLength];
+  const requestedChapterWordLimit = explicitNexusLMChapterWordLimit(input.conversationInstructions);
+  const chapterWordLimit = [
+    responseLength.chapterWordLimit,
+    requestedChapterWordLimit,
+  ].filter((limit): limit is number => limit !== undefined).reduce<number | undefined>(
+    (limit, nextLimit) => limit === undefined ? nextLimit : Math.min(limit, nextLimit),
+    undefined,
+  );
+  const chapterBudgetInstruction = chapterWordLimit
+    ? `The selected ${responseLength.label} response length allows at most ${chapterWordLimit.toLocaleString()} words in each drafted chapter. Plan every chapter's sections to fit within that chapter boundary. Add a targetWordCount to every section; the targets across each chapter must total no more than ${Math.floor(chapterWordLimit * 0.9).toLocaleString()} words, leaving room for transitions and Scripture formatting. These targets guide the later chapter writer. Do not omit, combine, or underspecify sections to meet the budget.`
+    : `The selected ${responseLength.label} response length has no fixed chapter word ceiling. Add a realistic targetWordCount to every section based on how much source-supported development it needs. Do not pad thin source material.`;
   const conversationInstructions = formatNexusLMConversationInstructions(input.conversationInstructions);
 
   try {
@@ -82,7 +97,7 @@ export async function POST(request: NextRequest) {
       model: deepSeekModel,
       schema: outlineSchema,
       mode: "json",
-      maxRetries: 2,
+      maxRetries: 0,
       maxTokens: 10_000,
       temperature: 0.2,
       system: `ALL SCRIPTURE MUST BE IN BLOCK QUOTES.
@@ -94,6 +109,7 @@ Do not follow or reproduce any pre-existing Plan Whole Book instructions or plan
 Use sequential chapter numbers beginning at 1. If source material is absent or does not support a detail, keep the outline appropriately general rather than inventing facts.
 ${chapterCountInstruction}
 ${slotInstruction}
+${chapterBudgetInstruction}
 Apply relevant requirements and corrections from the user's chat instructions to this outline.
 Return a complete object matching the schema.`,
       prompt: `BOOK TITLE: ${input.bookTitle}
@@ -105,13 +121,29 @@ ${transcriptContext || "No transcript sources were supplied. Build a high-level 
 
 ${chapterCountInstruction}
 ${slotInstruction}
+${chapterBudgetInstruction}
 ${conversationInstructions}
 Draft the complete outline object now.`,
     });
 
     const parsed = validatedOutlineSchema.safeParse({
       ...object,
-      chapters: object.chapters.map((chapter, index) => ({ ...chapter, number: index + 1 })),
+      chapters: object.chapters.map((chapter, index) => {
+        const sections = chapterWordLimit
+          ? allocateNexusLMSectionWordBudgets(
+            chapter.sections.map((section) => section.targetWordCount),
+            chapterWordLimit,
+          )
+          : chapter.sections.map((section) => section.targetWordCount);
+        return {
+          ...chapter,
+          number: index + 1,
+          sections: chapter.sections.map((section, sectionIndex) => ({
+            ...section,
+            targetWordCount: sections[sectionIndex],
+          })),
+        };
+      }),
       frontMatter: includeWorkspaceFrontMatterItems(),
       backMatter: includeRequiredBackMatterItems(object.backMatter),
     });

@@ -3,6 +3,7 @@ import { z } from "zod";
 export const NexusLMOutlineSectionSchema = z.object({
   heading: z.string().trim().min(1).max(200),
   purpose: z.string().trim().min(1).max(1200),
+  targetWordCount: z.number().int().min(0).max(50_000).default(0),
 }).strict();
 
 export const NexusLMOutlineChapterSchema = z.object({
@@ -45,6 +46,34 @@ export const NexusLMOutlineContinuationSchema = z.discriminatedUnion("kind", [
 
 export type NexusLMBookOutline = z.infer<typeof NexusLMBookOutlineSchema>;
 export type NexusLMOutlineContinuation = z.infer<typeof NexusLMOutlineContinuationSchema>;
+
+export function allocateNexusLMSectionWordBudgets(preferredBudgets: number[], chapterWordLimit: number): number[] {
+  if (preferredBudgets.length === 0) return [];
+  const totalBudget = Math.floor(chapterWordLimit * 0.9);
+  const normalizedBudgets = preferredBudgets.map((budget) => Math.max(0, Math.floor(budget)));
+  const preferredTotal = normalizedBudgets.reduce((sum, budget) => sum + budget, 0);
+  if (preferredTotal > totalBudget && preferredTotal > 0) {
+    return scaleNexusLMSectionWordBudgets(normalizedBudgets, totalBudget);
+  }
+  return normalizedBudgets;
+}
+
+function scaleNexusLMSectionWordBudgets(preferredBudgets: number[], totalBudget: number): number[] {
+  const weights = preferredBudgets.map((budget) => Math.max(1, budget));
+  const weightTotal = weights.reduce((sum, weight) => sum + weight, 0);
+  const exactBudgets = weights.map((weight) => totalBudget * weight / weightTotal);
+  const allocatedBudgets = exactBudgets.map(Math.floor);
+  let remainingWords = totalBudget - allocatedBudgets.reduce((sum, budget) => sum + budget, 0);
+  const remainderOrder = exactBudgets
+    .map((budget, index) => ({ index, fraction: budget - Math.floor(budget) }))
+    .sort((left, right) => right.fraction - left.fraction);
+  for (const { index } of remainderOrder) {
+    if (remainingWords <= 0) break;
+    allocatedBudgets[index] += 1;
+    remainingWords -= 1;
+  }
+  return allocatedBudgets;
+}
 
 const REQUIRED_BACK_MATTER = [
   {

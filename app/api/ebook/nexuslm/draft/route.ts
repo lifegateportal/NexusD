@@ -10,8 +10,8 @@ import { EM_DASH_MINIMIZATION_RULES } from "@/lib/editorial-style-bible";
 import { ChapterDraftSchema } from "@/lib/schemas/ebook";
 import { NexusLMWritingStyleSchema, NEXUSLM_WRITING_STYLES } from "@/lib/nexuslm-writing-styles";
 import { NexusLMAgentSchema } from "@/lib/nexuslm-agents";
-import { NexusLMResponseLengthSchema, NEXUSLM_RESPONSE_LENGTHS, sanitizeNexusLMText } from "@/lib/nexuslm-response";
-import { NexusLMBookOutlineSchema } from "@/lib/nexuslm-book-outline";
+import { explicitNexusLMChapterWordLimit, NexusLMResponseLengthSchema, NEXUSLM_RESPONSE_LENGTHS, sanitizeNexusLMText } from "@/lib/nexuslm-response";
+import { allocateNexusLMSectionWordBudgets, NexusLMBookOutlineSchema } from "@/lib/nexuslm-book-outline";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
@@ -55,49 +55,6 @@ function countWords(text: string): number {
   return text.trim().split(/\s+/).filter(Boolean).length;
 }
 
-function truncateAtWordLimit(text: string, wordLimit: number): string {
-  const words = [...text.matchAll(/\S+/g)];
-  if (words.length <= wordLimit) return text;
-  if (wordLimit <= 0) return "";
-
-  const lastWord = words[wordLimit - 1];
-  if (!lastWord || lastWord.index === undefined) return "";
-  const clipped = text.slice(0, lastWord.index + lastWord[0].length);
-  const sentenceEndings = [...clipped.matchAll(/[.!?](?:["'”’)]*)\s/g)];
-  const lastSentenceEnding = sentenceEndings.at(-1);
-  return lastSentenceEnding
-    ? clipped.slice(0, lastSentenceEnding.index! + lastSentenceEnding[0].trimEnd().length).trimEnd()
-    : clipped.trimEnd();
-}
-
-function explicitChapterWordLimit(instructions: string[]): number | undefined {
-  const patterns = [
-    /\b(?:no more than|at most|up to|under|below|less than|fewer than|not over|not exceed(?:ing)?|no greater than|maximum(?: of)?)\s*([\d,]+)\s*words?\b/gi,
-    /\b(?:cap|limit)\s+(?:(?:the|this)\s+)?(?:chapter|draft|word count|it)?\s*(?:at|to)\s*([\d,]+)\s*words?\b/gi,
-    /\b(?:reduce|shorten|cut|trim)\s+(?:(?:the|this)\s+)?(?:chapter|draft|word count|length|it|this)(?:['’]s\s+word count)?\s+(?:to|under|below)\s*([\d,]+)\s*words?\b/gi,
-    /\b(?:reduce|shorten|cut|trim)\s+(?:it\s+)?to\s*([\d,]+)\s*words?\b/gi,
-    /\b(?:write|make|keep|target|aim for)\s+(?:(?:this|the)\s+)?(?:chapter|draft|it)?\s*(?:to|at|around|about)?\s*([\d,]+)\s*words?\b/gi,
-    /\b(?:chapter|draft|it)\s+(?:should be|must be|of)?\s*(?:about|around|approximately|exactly)?\s*([\d,]+)\s*words?\b/gi,
-    /\b(?:exactly|about|approximately|around)\s+([\d,]+)\s+words?\b/gi,
-    /\b(?:i want|please give me)\s+(?:a\s+)?([\d,]+)[-\s]words?\b/gi,
-  ];
-
-  for (const instruction of instructions) {
-    let latestMatch: RegExpMatchArray | undefined;
-    for (const pattern of patterns) {
-      for (const match of instruction.matchAll(pattern)) {
-        if (match.index !== undefined && (!latestMatch?.index || match.index >= latestMatch.index)) {
-          latestMatch = match;
-        }
-      }
-    }
-    if (!latestMatch) continue;
-    const wordLimit = Number(latestMatch[1]?.replace(/,/g, ""));
-    if (Number.isSafeInteger(wordLimit) && wordLimit > 0) return wordLimit;
-  }
-  return undefined;
-}
-
 export async function POST(request: NextRequest) {
   let input: z.infer<typeof RequestSchema>;
   try {
@@ -123,7 +80,7 @@ ${outlineChapter.sections.map((section, index) => `${index + 1}. ${section.headi
     .join("\n\n---\n\n");
   const writingStyle = NEXUSLM_WRITING_STYLES[input.writingStyle];
   const responseLength = NEXUSLM_RESPONSE_LENGTHS[input.responseLength];
-  const requestedChapterWordLimit = explicitChapterWordLimit([input.instruction]);
+  const requestedChapterWordLimit = explicitNexusLMChapterWordLimit([...input.conversationInstructions, input.instruction]);
   const chapterWordLimit = [
     responseLength.chapterWordLimit,
     requestedChapterWordLimit,
@@ -132,8 +89,20 @@ ${outlineChapter.sections.map((section, index) => `${index + 1}. ${section.headi
     undefined,
   );
   const chapterWordLimitInstruction = chapterWordLimit
-    ? `Hard chapter limit: ${chapterWordLimit.toLocaleString()} words maximum. This is a ceiling, not a target. If the user requested a smaller chapter length than the selected preset, obey the user's length. Use fewer words when the transcript supports less. Do not pad, repeat ideas, or preserve verbal filler and audience banter; retain only source-supported content that advances the chapter.`
+    ? `Hard chapter limit: ${chapterWordLimit.toLocaleString()} words maximum across all section bodies. Plan the complete chapter to fit before drafting. This is a ceiling, not a target. If the user requested a smaller chapter length than the selected preset, obey the user's length. Use fewer words when the transcript supports less. Do not pad, repeat ideas, or preserve verbal filler and audience banter; retain only source-supported content that advances the chapter.`
     : "Do not pad the chapter to use the available output budget. Use only as many words as the source supports, removing verbal filler, audience banter, and repetition while preserving substantive meaning.";
+  const outlinedSections = outlineChapter?.sections ?? [];
+  const sectionWordBudgets = chapterWordLimit && outlinedSections.length > 0
+    ? allocateNexusLMSectionWordBudgets(
+      outlinedSections.map((section) => section.targetWordCount),
+      chapterWordLimit,
+    )
+    : [];
+  const sectionBudgetInstruction = chapterWordLimit
+    ? outlinedSections.length > 0
+      ? `SECTION BUDGET PLAN: Write every one of the ${outlinedSections.length} outlined sections, in order, and keep every section substantive. Use these section targets as planning guidance, not minimums: ${outlinedSections.map((section, index) => `${index + 1}. "${section.heading}": ${sectionWordBudgets[index] > 0 ? `about ${sectionWordBudgets[index]} words` : "no fixed target; write only what the source supports"}`).join("; ")}. Do not pad to reach any target or omit a section to meet the limit. The combined chapter body must remain below ${chapterWordLimit.toLocaleString()} words.`
+      : `SECTION BUDGET PLAN: Treat ${chapterWordLimit.toLocaleString()} words as a hard ceiling, not a goal. Plan enough room for every source-supported section, then write each faithfully without padding or letting an early section consume the space needed by later sections.`
+    : "";
   const transcriptScopeInstruction = input.transcriptScope === "selected"
     ? `Use only the selected transcript slot "${input.selectedTranscriptLabel}" supplied below as source material for this chapter.`
     : "Use all transcript slots supplied below as source material, choosing the strongest material for this chapter.";
@@ -147,6 +116,7 @@ Presentation form: ${writingStyle.label}. ${writingStyle.instruction}
 USER INSTRUCTIONS OVERRIDE PRESETS: Treat explicit chat instructions and the current request as requirements. They take precedence over the response-length preset, persona, and generic writing defaults. The preset is guidance only; the chapter word limit is a ceiling, not a target.
 ${transcriptScopeInstruction} Treat the supplied transcript as the authority for factual, theological, biographical, and scriptural claims. Be faithful to its meaning and emphasis. Do not invent, infer, embellish, or add facts, examples, testimonies, quotations, doctrine, claims, or scripture not explicitly supported by the supplied source. If material is missing, omit it or mark the gap for author input; never fill it in.
 ${outlineChapter ? "The saved book outline is the required structure for this chapter; follow its title, purpose, headings, and order exactly while writing polished prose." : "Choose a coherent chapter structure from the supported source material. Do not treat an existing manuscript chapter, chapter premise, key point, or prior wording as mandatory."}
+SECTION COMPLETENESS: Include every section required by the outline, in the same order, with its exact heading. Never omit or merge an outlined section to meet the word budget. Give each section meaningful, source-supported prose. If the source provides little material for a section, write that section concisely rather than omitting it or inventing material.
 Apply relevant requirements and corrections from the user's chat instructions. Follow the latest applicable user instruction when it conflicts with a general formatting preference.
 Use only connective wording and transitions as original composition; they must not introduce new information or change the source's meaning. Preserve significant points without exaggeration, omission, or unsupported expansion. Remove live-audience language without changing the teaching.
 SCRIPTURE PRESENTATION: By default, put every direct Scripture quotation in a standalone Markdown blockquote. Prefix each line of quoted verse text with "> " and put its reference on its own blockquote line. Never leave quoted verse text inline. Follow an explicit, newer user instruction if it requests another Scripture format. Do not invent verse text or references.
@@ -155,9 +125,11 @@ SCRIPTURE PRESENTATION: By default, put every direct Scripture quotation in a st
   ${EM_DASH_MINIMIZATION_RULES}
   Return a complete ChapterDraft object. The sections must contain readable prose in the body field, not planning notes. ${responseLength.instruction}
   ${chapterWordLimitInstruction}
+  ${sectionBudgetInstruction}
   Do not expose source IDs, slot labels, retrieval markers, or internal routing labels in any field.`;
     const prompt = `RESPONSE LENGTH: ${responseLength.label}. ${responseLength.instruction}
 ${chapterWordLimitInstruction}
+${sectionBudgetInstruction}
 
 BOOK: ${input.book.title}
 EXISTING CHAPTER OUTLINE:
@@ -179,31 +151,29 @@ ${transcriptContext || "No transcript sources were uploaded. State that source m
 
 Return JSON only.`;
 
-    const { object } = await generateObject({
+    const generateChapter = (generationPrompt: string) => generateObject({
       model: input.agent === "nexusR1" ? deepSeekReasonerModel : deepSeekModel,
       schema: ChapterDraftSchema,
       mode: "json",
-      maxRetries: 2,
+      maxRetries: 0,
       maxTokens: responseLength.draftTokens,
       ...(input.llmTemperature === undefined ? {} : { temperature: input.llmTemperature }),
       system,
-      prompt,
+      prompt: generationPrompt,
     });
-    let remainingChapterWords = chapterWordLimit ?? Number.POSITIVE_INFINITY;
-    let sections = await Promise.all(object.sections.map(async (section, index) => {
-      const sanitizedBody = sanitizeNexusLMText(section.body.trim());
-      const body = truncateAtWordLimit(sanitizedBody, remainingChapterWords);
-      const actualWordCount = countWords(body);
-      remainingChapterWords = Math.max(0, remainingChapterWords - actualWordCount);
+    const normalizeSections = (draft: DraftObject) => draft.sections.map((section, index) => {
+      const body = sanitizeNexusLMText(section.body.trim());
       return {
         chapterNumber: input.chapterNumber,
         sectionNumber: section.sectionNumber || index + 1,
         heading: sanitizeNexusLMText(section.heading.trim()) || `Section ${index + 1}`,
         body,
-        wordCount: actualWordCount,
+        wordCount: countWords(body),
         status: "complete" as const,
       };
-    }));
+    });
+    const { object } = await generateChapter(prompt);
+    const sections = normalizeSections(object);
     if (sections.length === 0 || sections.every((section) => !section.body.trim())) {
       throw new Error("The selected model returned no usable chapter sections.");
     }

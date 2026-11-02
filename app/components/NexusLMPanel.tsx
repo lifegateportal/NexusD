@@ -436,7 +436,7 @@ function formatBookOutline(outline: NexusLMBookOutline): string {
   const chapters = outline.chapters.map((chapter) => [
     `### Chapter ${chapter.number}: ${chapter.title}`,
     chapter.purpose,
-    ...chapter.sections.map((section) => `- ${section.heading}: ${section.purpose}`),
+    ...chapter.sections.map((section) => `- ${section.heading}${section.targetWordCount > 0 ? ` (~${section.targetWordCount} words)` : ""}: ${section.purpose}`),
   ].join("\n")).join("\n\n");
   const matter = (title: string, items: NexusLMBookOutline["frontMatter"]) => [
     `## ${title}`,
@@ -1636,7 +1636,7 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
       : rewriteTargetChapter !== null ? "draft" : automaticBookOutline ? "outline" : requestMode ?? inferMode(instruction, mode);
     if (automaticBookOutline) setMode("outline");
     const requestResponseLength = options?.responseLength
-      ?? (activeMode !== "draft" && responseLength === "default" && isNexusLMLongFormRequest(instruction) ? "long-form" : responseLength);
+      ?? (activeMode !== "draft" && activeMode !== "outline" && responseLength === "default" && isNexusLMLongFormRequest(instruction) ? "long-form" : responseLength);
     const requestUsesBook = continuationTask || options?.forceBook
       ? true
       : options?.forceGeneral ? false : automaticBookOutline || (useBookContext && hasBookContext);
@@ -1763,6 +1763,7 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
             authorName: manifest?.authorName ?? manuscript.authorName,
             chapterCount: outlineChapterRequest.chapterCount,
             oneChapterPerSlot: outlineChapterRequest.oneChapterPerSlot,
+            responseLength: requestResponseLength,
             conversationInstructions: compactUserInstructions(nextMessages),
             transcripts,
           }),
@@ -2347,7 +2348,7 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
                     <ol className="mt-3 list-decimal space-y-2 pl-5">
                       {chapter.sections.map((section) => (
                         <li key={section.heading} className="text-xs leading-5 text-slate-300">
-                          <span className="font-semibold text-violet-200">{section.heading}:</span> {section.purpose}
+                          <span className="font-semibold text-violet-200">{section.heading}{section.targetWordCount > 0 ? ` (~${section.targetWordCount} words)` : ""}:</span> {section.purpose}
                         </li>
                       ))}
                     </ol>
