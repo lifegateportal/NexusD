@@ -13,6 +13,7 @@ import {
   NexusLMBookOutlineSchema,
   NexusLMOutlineChapterSchema,
   NexusLMOutlineMatterItemSchema,
+  NexusLMOutlineSectionSchema,
 } from "@/lib/nexuslm-book-outline";
 import { explicitNexusLMChapterWordLimit, NexusLMResponseLengthSchema, NEXUSLM_RESPONSE_LENGTHS } from "@/lib/nexuslm-response";
 
@@ -59,13 +60,22 @@ export async function POST(request: NextRequest) {
     .map((transcript) => `[SOURCE: ${transcript.label}]\n${transcript.text}`)
     .join("\n\n---\n\n");
   const chapterCount = input.chapterCount ?? (input.oneChapterPerSlot ? input.transcripts.length : undefined);
+  const generationSectionSchema = NexusLMOutlineSectionSchema.extend({
+    targetWordCount: z.number().int().min(0).max(50_000).optional(),
+  }).strip();
+  const generationChapterSchema = NexusLMOutlineChapterSchema.extend({
+    sections: z.array(generationSectionSchema).min(1).max(12),
+  }).strip();
+  const generationMatterItemSchema = NexusLMOutlineMatterItemSchema.strip();
   const generationSchema = NexusLMBookOutlineSchema.extend({
-    backMatter: z.array(NexusLMOutlineMatterItemSchema).min(1).max(12),
-  });
+    chapters: z.array(generationChapterSchema).min(1).max(40),
+    frontMatter: z.array(generationMatterItemSchema).min(1).max(12),
+    backMatter: z.array(generationMatterItemSchema).min(1).max(12),
+  }).strip();
   const outlineSchema = chapterCount === undefined
     ? generationSchema
     : generationSchema.extend({
-      chapters: z.array(NexusLMOutlineChapterSchema).length(chapterCount),
+      chapters: z.array(generationChapterSchema).length(chapterCount),
     });
   const validatedOutlineSchema = chapterCount === undefined
     ? NexusLMBookOutlineSchema
@@ -131,10 +141,10 @@ Draft the complete outline object now.`,
       chapters: object.chapters.map((chapter, index) => {
         const sections = chapterWordLimit
           ? allocateNexusLMSectionWordBudgets(
-            chapter.sections.map((section) => section.targetWordCount),
+            chapter.sections.map((section) => section.targetWordCount ?? 0),
             chapterWordLimit,
           )
-          : chapter.sections.map((section) => section.targetWordCount);
+          : chapter.sections.map((section) => section.targetWordCount ?? 0);
         return {
           ...chapter,
           number: index + 1,
@@ -147,7 +157,12 @@ Draft the complete outline object now.`,
       frontMatter: includeWorkspaceFrontMatterItems(),
       backMatter: includeRequiredBackMatterItems(object.backMatter),
     });
-    if (!parsed.success) throw new Error("NexusLM returned an invalid book outline.");
+    if (!parsed.success) {
+      const issues = parsed.error.issues
+        .map((issue) => `${issue.path.join(".") || "outline"}: ${issue.message}`)
+        .join("; ");
+      throw new Error(`NexusLM returned an invalid book outline: ${issues}`);
+    }
     return NextResponse.json({ outline: parsed.data });
   } catch (error) {
     return NextResponse.json({ error: error instanceof Error ? error.message : "NexusLM could not draft the book outline." }, { status: 500 });
