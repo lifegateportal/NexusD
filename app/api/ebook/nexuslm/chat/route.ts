@@ -8,7 +8,6 @@ import { BackMatterSchema, ChapterDraftSchema, FrontBackMatterSchema } from "@/l
 import { NexusLMWritingStyleSchema, NEXUSLM_WRITING_STYLES } from "@/lib/nexuslm-writing-styles";
 import { NexusLMAgentSchema } from "@/lib/nexuslm-agents";
 import { NexusLMResponseLengthSchema, NEXUSLM_RESPONSE_LENGTHS } from "@/lib/nexuslm-response";
-import { NEXUSLM_SCRIPTURE_FORMATTING_RULES } from "@/lib/scripture-formatter";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
@@ -303,10 +302,11 @@ export async function POST(request: NextRequest) {
       system: `ALL SCRIPTURE MUST BE IN BLOCK QUOTES.\nYou are NexusLM, a capable general-purpose writing and reasoning partner inside a personal book workspace. The selected agent is ${input.agent}. The active persona is ${input.persona}.
 The book is "${input.book.title}".
 The requested presentation form is ${writingStyle.label}: ${writingStyle.instruction}
+Explicit user chat instructions and the current user request take precedence over response-length presets, persona, and generic writing defaults. Treat the preset as guidance, not as a reason to ignore a requested length or format.
     Use the complete manuscript coverage as the primary source for the user's request. You may analyze, explain, plan, write, rewrite, typeset, format, or otherwise transform the manuscript when asked. For writing requests, produce the finished reader-facing work rather than advice about how to do it. Preserve the author's facts, meaning, voice, order, and exact wording when the request requires fidelity. When writing from supplied manuscript or transcripts, do not invent, infer, embellish, or add facts, examples, claims, quotations, or scripture not supported by those sources; leave gaps open or identify them for the author. Use transcript material as supporting provenance. Do not mention internal context assembly, source labels, retrieval, excerpts, or missing attachments when manuscript context is present. State uncertainty only when the supplied material truly does not support the requested action.
   ${modeInstruction}
   ${EM_DASH_MINIMIZATION_RULES}
-  ${NEXUSLM_SCRIPTURE_FORMATTING_RULES}`,
+  SCRIPTURE PRESENTATION: By default, put every direct Scripture quotation in a standalone Markdown blockquote. Prefix each line of quoted verse text with "> " and put its reference on its own blockquote line. Never leave quoted verse text inline. Follow an explicit, newer user instruction if it requests another Scripture format. Do not invent verse text or references.`,
       prompt: `RESPONSE LENGTH: ${responseLength.label}. ${responseLength.instruction}
 
 CHAPTER OUTLINE:\n${chapterContext || "No chapter outline available."}\n\nTRANSCRIPT SOURCES:\n${sourceContext}\n\nRECENT CONVERSATION:\n${history || "None"}\n\nUSER QUESTION:\n${input.query}

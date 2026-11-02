@@ -13,7 +13,7 @@ export function formatNexusLMConversationInstructions(instructions: string[]): s
   if (instructions.length === 0) return "No prior user chat instructions were supplied.";
   return [
     "USER CHAT INSTRUCTIONS, OLDEST TO NEWEST:",
-    "Apply relevant user preferences, formatting requirements, and corrections to this task. Newer instructions override older conflicting ones. Do not repeat earlier one-time tasks unless requested again.",
+    "Treat explicit user chat instructions as requirements, not optional preferences. They override response-length presets and generic writing defaults; newer instructions override older conflicting ones. Do not repeat earlier one-time tasks unless requested again.",
     ...instructions.map((instruction, index) => `${index + 1}. ${instruction}`),
   ].join("\n");
 }

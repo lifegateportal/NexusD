@@ -18,6 +18,7 @@ export const NEXUSLM_RESPONSE_LENGTHS: Record<NexusLMResponseLength, {
   chatSocraticTokens: number;
   draftTokens: number;
   editTokens: number;
+  chapterWordLimit?: number;
   instruction: string;
 }> = {
   shorter: {
@@ -31,20 +32,22 @@ export const NEXUSLM_RESPONSE_LENGTHS: Record<NexusLMResponseLength, {
   },
   default: {
     label: "Default",
-    description: "A balanced response for normal work",
+    description: "A balanced response; chapter drafts are capped at 3,500 words",
     chatAskTokens: 3000,
     chatSocraticTokens: 7500,
     draftTokens: 24000,
     editTokens: 18000,
+    chapterWordLimit: 3500,
     instruction: "Give a balanced response with enough development to be useful without padding.",
   },
   longer: {
     label: "Longer",
-    description: "More context, detail, and development",
+    description: "More context and development; chapter drafts are capped at 4,500 words",
     chatAskTokens: 5200,
     chatSocraticTokens: 12000,
     draftTokens: 32000,
     editTokens: 28000,
+    chapterWordLimit: 4500,
     instruction: "Develop the supported material fully. Do not omit relevant manuscript or transcript content merely to be brief.",
   },
   "long-form": {

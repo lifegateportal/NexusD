@@ -1601,9 +1601,9 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
     const instruction = continuationTask && manuscript.outline
       ? outlineTaskInstruction(continuationTask, manuscript.outline)
       : displayInstruction;
-    const requestResponseLength = options?.responseLength
-      ?? (responseLength === "default" && isNexusLMLongFormRequest(instruction) ? "long-form" : responseLength);
     const activeMode = continuationTask ? "draft" : requestMode ?? inferMode(instruction, mode);
+    const requestResponseLength = options?.responseLength
+      ?? (activeMode !== "draft" && responseLength === "default" && isNexusLMLongFormRequest(instruction) ? "long-form" : responseLength);
     const requestUsesBook = continuationTask || options?.forceBook
       ? true
       : options?.forceGeneral ? false : useBookContext && hasBookContext;
