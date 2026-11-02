@@ -147,14 +147,20 @@ export function parseOutlineChapterRequest(
   instruction: string,
   transcriptSlotCount: number,
 ): { chapterCount?: number; oneChapterPerSlot: boolean } {
-  const oneChapterPerSlot = /\b(?:(?:a|one)\s+)?chapter\s+(?:per|for each|for every)\s+(?:transcript\s+)?slot\b/i.test(instruction);
+  const explicitChapterPerSlot = /\b(?:(?:a|one)\s+)?chapter\s+(?:per|for each|for every)\s+(?:(?:transcript|source)\s+)?(?:slot|transcript|source)\b/i.test(instruction);
+  const explicitlyGroupedByAnotherRule = /\b(?:combine|merge|group)\s+(?:the\s+)?(?:transcript|source)\s+slots?\b|\b(?:multiple|several|more than one)\s+(?:transcripts?|slots?)\s+(?:in|per|for)\s+(?:each\s+)?chapter\b|\b(?:topic|thematic|subject)[ -]based\s+chapters?\b|\b(?:chapters?|outline|book)\s+(?:organized|grouped|structured)\s+by\s+(?:themes?|topics?|subjects?|ideas?)\b|\b(?:organize|group|structure)\s+(?:the\s+)?(?:book|chapters?)\s+by\s+(?:themes?|topics?|subjects?)\b|\b(?:not|don't|do not|avoid)\s+(?:make|use|create)?\s*(?:one\s+)?chapter\s+(?:per|for each|for every)\b/i.test(instruction);
   const countInstruction = instruction.replace(
-    /\b(?:(?:a|one)\s+)?chapter\s+(?:per|for each|for every)\s+(?:transcript\s+)?slot\b/gi,
+    /\b(?:(?:a|one)\s+)?chapter\s+(?:per|for each|for every)\s+(?:(?:transcript|source)\s+)?(?:slot|transcript|source)\b/gi,
     " ",
   );
   const numberPattern = "(?:\\d+|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty(?:[- ](?:one|two|three|four|five|six|seven|eight|nine))?|thirty(?:[- ](?:one|two|three|four|five|six|seven|eight|nine))?|forty(?:[- ](?:one|two|three|four|five|six|seven|eight|nine))?)";
   const countMatch = countInstruction.match(new RegExp(`\\b(${numberPattern})[-\\s]+chapters?\\b`, "i"));
   const requestedCount = countMatch ? parseOutlineCount(countMatch[1]) : null;
+  const oneChapterPerSlot = explicitChapterPerSlot || (
+    transcriptSlotCount > 0
+    && !explicitlyGroupedByAnotherRule
+    && (requestedCount === null || requestedCount === transcriptSlotCount)
+  );
   const chapterCount = requestedCount ?? (oneChapterPerSlot ? transcriptSlotCount : undefined);
   return {
     ...(chapterCount === undefined ? {} : { chapterCount }),

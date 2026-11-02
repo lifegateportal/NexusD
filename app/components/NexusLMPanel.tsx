@@ -160,9 +160,15 @@ const MODES: Record<Mode, { label: string; prompt: string }> = {
   edit: { label: "Edit / Enrich", prompt: "Propose precise manuscript improvements and apply only the requested changes." },
 };
 
+function isBookCreationRequest(instruction: string): boolean {
+  return /\b(?:write|draft|compose|create|make|build|develop|produce)\s+(?:(?:me|for me)\s+)?(?:(?:a|the|my|this|whole|entire|complete|full)\s+){0,2}(?:book|manuscript)\b(?!\s+(?:report|review|summary)\b)/i.test(instruction)
+    || /\b(?:turn|transform|adapt)\b[\s\S]{0,100}\binto\s+(?:a\s+)?(?:complete\s+)?book\b/i.test(instruction);
+}
+
 function inferMode(instruction: string, selectedMode: Mode): Mode {
   const text = instruction.toLowerCase();
   if (/\b(outline|table of contents)\b/.test(text)) return "outline";
+  if (isBookCreationRequest(instruction)) return "outline";
   if (/\b(plan|outline|architect|roadmap|structure|whole book|entire book|book arc)\b/.test(text)) return "plan";
   if (/\b(write|draft|compose|create)\b.*\bchapter\b|\bchapter\b.*\b(write|draft|compose|create)\b/.test(text)) return "draft";
   if (/\b(vet|challenge|question|assumption|contradiction|weak|gap|skeptic|critique)\b/.test(text)) return "socratic";
@@ -1601,12 +1607,16 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
     const instruction = continuationTask && manuscript.outline
       ? outlineTaskInstruction(continuationTask, manuscript.outline)
       : displayInstruction;
-    const activeMode = continuationTask ? "draft" : requestMode ?? inferMode(instruction, mode);
+    const automaticBookOutline = !continuationTask && transcripts.length > 0 && isBookCreationRequest(instruction);
+    const activeMode = continuationTask
+      ? "draft"
+      : automaticBookOutline ? "outline" : requestMode ?? inferMode(instruction, mode);
+    if (automaticBookOutline) setMode("outline");
     const requestResponseLength = options?.responseLength
       ?? (activeMode !== "draft" && responseLength === "default" && isNexusLMLongFormRequest(instruction) ? "long-form" : responseLength);
     const requestUsesBook = continuationTask || options?.forceBook
       ? true
-      : options?.forceGeneral ? false : useBookContext && hasBookContext;
+      : options?.forceGeneral ? false : automaticBookOutline || (useBookContext && hasBookContext);
     if (continuationTask && !manuscript.outline) {
       setMessages((current) => [...current,
         { role: "user", content: displayInstruction },

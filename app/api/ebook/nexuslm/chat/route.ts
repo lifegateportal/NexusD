@@ -1,13 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
-import { generateText, streamText } from "ai";
+import { generateText } from "ai";
 import { z } from "zod";
 import { deepSeekModel, deepSeekReasonerModel } from "@/lib/ai-providers";
 import { EM_DASH_MINIMIZATION_RULES } from "@/lib/editorial-style-bible";
-import { NEXUSLM_BOOK_STREAM_METADATA_END, NEXUSLM_BOOK_STREAM_METADATA_START } from "@/lib/nexuslm-stream";
 import { BackMatterSchema, ChapterDraftSchema, FrontBackMatterSchema } from "@/lib/schemas/ebook";
 import { NexusLMWritingStyleSchema, NEXUSLM_WRITING_STYLES } from "@/lib/nexuslm-writing-styles";
 import { NexusLMAgentSchema } from "@/lib/nexuslm-agents";
-import { NexusLMResponseLengthSchema, NEXUSLM_RESPONSE_LENGTHS } from "@/lib/nexuslm-response";
+import { NexusLMResponseLengthSchema, NEXUSLM_RESPONSE_LENGTHS, sanitizeNexusLMText } from "@/lib/nexuslm-response";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
@@ -299,7 +298,8 @@ export async function POST(request: NextRequest) {
       ...(temperature === undefined ? {} : { temperature }),
       maxRetries: 2,
       maxTokens: input.mode === "socratic" || input.mode === "plan" ? responseLength.chatSocraticTokens : responseLength.chatAskTokens,
-      system: `ALL SCRIPTURE MUST BE IN BLOCK QUOTES.\nYou are NexusLM, a capable general-purpose writing and reasoning partner inside a personal book workspace. The selected agent is ${input.agent}. The active persona is ${input.persona}.
+      system: `ALL SCRIPTURE MUST BE IN BLOCK QUOTES.
+You are NexusLM, a capable general-purpose writing and reasoning partner inside a personal book workspace. The selected agent is ${input.agent}. The active persona is ${input.persona}.
 The book is "${input.book.title}".
 The requested presentation form is ${writingStyle.label}: ${writingStyle.instruction}
 Explicit user chat instructions and the current user request take precedence over response-length presets, persona, and generic writing defaults. Treat the preset as guidance, not as a reason to ignore a requested length or format.
@@ -313,40 +313,17 @@ CHAPTER OUTLINE:\n${chapterContext || "No chapter outline available."}\n\nTRANSC
 `,
     };
 
-    const sourceMetadata = Buffer.from(
-      JSON.stringify(sources.map(({ score: _score, ...source }) => source)),
-      "utf8",
-    ).toString("base64url");
-    const encoder = new TextEncoder();
-    const stream = new ReadableStream<Uint8Array>({
-      async start(controller) {
-        let text = "";
-        try {
-          controller.enqueue(encoder.encode(`${NEXUSLM_BOOK_STREAM_METADATA_START}${sourceMetadata}${NEXUSLM_BOOK_STREAM_METADATA_END}`));
-          const result = streamText({
-            model: input.agent === "nexusR1" ? deepSeekReasonerModel : deepSeekModel,
-            ...generationRequest,
-            abortSignal: request.signal,
-          });
-          for await (const chunk of result.textStream) {
-            text += chunk;
-            controller.enqueue(encoder.encode(chunk));
-          }
-          if (!text.trim()) throw new Error("The selected model returned an empty response.");
-          controller.close();
-        } catch (error) {
-          controller.error(error);
-        }
-      },
+    const { text } = await generateText({
+      model: input.agent === "nexusR1" ? deepSeekReasonerModel : deepSeekModel,
+      ...generationRequest,
     });
-    return new Response(stream, {
-      headers: {
-        "Content-Type": "text/plain; charset=utf-8",
-        "Cache-Control": "no-cache, no-transform",
-        "X-Accel-Buffering": "no",
-        "Connection": "keep-alive",
-      },
-    });
+    if (!text.trim()) throw new Error("The selected model returned an empty response.");
+
+    const answer = sanitizeNexusLMText(text);
+    if (!answer) {
+      return NextResponse.json({ error: "The reasoning model returned no final vetting response. Please try again." }, { status: 502 });
+    }
+    return NextResponse.json({ answer, sources: sources.map(({ score: _score, ...source }) => source) });
   } catch (error) {
     return NextResponse.json({ error: error instanceof Error ? error.message : "NexusLM could not answer." }, { status: 500 });
   }
