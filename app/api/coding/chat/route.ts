@@ -321,7 +321,7 @@ export async function POST(request: NextRequest) {
               : undefined;
             const result = streamText({
               model,
-              temperature: input.agent === "deepseek-reasoner" ? 0.2 : 0.25,
+              ...(input.agent === "deepseek-reasoner" ? {} : { temperature: 0.25 }),
               maxTokens,
               maxRetries: 2,
               abortSignal: request.signal,
@@ -347,7 +347,11 @@ export async function POST(request: NextRequest) {
               break;
             }
           }
-          if (!fullText.trim()) throw new Error("Nexus Code returned an empty response.");
+          if (!fullText.trim()) {
+            throw new Error(input.agent === "deepseek-reasoner"
+              ? "DeepSeek Reasoner finished without a final answer. Retry the request or switch to DeepSeek Chat."
+              : "Nexus Code returned an empty response.");
+          }
           if (input.workspaceId) {
             const generatedFiles = extractCodingFiles(fullText);
             const generatedPatches = extractCodingPatches(fullText);
