@@ -451,6 +451,7 @@ export function CodingChatPanel() {
   const [workspaceRevisionId, setWorkspaceRevisionId] = useState<string | null>(null);
   const [workspaceParentRevisionId, setWorkspaceParentRevisionId] = useState<string | null>(null);
   const [revisionHistory, setRevisionHistory] = useState<CodingWorkspaceRevisionSummary[]>([]);
+  const [revisionHistoryLoadedFor, setRevisionHistoryLoadedFor] = useState<string | null>(null);
   const [showRevisionHistory, setShowRevisionHistory] = useState(false);
   const [revisionHistoryBusy, setRevisionHistoryBusy] = useState(false);
   const [restoringRevisionId, setRestoringRevisionId] = useState<string | null>(null);
@@ -533,6 +534,7 @@ export function CodingChatPanel() {
   const speechUnlockedRef = useRef(false);
   const workspaceReadyRef = useRef(false);
   const workspaceIdRef = useRef<string | null>(null);
+  const revisionHistoryRequestRef = useRef(0);
   const workspaceRevisionRef = useRef<string | null>(null);
   const workspaceSyncedFilesRef = useRef("");
   const workspaceChangeReasonRef = useRef("Manual workspace edit");
@@ -1027,11 +1029,13 @@ export function CodingChatPanel() {
     workspaceIdRef.current = snapshot.workspace.id;
     workspaceRevisionRef.current = snapshot.workspace.currentRevisionId;
     workspaceSyncedFilesRef.current = JSON.stringify(snapshot.revision.files);
+    revisionHistoryRequestRef.current += 1;
     setWorkspaceId(snapshot.workspace.id);
     setWorkspaceName(snapshot.workspace.name);
     setWorkspaceRevisionId(snapshot.workspace.currentRevisionId);
     setWorkspaceParentRevisionId(snapshot.revision.parentRevisionId);
     setRevisionHistory([]);
+    setRevisionHistoryLoadedFor(null);
     setShowRevisionHistory(false);
     setCodingDeployment(null);
     setDeploymentEnvironmentText("");
@@ -1886,6 +1890,19 @@ export function CodingChatPanel() {
         setWorkspaces((current) => current.map((workspace) => (
           workspace.id === parsed.data.workspace.id ? parsed.data.workspace : workspace
         )));
+        const summary = CodingWorkspaceRevisionSummarySchema.parse({
+          id: parsed.data.revision.id,
+          workspaceId: parsed.data.revision.workspaceId,
+          number: parsed.data.revision.number,
+          parentRevisionId: parsed.data.revision.parentRevisionId,
+          createdAt: parsed.data.revision.createdAt,
+          reason: parsed.data.revision.reason,
+          source: parsed.data.revision.source,
+          fileCount: parsed.data.revision.files.length,
+          byteCount: parsed.data.revision.byteCount,
+        });
+        setRevisionHistory((current) => [summary, ...current.filter((revision) => revision.id !== summary.id)]);
+        setRevisionHistoryLoadedFor(targetWorkspaceId);
         setWorkspaceStatus("Saved");
       } catch (saveError) {
         if (workspaceIdRef.current !== targetWorkspaceId) return;
@@ -1921,6 +1938,7 @@ export function CodingChatPanel() {
   const openRevisionHistory = useCallback(async () => {
     if (!workspaceId || loading || revisionHistoryBusy) return;
     const targetWorkspaceId = workspaceId;
+    const requestId = ++revisionHistoryRequestRef.current;
     setRevisionHistoryBusy(true);
     setWorkspaceStatus("Loading snapshots");
     setError(null);
@@ -1938,11 +1956,15 @@ export function CodingChatPanel() {
       if (!parsed.success || parsed.data.some((revision) => revision.workspaceId !== targetWorkspaceId)) {
         throw new Error("Project snapshot history was invalid.");
       }
+      if (requestId !== revisionHistoryRequestRef.current) return;
       if (workspaceIdRef.current !== targetWorkspaceId) {
         throw new Error("The active project changed before snapshot history could be opened.");
       }
       setRevisionHistory(parsed.data);
+      setRevisionHistoryLoadedFor(targetWorkspaceId);
       setShowChatHistory(false);
+      setShowFiles(false);
+      setShowPreview(false);
       setShowRevisionHistory(true);
       setWorkspaceStatus("Saved");
     } catch (historyError) {
@@ -2000,6 +2022,7 @@ export function CodingChatPanel() {
       setWorkspaces((current) => current.map((workspace) => (
         workspace.id === parsed.data.workspace.id ? parsed.data.workspace : workspace
       )));
+      setRevisionHistoryLoadedFor(targetWorkspaceId);
       const summary = CodingWorkspaceRevisionSummarySchema.parse({
         id: parsed.data.revision.id,
         workspaceId: parsed.data.revision.workspaceId,
@@ -2057,6 +2080,7 @@ export function CodingChatPanel() {
       setWorkspaces((current) => current.map((workspace) => (
         workspace.id === parsed.data.workspace.id ? parsed.data.workspace : workspace
       )));
+      setRevisionHistoryLoadedFor(targetWorkspaceId);
       const summary = CodingWorkspaceRevisionSummarySchema.parse({
         id: parsed.data.revision.id,
         workspaceId: parsed.data.revision.workspaceId,
@@ -2079,6 +2103,41 @@ export function CodingChatPanel() {
       setRestoringRevisionId(null);
     }
   }, [applyWorkspaceSnapshot, flushWorkspaceSave, loading, revisionHistoryBusy, workspaceId, workspaceName]);
+
+  useEffect(() => {
+    if (!workspaceId || !workspaceReadyRef.current) return;
+    const targetWorkspaceId = workspaceId;
+    const requestId = ++revisionHistoryRequestRef.current;
+    let active = true;
+
+    void (async () => {
+      try {
+        const response = await fetch(`/api/coding/workspaces/${encodeURIComponent(targetWorkspaceId)}/revisions`, {
+          cache: "no-store",
+          credentials: "same-origin",
+        });
+        const payload = await response.json() as { revisions?: unknown; error?: unknown };
+        if (!response.ok) {
+          throw new Error(typeof payload.error === "string" ? payload.error : "Project snapshot history could not be loaded.");
+        }
+        const parsed = CodingWorkspaceRevisionSummarySchema.array().safeParse(payload.revisions);
+        if (!parsed.success || parsed.data.some((revision) => revision.workspaceId !== targetWorkspaceId)) {
+          throw new Error("Project snapshot history was invalid.");
+        }
+        if (!active || requestId !== revisionHistoryRequestRef.current || workspaceIdRef.current !== targetWorkspaceId) return;
+        setRevisionHistory(parsed.data);
+        setRevisionHistoryLoadedFor(targetWorkspaceId);
+      } catch (historyError) {
+        if (!active || requestId !== revisionHistoryRequestRef.current || workspaceIdRef.current !== targetWorkspaceId) return;
+        setRevisionHistoryLoadedFor(targetWorkspaceId);
+        setError(historyError instanceof Error ? historyError.message : "Project snapshot history could not be loaded.");
+      }
+    })();
+
+    return () => {
+      active = false;
+    };
+  }, [workspaceId]);
 
   useEffect(() => {
     if (!workspaceId || !workspaceReadyRef.current) return;
@@ -3880,6 +3939,57 @@ export function CodingChatPanel() {
             )
           ) : (
             <div className="flex min-h-0 flex-1 flex-col overflow-hidden bg-slate-950/60">
+              <section className="shrink-0 border-b border-violet-400/20 bg-violet-500/[0.04] px-3 py-2 sm:px-4" aria-label="Snapshot history">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div>
+                    <h2 className="text-xs font-bold text-violet-100">Snapshot history</h2>
+                    <p className="mt-1 text-[10px] text-slate-500">
+                      {revisionHistoryLoadedFor === workspaceId
+                        ? `${revisionHistory.length} saved versions`
+                        : "Loading saved versions…"}
+                    </p>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      onClick={() => void saveNamedSnapshot()}
+                      disabled={!workspaceId || loading || revisionHistoryBusy}
+                      className="min-h-12 rounded-lg border border-violet-400/30 px-3 text-xs font-semibold text-violet-100 disabled:opacity-40"
+                    >
+                      Save snapshot
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void openRevisionHistory()}
+                      disabled={!workspaceId || loading || revisionHistoryBusy}
+                      className="min-h-12 rounded-lg border border-slate-700 px-3 text-xs font-semibold text-slate-300 disabled:opacity-40"
+                    >
+                      View history
+                    </button>
+                  </div>
+                </div>
+                {revisionHistoryLoadedFor === workspaceId && (
+                  revisionHistory.length > 0 ? (
+                    <div className="mt-2 grid gap-2 lg:grid-cols-3">
+                      {revisionHistory.slice(0, 3).map((revision) => (
+                        <article key={revision.id} className="min-w-0 rounded-lg border border-slate-800 bg-slate-900/70 px-3 py-2">
+                          <div className="flex items-center gap-2">
+                            <h3 className="min-w-0 flex-1 truncate text-xs font-semibold text-slate-200">{revision.reason}</h3>
+                            {revision.id === workspaceRevisionId && (
+                              <span className="shrink-0 text-[10px] font-semibold text-emerald-300">Current</span>
+                            )}
+                          </div>
+                          <p className="mt-1 truncate text-[10px] text-slate-500">
+                            Revision {revision.number} · {new Date(revision.createdAt).toLocaleString()}
+                          </p>
+                        </article>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="mt-2 text-xs text-slate-500">No snapshots are available yet.</p>
+                  )
+                )}
+              </section>
               {selectedFile ? (
                 <>
                   <div className="flex min-h-12 shrink-0 items-center justify-between gap-3 border-b border-slate-800 px-4">
