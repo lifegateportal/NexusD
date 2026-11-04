@@ -65,6 +65,7 @@ export const CodingChatRequestSchema = z.object({
   query: z.string().trim().min(1).max(20_000),
   mode: CodingModeSchema.default("ask"),
   contextStrategy: CodingContextStrategySchema.default("full"),
+  continueFromPartial: z.boolean().default(false),
   agent: CodingAgentSchema.default("deepseek-chat"),
   workspaceId: CodingWorkspaceIdSchema.optional(),
   revisionId: CodingRevisionIdSchema.optional(),

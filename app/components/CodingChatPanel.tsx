@@ -314,6 +314,10 @@ function renderAssistantContent(content: string) {
     flushParagraph();
     flushList();
   };
+  const tableCells = (line: string) => line.trim().replace(/^\|/, "").replace(/\|$/, "").split("|").map((cell) => cell.trim());
+  const isTableDivider = (line: string) => (
+    tableCells(line).every((cell) => /^:?-{3,}:?$/.test(cell))
+  );
 
   for (let index = 0; index < lines.length; index += 1) {
     const line = lines[index];
@@ -332,6 +336,45 @@ function renderAssistantContent(content: string) {
             {language || "code"}
           </div>
           <pre className="max-h-[50dvh] overflow-auto p-3 text-sm leading-5 text-slate-200 lg:max-h-[60dvh]"><code>{codeLines.join("\n")}</code></pre>
+        </div>,
+      );
+      continue;
+    }
+
+    if (line.includes("|") && index + 1 < lines.length && isTableDivider(lines[index + 1])) {
+      flushTextBlocks();
+      const headers = tableCells(line);
+      const rows: string[][] = [];
+      index += 2;
+      while (index < lines.length && lines[index].includes("|") && lines[index].trim()) {
+        rows.push(tableCells(lines[index]));
+        index += 1;
+      }
+      index -= 1;
+      rendered.push(
+        <div key={`table-${blockIndex++}`} className="my-3 max-w-full overflow-x-auto lg:my-4">
+          <table className="min-w-full border-collapse text-left text-xs leading-5">
+            <thead>
+              <tr>
+                {headers.map((cell, cellIndex) => (
+                  <th key={`table-header-${cellIndex}`} className="border border-slate-700 bg-slate-950 px-3 py-2 font-semibold text-slate-100">
+                    {renderInlineMarkdown(cell, `table-header-${blockIndex}-${cellIndex}`)}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((row, rowIndex) => (
+                <tr key={`table-row-${rowIndex}`}>
+                  {headers.map((_, cellIndex) => (
+                    <td key={`table-cell-${rowIndex}-${cellIndex}`} className="border border-slate-800 px-3 py-2 align-top text-slate-300">
+                      {renderInlineMarkdown(row[cellIndex] ?? "", `table-cell-${blockIndex}-${rowIndex}-${cellIndex}`)}
+                    </td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>,
       );
       continue;
@@ -2901,6 +2944,11 @@ export function CodingChatPanel() {
         role: message.role,
         content: message.content.slice(-MAX_CODING_HISTORY_MESSAGE_CHARACTERS),
       }));
+    const continuationPrefix = continueFromPartial
+      ? requestHistory.slice().reverse().find((message) => (
+        message.role === "assistant" && message.content.includes(CODING_PARTIAL_RESPONSE_MARKER)
+      ))?.content.replace(CODING_PARTIAL_RESPONSE_MARKER, "") ?? ""
+      : "";
     setMessages((current) => [...current, userMessage, assistantMessage]);
     setInput("");
     const controller = new AbortController();
@@ -2915,6 +2963,7 @@ export function CodingChatPanel() {
           query,
           mode,
           contextStrategy: focusedContextEnabled ? "focused" : "full",
+          continueFromPartial,
           agent,
           workspaceId: workspaceId ?? undefined,
           revisionId: workspaceRevisionRef.current ?? undefined,
@@ -2956,7 +3005,7 @@ export function CodingChatPanel() {
           const [included, total] = scope.data.split("/").map(Number);
           if (included < total) {
             setContextScopeNotice(
-              `Focused context sent ${included} of ${total} workspace files. If Nexus Code needs an omitted file, attach it or switch to Full Context.`,
+              `Focused context started with ${included} of ${total} workspace files. Nexus Code can load omitted files when needed.`,
             );
           }
         }
@@ -3002,7 +3051,7 @@ export function CodingChatPanel() {
           setMessages((current) => current.map((message) => (
             message.id === assistantId ? { ...message, content } : message
           )));
-          syncGeneratedFiles(content);
+          syncGeneratedFiles(`${continuationPrefix}${content}`);
         }
       }
       consumeStreamChunk(decoder.decode());
@@ -3012,7 +3061,7 @@ export function CodingChatPanel() {
       setMessages((current) => current.map((message) => (
         message.id === assistantId ? { ...message, content } : message
       )));
-      syncGeneratedFiles(content);
+      syncGeneratedFiles(`${continuationPrefix}${content}`);
       if (content) speakAssistantResponse(content);
       setStatus("Ready");
     } catch (requestError) {

@@ -28,7 +28,7 @@ export const maxDuration = 300;
 
 const MAX_CODING_CONTINUATIONS = 4;
 const CONTINUATION_TAIL_CHARACTERS = 16_000;
-const LONG_FORM_CODING_PATTERN = /\b(long[-\s]?form|complete|full(?:[-\s]stack)?|multi[-\s]file|entire application|production[-\s]ready|build|implement|create|generate|refactor|migrate)\b/i;
+const LONG_FORM_CODING_PATTERN = /\b(long[-\s]?form|complete|full(?:[-\s]stack)?|multi[-\s]file|entire application|production[-\s]ready|build|implement|create|generate|refactor|migrate|fix|debug|solve|repair|update|patch|parse|troubleshoot)\b/i;
 
 function modeInstruction(mode: CodingMode): string {
   switch (mode) {
@@ -84,7 +84,9 @@ function formatWorkbench(request: CodingChatRequest): string {
 }
 
 function shouldContinueLongForm(input: CodingChatRequest): boolean {
-  return input.mode === "code" || LONG_FORM_CODING_PATTERN.test(input.query);
+  return input.continueFromPartial
+    || input.mode === "code"
+    || LONG_FORM_CODING_PATTERN.test(input.query);
 }
 
 function buildContinuationPrompt(
@@ -102,9 +104,16 @@ ORIGINAL REQUEST AND FILE CONTEXT:
 ${initialPrompt}`;
 }
 
-function buildSystemPrompt(input: CodingChatRequest, webSearchAvailable: boolean, focusedContext: boolean): string {
+function buildSystemPrompt(
+  input: CodingChatRequest,
+  webSearchAvailable: boolean,
+  focusedContext: boolean,
+  workspaceFileToolAvailable: boolean,
+): string {
   const contextInstruction = focusedContext
-    ? "Some workspace files were omitted from the initial context. Do not claim to have inspected omitted files. If more context is needed, ask the user to attach the relevant files or switch to Full Context."
+    ? workspaceFileToolAvailable
+      ? "Some workspace files were omitted from the initial context. Do not claim to have inspected omitted files. Use read_workspace_files to load relevant omitted files before relying on them."
+      : "Some workspace files were omitted from the initial context. Do not claim to have inspected omitted files. If more context is needed, ask the user to attach the relevant files or switch to Full Context."
     : "";
   const contextRule = contextInstruction ? `- ${contextInstruction}\n` : "";
   const lineNumberRule = "- Attached source lines are prefixed with 1-based line numbers for reference only. Use them for precise citations, but never include the prefixes in generated code, nexus-file blocks, or patch search/replace text.\n";
@@ -123,6 +132,12 @@ ${contextRule}${lineNumberRule}${visionRule}- Never claim to have read, edited, 
 
 CODING MODE:
 ${modeInstruction(input.mode)}
+
+RESPONSE SCOPE:
+- For debugging or fixing requests, give the diagnosis briefly, then the smallest complete fix and a concise verification note.
+- Keep explanatory prose under 300 words unless the user asks for detail. Do not repeat the same diagnosis or reasoning.
+- For existing files, prefer a focused nexus-patch. Emit a complete nexus-file only for new files, when replacement is safer, or when explicitly requested.
+- Do not re-emit unchanged files or expand a focused fix into unrelated work.
 
 ENGINEERING RULES:
 - Preserve existing project conventions and behavior.
@@ -206,6 +221,9 @@ export async function POST(request: NextRequest) {
     const contextInput = focusedContext
       ? { ...input, files: focusedContext.files, history: focusedContext.history }
       : input;
+    const workspaceFileToolAvailable = Boolean(
+      focusedContext && focusedContext.omittedFileNames.length > 0,
+    );
     const contextScope = focusedContext && focusedContext.omittedFileNames.length > 0
       ? [
         `FOCUSED CONTEXT: Included ${focusedContext.files.length} of ${focusedContext.totalFileCount} workspace files.`,
@@ -213,7 +231,7 @@ export async function POST(request: NextRequest) {
         focusedContext.omittedFileNames.length > 60
           ? `Additional omitted paths: ${focusedContext.omittedFileNames.length - 60}`
           : "",
-        "Use included files first. If an omitted dependency or requirement is needed, ask the user to switch to Full Context or attach the file. Never assume omitted files are irrelevant.",
+        "Use included files first. If an omitted dependency or requirement is needed, load it with read_workspace_files before answering; never ask the user to switch to Full Context just to inspect a file.",
       ].filter(Boolean).join("\n")
       : "";
     const model = input.agent === "deepseek-reasoner"
@@ -232,6 +250,11 @@ export async function POST(request: NextRequest) {
 
     const continueLongForm = shouldContinueLongForm(input);
     const maxTokens = 8_000;
+    const continuationPrefix = input.continueFromPartial
+      ? input.history.slice().reverse().find((message) => (
+        message.role === "assistant" && message.content.includes(CODING_PARTIAL_RESPONSE_MARKER)
+      ))?.content.replace(CODING_PARTIAL_RESPONSE_MARKER, "") ?? ""
+      : "";
     return createDataStreamResponse({
       headers: {
         "Cache-Control": "no-cache, no-transform",
@@ -286,6 +309,50 @@ export async function POST(request: NextRequest) {
             }),
           }
           : undefined;
+        let workspaceFileReadCount = 0;
+        const workspaceFileTools = workspaceFileToolAvailable && focusedContext
+          ? {
+            read_workspace_files: tool({
+              description: "Load up to 8 omitted workspace files into the current focused-context conversation. Use the exact relative paths from the omitted paths list. Only files in the supplied workspace snapshot can be read; this does not change workspace files.",
+              parameters: z.object({
+                fileNames: z.array(z.string().trim().min(1).max(240)).min(1).max(8),
+              }).strict(),
+              execute: async ({ fileNames }) => {
+                if (workspaceFileReadCount >= 2) {
+                  return { error: "The omitted-file read limit for this request has been reached." };
+                }
+                workspaceFileReadCount += 1;
+                const omittedFileNames = new Set(focusedContext.omittedFileNames);
+                const requestedFiles = fileNames.flatMap((name) => {
+                  if (!omittedFileNames.has(name)) return [];
+                  const file = input.files.find((candidate) => candidate.name === name);
+                  return file ? [file] : [];
+                });
+                let remainingCharacters = 180_000;
+                const files = requestedFiles.map((file) => {
+                  const content = file.content.slice(0, remainingCharacters);
+                  remainingCharacters -= content.length;
+                  return {
+                    name: file.name,
+                    ...(file.language ? { language: file.language } : {}),
+                    content,
+                    truncated: content.length < file.content.length,
+                  };
+                });
+                return {
+                  files,
+                  unavailableFileNames: fileNames.filter((name) => !files.some((file) => file.name === name)),
+                  characterLimitReached: remainingCharacters === 0,
+                };
+              },
+            }),
+          }
+          : undefined;
+        const tools = {
+          ...(webTools ?? {}),
+          ...(workspaceFileTools ?? {}),
+        };
+        const hasTools = Boolean(webTools || workspaceFileTools);
         const runId = `run-${crypto.randomUUID()}`;
         const writeEvent = (event: CodingAgentEvent) => {
           if (!input.workspaceId) return;
@@ -325,9 +392,14 @@ export async function POST(request: NextRequest) {
               maxTokens,
               maxRetries: 2,
               abortSignal: request.signal,
-              system: buildSystemPrompt(input, webSearchAvailable, Boolean(focusedContext)),
+              system: buildSystemPrompt(
+                input,
+                webSearchAvailable,
+                Boolean(focusedContext),
+                workspaceFileToolAvailable,
+              ),
               ...(messages ? { messages } : { prompt: generationPrompt }),
-              ...(webTools ? { tools: webTools, maxSteps: 4 } : {}),
+              ...(hasTools ? { tools, maxSteps: 4 } : {}),
               onError: (error) => {
                 streamError = error;
               },
@@ -353,8 +425,9 @@ export async function POST(request: NextRequest) {
               : "Nexus Code returned an empty response.");
           }
           if (input.workspaceId) {
-            const generatedFiles = extractCodingFiles(fullText);
-            const generatedPatches = extractCodingPatches(fullText);
+            const completedResponse = `${continuationPrefix}${fullText}`;
+            const generatedFiles = extractCodingFiles(completedResponse);
+            const generatedPatches = extractCodingPatches(completedResponse);
             const patchedFiles = generatedPatches.length > 0
               ? applyCodingPatches(input.files, generatedPatches)
               : [];
