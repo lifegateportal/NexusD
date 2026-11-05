@@ -189,6 +189,11 @@ export const CodingWorkspaceRevisionSummarySchema = z.object({
 
 export type CodingWorkspaceRevisionSummary = z.infer<typeof CodingWorkspaceRevisionSummarySchema>;
 
+export const CodingWorkspaceRevisionPageSchema = z.object({
+  revisions: CodingWorkspaceRevisionSummarySchema.array(),
+  nextCursor: CodingRevisionIdSchema.nullable(),
+}).strict();
+
 export const CodingWorkspaceSnapshotSchema = z.object({
   workspace: CodingWorkspaceSchema,
   revision: CodingWorkspaceRevisionSchema,

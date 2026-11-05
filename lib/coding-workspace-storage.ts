@@ -338,15 +338,18 @@ export async function revertCodingWorkspace(
   );
 }
 
-export async function listCodingRevisions(workspaceId: string): Promise<CodingWorkspaceRevision[]> {
+export async function listCodingRevisions(
+  workspaceId: string,
+  beforeRevisionId?: string,
+): Promise<{ revisions: CodingWorkspaceRevision[]; nextCursor: string | null }> {
   const storage = storageConfig();
   const revisions: CodingWorkspaceRevision[] = [];
   const visited = new Set<string>();
   const workspace = await loadWorkspaceMetadata(storage, workspaceId);
   if (!workspace) throw new CodingWorkspaceStorageError("Coding workspace not found.", 404);
 
-  let revisionId: string | null = workspace.currentRevisionId;
-  while (revisionId) {
+  let revisionId: string | null = beforeRevisionId ?? workspace.currentRevisionId;
+  while (revisionId && revisions.length < 20) {
     if (visited.has(revisionId)) {
       throw new CodingWorkspaceStorageError("Coding workspace revision history contains a cycle.");
     }
@@ -359,7 +362,7 @@ export async function listCodingRevisions(workspaceId: string): Promise<CodingWo
     revisionId = revision.parentRevisionId;
   }
 
-  return revisions;
+  return { revisions, nextCursor: revisionId };
 }
 
 export async function deleteCodingWorkspace(workspaceId: string): Promise<void> {

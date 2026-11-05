@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import {
+  CodingRevisionIdSchema,
   CodingWorkspaceIdSchema,
   SaveCodingRevisionSchema,
 } from "@/lib/coding-workspace";
@@ -38,16 +39,21 @@ async function parseWorkspaceId(ctx: RouteContext): Promise<string | NextRespons
     : NextResponse.json({ error: "Invalid coding workspace id." }, { status: 400 });
 }
 
-export async function GET(_request: NextRequest, ctx: RouteContext) {
+export async function GET(request: NextRequest, ctx: RouteContext) {
   const workspaceId = await parseWorkspaceId(ctx);
   if (workspaceId instanceof NextResponse) return workspaceId;
+  const beforeRevisionId = request.nextUrl.searchParams.get("before");
+  if (beforeRevisionId !== null && !CodingRevisionIdSchema.safeParse(beforeRevisionId).success) {
+    return NextResponse.json({ error: "Invalid coding revision cursor." }, { status: 400 });
+  }
   try {
-    const revisions = await listCodingRevisions(workspaceId);
+    const page = await listCodingRevisions(workspaceId, beforeRevisionId ?? undefined);
     return NextResponse.json({
-      revisions: revisions.map(({ files, ...revision }) => ({
+      revisions: page.revisions.map(({ files, ...revision }) => ({
         ...revision,
         fileCount: files.length,
       })),
+      nextCursor: page.nextCursor,
     }, {
       headers: { "Cache-Control": "no-store, max-age=0" },
     });

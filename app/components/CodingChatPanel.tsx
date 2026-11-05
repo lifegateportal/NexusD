@@ -43,6 +43,7 @@ import {
 import {
   CodingAgentEventSchema,
   CodingPreviewSchema,
+  CodingWorkspaceRevisionPageSchema,
   CodingWorkspaceRevisionSummarySchema,
   CodingWorkspaceSchema,
   CodingWorkspaceSnapshotSchema,
@@ -451,6 +452,8 @@ export function CodingChatPanel() {
   const [workspaceRevisionId, setWorkspaceRevisionId] = useState<string | null>(null);
   const [workspaceParentRevisionId, setWorkspaceParentRevisionId] = useState<string | null>(null);
   const [revisionHistory, setRevisionHistory] = useState<CodingWorkspaceRevisionSummary[]>([]);
+  const [revisionHistoryCursor, setRevisionHistoryCursor] = useState<string | null>(null);
+  const [revisionHistoryHasMore, setRevisionHistoryHasMore] = useState(false);
   const [revisionHistoryLoadedFor, setRevisionHistoryLoadedFor] = useState<string | null>(null);
   const [revisionHistoryError, setRevisionHistoryError] = useState<string | null>(null);
   const [showRevisionHistory, setShowRevisionHistory] = useState(false);
@@ -489,7 +492,7 @@ export function CodingChatPanel() {
   const [attachedImages, setAttachedImages] = useState<CodingChatImage[]>([]);
   const [mode, setMode] = useState<CodingMode>("ask");
   const [agent, setAgent] = useState<CodingAgent>("deepseek-chat");
-  const [focusedContextEnabled, setFocusedContextEnabled] = useState(false);
+  const [focusedContextEnabled, setFocusedContextEnabled] = useState(true);
   const [contextScopeNotice, setContextScopeNotice] = useState<string | null>(null);
   const [fullContextNotice, setFullContextNotice] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -1046,6 +1049,8 @@ export function CodingChatPanel() {
       fileCount: snapshot.revision.files.length,
       byteCount: snapshot.revision.byteCount,
     })]);
+    setRevisionHistoryCursor(null);
+    setRevisionHistoryHasMore(false);
     setRevisionHistoryLoadedFor(null);
     setRevisionHistoryError(null);
     setShowRevisionHistory(false);
@@ -1966,15 +1971,17 @@ export function CodingChatPanel() {
           ? payload.error
           : `Project snapshots could not be loaded (HTTP ${response.status}).`);
       }
-      const parsed = CodingWorkspaceRevisionSummarySchema.array().safeParse(payload?.revisions);
-      if (!parsed.success || parsed.data.some((revision) => revision.workspaceId !== targetWorkspaceId)) {
+      const parsed = CodingWorkspaceRevisionPageSchema.safeParse(payload);
+      if (!parsed.success || parsed.data.revisions.some((revision) => revision.workspaceId !== targetWorkspaceId)) {
         throw new Error("Project snapshot history was invalid.");
       }
       if (requestId !== revisionHistoryRequestRef.current) return;
       if (workspaceIdRef.current !== targetWorkspaceId) {
         throw new Error("The active project changed before snapshot history could be opened.");
       }
-      setRevisionHistory(parsed.data);
+      setRevisionHistory(parsed.data.revisions);
+      setRevisionHistoryCursor(parsed.data.nextCursor);
+      setRevisionHistoryHasMore(parsed.data.nextCursor !== null);
       setRevisionHistoryLoadedFor(targetWorkspaceId);
       setRevisionHistoryError(null);
       setShowChatHistory(false);
@@ -1991,6 +1998,46 @@ export function CodingChatPanel() {
       setRevisionHistoryBusy(false);
     }
   }, [flushWorkspaceSave, loading, revisionHistoryBusy, workspaceId]);
+
+  const loadOlderRevisionHistory = useCallback(async () => {
+    if (!workspaceId || !revisionHistoryCursor || revisionHistoryBusy) return;
+    const targetWorkspaceId = workspaceId;
+    const cursor = revisionHistoryCursor;
+    setRevisionHistoryBusy(true);
+    setRevisionHistoryError(null);
+    try {
+      const response = await fetch(
+        `/api/coding/workspaces/${encodeURIComponent(targetWorkspaceId)}/revisions?before=${encodeURIComponent(cursor)}`,
+        { cache: "no-store", credentials: "same-origin" },
+      );
+      const payload = await response.json().catch(() => null) as unknown;
+      if (!response.ok) {
+        const failure = payload as { error?: unknown } | null;
+        throw new Error(typeof failure?.error === "string"
+          ? failure.error
+          : `Older snapshots could not be loaded (HTTP ${response.status}).`);
+      }
+      const parsed = CodingWorkspaceRevisionPageSchema.safeParse(payload);
+      if (!parsed.success || parsed.data.revisions.some((revision) => revision.workspaceId !== targetWorkspaceId)) {
+        throw new Error("Older snapshot history was invalid.");
+      }
+      if (workspaceIdRef.current !== targetWorkspaceId) return;
+      setRevisionHistory((current) => {
+        const knownIds = new Set(current.map((revision) => revision.id));
+        return [...current, ...parsed.data.revisions.filter((revision) => !knownIds.has(revision.id))];
+      });
+      setRevisionHistoryCursor(parsed.data.nextCursor);
+      setRevisionHistoryHasMore(parsed.data.nextCursor !== null);
+    } catch (historyError) {
+      if (workspaceIdRef.current === targetWorkspaceId) {
+        setRevisionHistoryError(historyError instanceof Error
+          ? historyError.message
+          : "Older snapshots could not be loaded.");
+      }
+    } finally {
+      setRevisionHistoryBusy(false);
+    }
+  }, [revisionHistoryBusy, revisionHistoryCursor, workspaceId]);
 
   const saveNamedSnapshot = useCallback(async () => {
     if (!workspaceId || loading || revisionHistoryBusy) return;
@@ -2099,6 +2146,8 @@ export function CodingChatPanel() {
         workspace.id === parsed.data.workspace.id ? parsed.data.workspace : workspace
       )));
       setRevisionHistoryLoadedFor(targetWorkspaceId);
+      setRevisionHistoryCursor(parsed.data.revision.parentRevisionId);
+      setRevisionHistoryHasMore(parsed.data.revision.parentRevisionId !== null);
       const summary = CodingWorkspaceRevisionSummarySchema.parse({
         id: parsed.data.revision.id,
         workspaceId: parsed.data.revision.workspaceId,
@@ -2141,12 +2190,14 @@ export function CodingChatPanel() {
             ? payload.error
             : `Project snapshot history could not be loaded (HTTP ${response.status}).`);
         }
-        const parsed = CodingWorkspaceRevisionSummarySchema.array().safeParse(payload?.revisions);
-        if (!parsed.success || parsed.data.some((revision) => revision.workspaceId !== targetWorkspaceId)) {
+        const parsed = CodingWorkspaceRevisionPageSchema.safeParse(payload);
+        if (!parsed.success || parsed.data.revisions.some((revision) => revision.workspaceId !== targetWorkspaceId)) {
           throw new Error("Project snapshot history was invalid.");
         }
         if (!active || requestId !== revisionHistoryRequestRef.current || workspaceIdRef.current !== targetWorkspaceId) return;
-        setRevisionHistory(parsed.data);
+        setRevisionHistory(parsed.data.revisions);
+        setRevisionHistoryCursor(parsed.data.nextCursor);
+        setRevisionHistoryHasMore(parsed.data.nextCursor !== null);
         setRevisionHistoryLoadedFor(targetWorkspaceId);
         setRevisionHistoryError(null);
       } catch (historyError) {
@@ -3856,6 +3907,19 @@ export function CodingChatPanel() {
                       );
                     })}
                   </div>
+                )}
+                {revisionHistoryError && (
+                  <p role="alert" className="mt-3 text-xs text-rose-200">{revisionHistoryError}</p>
+                )}
+                {revisionHistoryHasMore && (
+                  <button
+                    type="button"
+                    onClick={() => void loadOlderRevisionHistory()}
+                    disabled={revisionHistoryBusy || loading}
+                    className="mt-3 min-h-12 w-full rounded-xl border border-violet-400/40 px-4 text-xs font-semibold text-violet-100 disabled:opacity-40"
+                  >
+                    {revisionHistoryBusy ? "Loading older snapshots…" : "Load older snapshots"}
+                  </button>
                 )}
               </div>
             </div>
