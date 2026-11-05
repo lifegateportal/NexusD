@@ -4000,19 +4000,33 @@ export function CodingChatPanel() {
                 )}
                 {revisionHistory.length > 0 ? (
                   <div className="mt-2 grid gap-2 lg:grid-cols-3">
-                    {revisionHistory.slice(0, 3).map((revision) => (
-                      <article key={revision.id} className="min-w-0 rounded-lg border border-slate-800 bg-slate-900/70 px-3 py-2">
+                    {revisionHistory.slice(0, 3).map((revision) => {
+                      const isCurrent = revision.id === workspaceRevisionId;
+                      return (
+                      <button
+                        key={revision.id}
+                        type="button"
+                        onClick={() => void restoreWorkspaceSnapshot(revision)}
+                        disabled={isCurrent || loading || revisionHistoryBusy}
+                        aria-label={`${isCurrent ? "Current snapshot" : "Load snapshot"}: ${revision.reason}, revision ${revision.number}`}
+                        className="min-h-12 min-w-0 rounded-lg border border-slate-800 bg-slate-900/70 px-3 py-2 text-left enabled:active:border-violet-400/50 enabled:active:bg-violet-500/10 disabled:cursor-default disabled:opacity-70"
+                      >
                         <div className="flex items-center gap-2">
                           <h3 className="min-w-0 flex-1 truncate text-xs font-semibold text-slate-200">{revision.reason}</h3>
-                          {revision.id === workspaceRevisionId && (
+                          {isCurrent ? (
                             <span className="shrink-0 text-[10px] font-semibold text-emerald-300">Current</span>
+                          ) : (
+                            <span className="shrink-0 text-[10px] font-semibold text-violet-200">
+                              {restoringRevisionId === revision.id ? "Loading…" : "Load"}
+                            </span>
                           )}
                         </div>
                         <p className="mt-1 truncate text-[10px] text-slate-500">
                           Revision {revision.number} · {new Date(revision.createdAt).toLocaleString()}
                         </p>
-                      </article>
-                    ))}
+                      </button>
+                    );
+                    })}
                   </div>
                 ) : revisionHistoryLoadedFor === workspaceId && !revisionHistoryError ? (
                   <p className="mt-2 text-xs text-slate-500">No snapshots are available yet.</p>
