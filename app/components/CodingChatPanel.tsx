@@ -452,6 +452,7 @@ export function CodingChatPanel() {
   const [workspaceParentRevisionId, setWorkspaceParentRevisionId] = useState<string | null>(null);
   const [revisionHistory, setRevisionHistory] = useState<CodingWorkspaceRevisionSummary[]>([]);
   const [revisionHistoryLoadedFor, setRevisionHistoryLoadedFor] = useState<string | null>(null);
+  const [revisionHistoryError, setRevisionHistoryError] = useState<string | null>(null);
   const [showRevisionHistory, setShowRevisionHistory] = useState(false);
   const [revisionHistoryBusy, setRevisionHistoryBusy] = useState(false);
   const [restoringRevisionId, setRestoringRevisionId] = useState<string | null>(null);
@@ -1034,8 +1035,19 @@ export function CodingChatPanel() {
     setWorkspaceName(snapshot.workspace.name);
     setWorkspaceRevisionId(snapshot.workspace.currentRevisionId);
     setWorkspaceParentRevisionId(snapshot.revision.parentRevisionId);
-    setRevisionHistory([]);
+    setRevisionHistory([CodingWorkspaceRevisionSummarySchema.parse({
+      id: snapshot.revision.id,
+      workspaceId: snapshot.revision.workspaceId,
+      number: snapshot.revision.number,
+      parentRevisionId: snapshot.revision.parentRevisionId,
+      createdAt: snapshot.revision.createdAt,
+      reason: snapshot.revision.reason,
+      source: snapshot.revision.source,
+      fileCount: snapshot.revision.files.length,
+      byteCount: snapshot.revision.byteCount,
+    })]);
     setRevisionHistoryLoadedFor(null);
+    setRevisionHistoryError(null);
     setShowRevisionHistory(false);
     setCodingDeployment(null);
     setDeploymentEnvironmentText("");
@@ -1948,11 +1960,13 @@ export function CodingChatPanel() {
         cache: "no-store",
         credentials: "same-origin",
       });
-      const payload = await response.json() as { revisions?: unknown; error?: unknown };
+      const payload = await response.json().catch(() => null) as { revisions?: unknown; error?: unknown } | null;
       if (!response.ok) {
-        throw new Error(typeof payload.error === "string" ? payload.error : "Project snapshots could not be loaded.");
+        throw new Error(typeof payload?.error === "string"
+          ? payload.error
+          : `Project snapshots could not be loaded (HTTP ${response.status}).`);
       }
-      const parsed = CodingWorkspaceRevisionSummarySchema.array().safeParse(payload.revisions);
+      const parsed = CodingWorkspaceRevisionSummarySchema.array().safeParse(payload?.revisions);
       if (!parsed.success || parsed.data.some((revision) => revision.workspaceId !== targetWorkspaceId)) {
         throw new Error("Project snapshot history was invalid.");
       }
@@ -1962,6 +1976,7 @@ export function CodingChatPanel() {
       }
       setRevisionHistory(parsed.data);
       setRevisionHistoryLoadedFor(targetWorkspaceId);
+      setRevisionHistoryError(null);
       setShowChatHistory(false);
       setShowFiles(false);
       setShowPreview(false);
@@ -1969,7 +1984,9 @@ export function CodingChatPanel() {
       setWorkspaceStatus("Saved");
     } catch (historyError) {
       setWorkspaceStatus("Needs attention");
-      setError(historyError instanceof Error ? historyError.message : "Project snapshots could not be loaded.");
+      const message = historyError instanceof Error ? historyError.message : "Project snapshots could not be loaded.";
+      setRevisionHistoryError(message);
+      setError(message);
     } finally {
       setRevisionHistoryBusy(false);
     }
@@ -2035,6 +2052,7 @@ export function CodingChatPanel() {
         byteCount: parsed.data.revision.byteCount,
       });
       setRevisionHistory((current) => [summary, ...current.filter((revision) => revision.id !== summary.id)]);
+      setRevisionHistoryError(null);
       setWorkspaceStatus("Snapshot saved");
     } catch (snapshotError) {
       setWorkspaceStatus("Needs attention");
@@ -2093,6 +2111,7 @@ export function CodingChatPanel() {
         byteCount: parsed.data.revision.byteCount,
       });
       setRevisionHistory((current) => [summary, ...current.filter((item) => item.id !== summary.id)]);
+      setRevisionHistoryError(null);
       setShowRevisionHistory(false);
       setWorkspaceStatus(`Restored revision ${revision.number}`);
     } catch (restoreError) {
@@ -2116,21 +2135,25 @@ export function CodingChatPanel() {
           cache: "no-store",
           credentials: "same-origin",
         });
-        const payload = await response.json() as { revisions?: unknown; error?: unknown };
+        const payload = await response.json().catch(() => null) as { revisions?: unknown; error?: unknown } | null;
         if (!response.ok) {
-          throw new Error(typeof payload.error === "string" ? payload.error : "Project snapshot history could not be loaded.");
+          throw new Error(typeof payload?.error === "string"
+            ? payload.error
+            : `Project snapshot history could not be loaded (HTTP ${response.status}).`);
         }
-        const parsed = CodingWorkspaceRevisionSummarySchema.array().safeParse(payload.revisions);
+        const parsed = CodingWorkspaceRevisionSummarySchema.array().safeParse(payload?.revisions);
         if (!parsed.success || parsed.data.some((revision) => revision.workspaceId !== targetWorkspaceId)) {
           throw new Error("Project snapshot history was invalid.");
         }
         if (!active || requestId !== revisionHistoryRequestRef.current || workspaceIdRef.current !== targetWorkspaceId) return;
         setRevisionHistory(parsed.data);
         setRevisionHistoryLoadedFor(targetWorkspaceId);
+        setRevisionHistoryError(null);
       } catch (historyError) {
         if (!active || requestId !== revisionHistoryRequestRef.current || workspaceIdRef.current !== targetWorkspaceId) return;
-        setRevisionHistoryLoadedFor(targetWorkspaceId);
-        setError(historyError instanceof Error ? historyError.message : "Project snapshot history could not be loaded.");
+        setRevisionHistoryError(historyError instanceof Error
+          ? historyError.message
+          : "Project snapshot history could not be loaded.");
       }
     })();
 
@@ -3944,7 +3967,9 @@ export function CodingChatPanel() {
                   <div>
                     <h2 className="text-xs font-bold text-violet-100">Snapshot history</h2>
                     <p className="mt-1 text-[10px] text-slate-500">
-                      {revisionHistoryLoadedFor === workspaceId
+                      {revisionHistoryError
+                        ? "History unavailable"
+                        : revisionHistoryLoadedFor === workspaceId
                         ? `${revisionHistory.length} saved versions`
                         : "Loading saved versions…"}
                     </p>
@@ -3968,26 +3993,31 @@ export function CodingChatPanel() {
                     </button>
                   </div>
                 </div>
-                {revisionHistoryLoadedFor === workspaceId && (
-                  revisionHistory.length > 0 ? (
-                    <div className="mt-2 grid gap-2 lg:grid-cols-3">
-                      {revisionHistory.slice(0, 3).map((revision) => (
-                        <article key={revision.id} className="min-w-0 rounded-lg border border-slate-800 bg-slate-900/70 px-3 py-2">
-                          <div className="flex items-center gap-2">
-                            <h3 className="min-w-0 flex-1 truncate text-xs font-semibold text-slate-200">{revision.reason}</h3>
-                            {revision.id === workspaceRevisionId && (
-                              <span className="shrink-0 text-[10px] font-semibold text-emerald-300">Current</span>
-                            )}
-                          </div>
-                          <p className="mt-1 truncate text-[10px] text-slate-500">
-                            Revision {revision.number} · {new Date(revision.createdAt).toLocaleString()}
-                          </p>
-                        </article>
-                      ))}
-                    </div>
-                  ) : (
-                    <p className="mt-2 text-xs text-slate-500">No snapshots are available yet.</p>
-                  )
+                {revisionHistoryError && (
+                  <p role="alert" className="mt-2 text-xs text-rose-200">
+                    Could not retrieve full history: {revisionHistoryError}. Use View history to retry.
+                  </p>
+                )}
+                {revisionHistory.length > 0 ? (
+                  <div className="mt-2 grid gap-2 lg:grid-cols-3">
+                    {revisionHistory.slice(0, 3).map((revision) => (
+                      <article key={revision.id} className="min-w-0 rounded-lg border border-slate-800 bg-slate-900/70 px-3 py-2">
+                        <div className="flex items-center gap-2">
+                          <h3 className="min-w-0 flex-1 truncate text-xs font-semibold text-slate-200">{revision.reason}</h3>
+                          {revision.id === workspaceRevisionId && (
+                            <span className="shrink-0 text-[10px] font-semibold text-emerald-300">Current</span>
+                          )}
+                        </div>
+                        <p className="mt-1 truncate text-[10px] text-slate-500">
+                          Revision {revision.number} · {new Date(revision.createdAt).toLocaleString()}
+                        </p>
+                      </article>
+                    ))}
+                  </div>
+                ) : revisionHistoryLoadedFor === workspaceId && !revisionHistoryError ? (
+                  <p className="mt-2 text-xs text-slate-500">No snapshots are available yet.</p>
+                ) : (
+                  <p className="mt-2 text-xs text-slate-500">Loading saved versions…</p>
                 )}
               </section>
               {selectedFile ? (

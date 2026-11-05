@@ -340,23 +340,26 @@ export async function revertCodingWorkspace(
 
 export async function listCodingRevisions(workspaceId: string): Promise<CodingWorkspaceRevision[]> {
   const storage = storageConfig();
-  const keys = await listKeys(storage, `${WORKSPACE_PREFIX}${workspaceId}${REVISION_PREFIX}`);
-  const settled = await Promise.allSettled(keys.map((key) => readJson(storage, key)));
   const revisions: CodingWorkspaceRevision[] = [];
-  for (const result of settled) {
-    if (result.status === "rejected") {
-      console.error("[coding/workspaces] Failed to read coding revision", result.reason);
-      continue;
+  const visited = new Set<string>();
+  const workspace = await loadWorkspaceMetadata(storage, workspaceId);
+  if (!workspace) throw new CodingWorkspaceStorageError("Coding workspace not found.", 404);
+
+  let revisionId: string | null = workspace.currentRevisionId;
+  while (revisionId) {
+    if (visited.has(revisionId)) {
+      throw new CodingWorkspaceStorageError("Coding workspace revision history contains a cycle.");
     }
-    if (result.value === null) continue;
-    try {
-      const revision = parseRevision(result.value);
-      if (revision.workspaceId === workspaceId) revisions.push(revision);
-    } catch (error) {
-      console.error("[coding/workspaces] Ignoring invalid coding revision", error);
+    visited.add(revisionId);
+    const revision = await loadRevision(storage, workspaceId, revisionId);
+    if (!revision) {
+      throw new CodingWorkspaceStorageError("Coding workspace revision history is incomplete.");
     }
+    revisions.push(revision);
+    revisionId = revision.parentRevisionId;
   }
-  return revisions.sort((left, right) => right.number - left.number);
+
+  return revisions;
 }
 
 export async function deleteCodingWorkspace(workspaceId: string): Promise<void> {
