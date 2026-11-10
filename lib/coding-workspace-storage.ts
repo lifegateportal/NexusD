@@ -593,7 +593,9 @@ export async function listCodingRevisions(
   const visited = new Set<string>();
   const snapshot = await getCodingWorkspace(workspaceId);
   if (!snapshot) throw new CodingWorkspaceStorageError("Coding workspace not found.", 404);
-  const workspace = await initializeProtectedSnapshots(storage, snapshot.workspace);
+  const workspace = snapshot.workspace;
+  const protectedRevisionIds = new Set(workspace.protectedRevisionIds);
+  const detectLegacyProtectedSnapshots = !workspace.snapshotProtectionInitialized;
 
   let revisionId: string | null = beforeRevisionId ?? workspace.latestRevisionId ?? workspace.currentRevisionId;
   while (revisionId && revisions.length < 20) {
@@ -605,7 +607,15 @@ export async function listCodingRevisions(
     if (!revision) {
       throw new CodingWorkspaceStorageError("Coding workspace revision history is incomplete.");
     }
-    revisions.push(revision);
+    if (
+      revision.isProtectedSnapshot
+      || protectedRevisionIds.has(revision.id)
+      || (detectLegacyProtectedSnapshots && isLegacyProtectedSnapshot(revision))
+    ) {
+      revisions.push({ ...revision, isProtectedSnapshot: true });
+    } else {
+      revisions.push(revision);
+    }
     revisionId = revision.parentRevisionId;
   }
 
