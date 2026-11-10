@@ -154,6 +154,10 @@ export const CodingWorkspaceSchema = z.object({
   createdAt: z.string().datetime(),
   updatedAt: z.string().datetime(),
   currentRevisionId: CodingRevisionIdSchema,
+  latestRevisionId: CodingRevisionIdSchema.nullable().default(null),
+  draftDirty: z.boolean().default(false),
+  protectedRevisionIds: CodingRevisionIdSchema.array().default([]),
+  snapshotProtectionInitialized: z.boolean().default(false),
   revisionNumber: z.number().int().positive(),
   fileCount: z.number().int().nonnegative(),
   byteCount: z.number().int().nonnegative(),
@@ -166,6 +170,7 @@ export const CodingWorkspaceRevisionSchema = z.object({
   workspaceId: CodingWorkspaceIdSchema,
   number: z.number().int().positive(),
   parentRevisionId: CodingRevisionIdSchema.nullable(),
+  isProtectedSnapshot: z.boolean().default(false),
   createdAt: z.string().datetime(),
   reason: z.string().trim().min(1).max(400),
   source: z.enum(["user", "agent", "import", "revert"]),
@@ -180,6 +185,7 @@ export const CodingWorkspaceRevisionSummarySchema = z.object({
   workspaceId: CodingWorkspaceIdSchema,
   number: z.number().int().positive(),
   parentRevisionId: CodingRevisionIdSchema.nullable(),
+  isProtectedSnapshot: z.boolean().default(false),
   createdAt: z.string().datetime(),
   reason: z.string().trim().min(1).max(400),
   source: z.enum(["user", "agent", "import", "revert"]),
@@ -224,6 +230,7 @@ export const SaveCodingRevisionSchema = z.object({
   files: z.array(CodingWorkspaceFileSchema).max(200),
   reason: z.string().trim().min(1).max(400),
   source: z.enum(["user", "agent", "import", "revert"]).default("user"),
+  protectSnapshot: z.boolean().default(false),
 }).strict().superRefine((value, context) => {
   const byteCount = codingWorkspaceByteCount(value.files);
   if (byteCount > 4_000_000) {
@@ -233,9 +240,33 @@ export const SaveCodingRevisionSchema = z.object({
       message: "Workspace files are too large. Keep the total under 4 million bytes.",
     });
   }
+  if (value.protectSnapshot && value.source !== "user") {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["protectSnapshot"],
+      message: "Only user-saved snapshots can be protected.",
+    });
+  }
 });
 
 export type SaveCodingRevision = z.infer<typeof SaveCodingRevisionSchema>;
+
+export const SaveCodingDraftSchema = z.object({
+  baseRevisionId: CodingRevisionIdSchema.nullable(),
+  files: z.array(CodingWorkspaceFileSchema).max(200),
+  reason: z.string().trim().min(1).max(400),
+  source: z.enum(["user", "agent", "import", "revert"]).default("user"),
+}).strict().superRefine((value, context) => {
+  if (codingWorkspaceByteCount(value.files) > 4_000_000) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["files"],
+      message: "Workspace files are too large. Keep the total under 4 million bytes.",
+    });
+  }
+});
+
+export type SaveCodingDraft = z.infer<typeof SaveCodingDraftSchema>;
 
 export const RevertCodingWorkspaceSchema = z.object({
   revisionId: CodingRevisionIdSchema,

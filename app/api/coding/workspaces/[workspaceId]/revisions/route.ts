@@ -84,6 +84,7 @@ export async function POST(request: NextRequest, ctx: RouteContext) {
         input.files,
         input.reason,
         input.source,
+        input.protectSnapshot,
       ),
       { status: 201 },
     );
