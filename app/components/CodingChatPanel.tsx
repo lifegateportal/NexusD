@@ -3296,7 +3296,7 @@ export function CodingChatPanel() {
     } catch (requestError) {
       if (requestError instanceof DOMException && requestError.name === "AbortError") {
         setStatus("Stopped");
-        if (content) setError("Generation stopped. The displayed response may be incomplete.");
+        if (content) setError("Generation stopped. The displayed response is marked as partial.");
       } else {
         setStatus("Needs attention");
         setError(requestError instanceof Error ? requestError.message : "Nexus Code request failed.");
@@ -3315,6 +3315,7 @@ export function CodingChatPanel() {
     }
   }, [
     agent,
+    attachedImages,
     attachedFileNames,
     codingSurface,
     files,
@@ -3463,12 +3464,12 @@ export function CodingChatPanel() {
             </svg>
           </button>
         </div>
-        <div className="grid grid-cols-3 gap-1 py-1 sm:grid-cols-6 lg:hidden" role="group" aria-label="Quick chat and workspace actions">
+        <div className="grid grid-cols-6 gap-1 py-1 lg:hidden" role="group" aria-label="Quick chat and workspace actions">
           <button
             type="button"
             onClick={() => void commitWorkspace()}
             disabled={!workspaceId || !hasUncommittedChanges || loading || revisionHistoryBusy}
-            className="min-h-12 rounded-lg border border-emerald-400/40 px-1 text-[11px] font-semibold text-emerald-200 disabled:opacity-40"
+            className="min-h-12 min-w-0 truncate whitespace-nowrap rounded-lg border border-emerald-400/40 px-0.5 text-[11px] font-semibold text-emerald-200 disabled:opacity-40"
           >
             Commit
           </button>
@@ -3476,7 +3477,7 @@ export function CodingChatPanel() {
             type="button"
             onClick={() => void undoWorkspace()}
             disabled={!hasUncommittedChanges || !workspaceParentRevisionId || loading || !workspaceRevisionId || revisionHistoryBusy}
-            className="min-h-12 rounded-lg border border-slate-700 px-1 text-[11px] font-semibold text-slate-300 disabled:opacity-40"
+            className="min-h-12 min-w-0 truncate whitespace-nowrap rounded-lg border border-slate-700 px-0.5 text-[11px] font-semibold text-slate-300 disabled:opacity-40"
           >
             Undo
           </button>
@@ -3485,7 +3486,7 @@ export function CodingChatPanel() {
             onClick={showChatHistory ? () => setShowChatHistory(false) : showProjectChatHistory}
             disabled={!workspaceId || chatHistoryWorkspaceId !== workspaceId}
             aria-expanded={showChatHistory}
-            className="min-h-12 rounded-lg border border-slate-700 px-1 text-[11px] font-semibold text-slate-300 disabled:opacity-40"
+            className="min-h-12 min-w-0 truncate whitespace-nowrap rounded-lg border border-slate-700 px-0.5 text-[11px] font-semibold text-slate-300 disabled:opacity-40"
           >
             {showChatHistory ? "Back" : "History"}
           </button>
@@ -3493,7 +3494,7 @@ export function CodingChatPanel() {
             type="button"
             onClick={startNewChat}
             disabled={!workspaceId || chatHistoryWorkspaceId !== workspaceId}
-            className="min-h-12 rounded-lg bg-cyan-400 px-1 text-[11px] font-bold text-slate-950 disabled:opacity-40"
+            className="min-h-12 min-w-0 truncate whitespace-nowrap rounded-lg bg-cyan-400 px-0.5 text-[11px] font-bold text-slate-950 disabled:opacity-40"
           >
             New chat
           </button>
@@ -3501,15 +3502,16 @@ export function CodingChatPanel() {
             type="button"
             onClick={() => { toggleWorkspacePanel("files"); setMobileActionsOpen(false); }}
             aria-pressed={showFiles}
-            className={`min-h-12 rounded-lg border px-1 text-[11px] font-semibold ${showFiles ? "border-cyan-400/50 bg-cyan-500/15 text-cyan-200" : "border-slate-700 text-slate-300"}`}
+            aria-label={`Open project files${files.length > 0 ? `, ${files.length} files` : ""}`}
+            className={`min-h-12 min-w-0 truncate whitespace-nowrap rounded-lg border px-0.5 text-[11px] font-semibold ${showFiles ? "border-cyan-400/50 bg-cyan-500/15 text-cyan-200" : "border-slate-700 text-slate-300"}`}
           >
-            Explorer{files.length > 0 ? ` ${files.length}` : ""}
+            Files{files.length > 0 ? ` ${files.length}` : ""}
           </button>
           <button
             type="button"
             onClick={() => { toggleWorkspacePanel("preview"); setMobileActionsOpen(false); }}
             aria-pressed={showPreview}
-            className={`min-h-12 rounded-lg border px-1 text-[11px] font-semibold ${showPreview ? "border-violet-400/50 bg-violet-500/15 text-violet-200" : "border-slate-700 text-slate-300"}`}
+            className={`min-h-12 min-w-0 truncate whitespace-nowrap rounded-lg border px-0.5 text-[11px] font-semibold ${showPreview ? "border-violet-400/50 bg-violet-500/15 text-violet-200" : "border-slate-700 text-slate-300"}`}
           >
             Preview
           </button>
@@ -4145,7 +4147,7 @@ export function CodingChatPanel() {
             )
           ) : (
             <div className="flex min-h-0 flex-1 flex-col overflow-hidden bg-slate-950/60">
-              <section className="shrink-0 border-b border-violet-400/20 bg-violet-500/[0.04] px-3 py-2 sm:px-4" aria-label="Snapshot history">
+              <section className="hidden shrink-0 border-b border-violet-400/20 bg-violet-500/[0.04] px-3 py-2 sm:px-4 lg:block" aria-label="Snapshot history">
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <div>
                     <h2 className="text-xs font-bold text-violet-100">Committed snapshots</h2>
