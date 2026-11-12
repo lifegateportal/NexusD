@@ -25,6 +25,7 @@ export type CodingFocusedContext = {
 
 const MAX_FOCUSED_FILES = 24;
 const MAX_FOCUSED_CHARACTERS = 300_000;
+const MAX_RECENTLY_REFERENCED_FILES = 8;
 const STOP_WORDS = new Set([
   "about", "after", "also", "and", "any", "are", "can", "code", "could", "does",
   "fix", "for", "from", "have", "help", "how", "into", "make", "please", "that",
@@ -93,6 +94,22 @@ function scoreFile(file: CodingContextFile, terms: string[]): number {
   return score;
 }
 
+function referencedWorkspaceFiles(
+  files: CodingContextFile[],
+  query: string,
+  history: CodingHistoryMessage[],
+): string[] {
+  const mentions = [query, ...history.slice(-6).reverse().map((message) => message.content)];
+  const referenced = new Set<string>();
+  for (const text of mentions) {
+    for (const file of files) {
+      if (text.includes(file.name)) referenced.add(normalizePath(file.name));
+      if (referenced.size >= MAX_RECENTLY_REFERENCED_FILES) return Array.from(referenced);
+    }
+  }
+  return Array.from(referenced);
+}
+
 function compactFocusedHistory(
   history: CodingHistoryMessage[],
   includedFileNames: Set<string>,
@@ -126,8 +143,9 @@ export function selectCodingFocusedContext(
   }
 
   const names = new Set(files.map((file) => normalizePath(file.name)));
+  const recentlyReferencedNames = referencedWorkspaceFiles(files, input.query, input.history);
   const pinnedNames = new Set(
-    [input.selectedFileName, ...input.attachedFileNames]
+    [input.selectedFileName, ...input.attachedFileNames, ...recentlyReferencedNames]
       .filter((name): name is string => Boolean(name))
       .map(normalizePath)
       .filter((name) => names.has(name)),
@@ -143,7 +161,7 @@ export function selectCodingFocusedContext(
     .sort((left, right) =>
       (scores.get(normalizePath(right.name)) ?? 0) - (scores.get(normalizePath(left.name)) ?? 0),
     );
-  if (terms.length === 0 || ranked.length === 0) {
+  if ((terms.length === 0 || ranked.length === 0) && recentlyReferencedNames.length === 0) {
     return {
       files,
       omittedFileNames: [],

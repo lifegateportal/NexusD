@@ -498,6 +498,7 @@ export function CodingChatPanel() {
   const [loading, setLoading] = useState(false);
   const [status, setStatus] = useState("Ready");
   const [error, setError] = useState<string | null>(null);
+  const [chatHistoryNotice, setChatHistoryNotice] = useState<string | null>(null);
   const [selectedFileName, setSelectedFileName] = useState<string | null>(null);
   const [codingSurface, setCodingSurface] = useState<CodingSurface>("assistant");
   const [showFiles, setShowFiles] = useState(false);
@@ -1663,24 +1664,46 @@ export function CodingChatPanel() {
       activeThreadId: activeChatThreadId,
       threads: nextThreads,
     });
+    let savedThreads: CodingChatThread[] | null = null;
 
     if (signature !== savedChatHistorySignatureRef.current) {
       try {
-        saveCodingChatHistory(workspaceId, {
+        const saved = saveCodingChatHistory(workspaceId, {
           version: 1,
           activeThreadId: activeChatThreadId,
           threads: nextThreads,
           updatedAt: now,
         });
-        savedChatHistorySignatureRef.current = signature;
+        savedChatHistorySignatureRef.current = JSON.stringify({
+          activeThreadId: activeChatThreadId,
+          threads: saved.history.threads,
+        });
+        savedThreads = saved.history.threads;
+        if (saved.prunedThreadCount > 0 || saved.prunedMessageCount > 0) {
+          setChatHistoryNotice([
+            saved.prunedThreadCount > 0
+              ? `Removed ${saved.prunedThreadCount} oldest saved chat${saved.prunedThreadCount === 1 ? "" : "s"}`
+              : "",
+            saved.prunedMessageCount > 0
+              ? `shortened the active chat by ${saved.prunedMessageCount} older message${saved.prunedMessageCount === 1 ? "" : "s"}`
+              : "",
+          ].filter(Boolean).join(" and ") + " to free browser storage. The newest conversation was preserved.");
+        }
+        if (JSON.stringify(saved.history.threads) !== JSON.stringify(nextThreads)) {
+          const savedActiveThread = saved.history.threads.find((thread) => thread.id === activeChatThreadId);
+          if (savedActiveThread && JSON.stringify(savedActiveThread.messages) !== JSON.stringify(nextMessages)) {
+            setMessages(savedActiveThread.messages);
+          }
+        }
       } catch (historyError) {
         setError(historyError instanceof Error
           ? historyError.message
           : "Project chat history could not be saved.");
       }
     }
-    if (JSON.stringify(nextThreads) !== JSON.stringify(chatThreads)) {
-      setChatThreads(nextThreads);
+    const threadsToKeep = savedThreads ?? nextThreads;
+    if (JSON.stringify(threadsToKeep) !== JSON.stringify(chatThreads)) {
+      setChatThreads(threadsToKeep);
     }
   }, [
     activeChatThreadId,
@@ -1734,18 +1757,24 @@ export function CodingChatPanel() {
       updatedAt: now,
     };
     try {
-      saveCodingChatHistory(workspaceId, history);
+      const saved = saveCodingChatHistory(workspaceId, history);
       savedChatHistorySignatureRef.current = JSON.stringify({
         activeThreadId: history.activeThreadId,
-        threads: history.threads,
+        threads: saved.history.threads,
       });
+      setChatThreads(saved.history.threads);
+      if (saved.prunedThreadCount > 0 || saved.prunedMessageCount > 0) {
+        setChatHistoryNotice("Older saved chats were removed to free browser storage. The new chat was preserved.");
+      } else {
+        setChatHistoryNotice(null);
+      }
       setError(null);
     } catch (historyError) {
       setError(historyError instanceof Error
         ? historyError.message
         : "The new chat could not be saved in project history.");
+      setChatThreads(nextThreads);
     }
-    setChatThreads(nextThreads);
     setActiveChatThreadId(nextThread.id);
     setMessages(nextThread.messages);
   }, [
@@ -1795,12 +1824,21 @@ export function CodingChatPanel() {
       updatedAt: now,
     };
 
+    let activeThreadToShow = nextActiveThread;
     try {
-      saveCodingChatHistory(workspaceId, history);
+      const saved = saveCodingChatHistory(workspaceId, history);
+      activeThreadToShow = saved.history.threads.find((thread) => thread.id === nextActiveThread.id)
+        ?? nextActiveThread;
       savedChatHistorySignatureRef.current = JSON.stringify({
         activeThreadId: history.activeThreadId,
-        threads: history.threads,
+        threads: saved.history.threads,
       });
+      if (saved.prunedThreadCount > 0 || saved.prunedMessageCount > 0) {
+        setChatHistoryNotice("Older saved chats were removed to free browser storage. The active chat was preserved.");
+      } else {
+        setChatHistoryNotice(null);
+      }
+      setChatThreads(saved.history.threads);
     } catch (historyError) {
       setError(historyError instanceof Error
         ? historyError.message
@@ -1808,8 +1846,7 @@ export function CodingChatPanel() {
       return;
     }
 
-    setChatThreads(nextThreads);
-    setActiveChatThreadId(nextActiveThread.id);
+    setActiveChatThreadId(activeThreadToShow.id);
     if (threadId === activeChatThreadId) {
       abortRef.current?.abort();
       setLoading(false);
@@ -1817,7 +1854,7 @@ export function CodingChatPanel() {
       setInput("");
       setAttachedFileNames([]);
       setAttachedImages([]);
-      setMessages(nextActiveThread.messages);
+      setMessages(activeThreadToShow.messages);
     }
     setError(null);
   }, [activeChatThreadId, chatHistoryWorkspaceId, chatThreads, workspaceId]);
@@ -3148,6 +3185,7 @@ export function CodingChatPanel() {
     setLoading(true);
     setStatus("Nexus Code is working");
     setError(null);
+    setChatHistoryNotice(null);
     setContextScopeNotice(null);
     setFullContextNotice(false);
     const userMessage: CodingStoredMessage = {
@@ -4263,6 +4301,11 @@ export function CodingChatPanel() {
           )}
 
           <div className="shrink-0 border-t border-cyan-500/20 bg-slate-950/95 p-3 sm:p-4" style={{ paddingBottom: "max(env(safe-area-inset-bottom), 0.75rem)" }}>
+        {chatHistoryNotice && (
+          <p role="status" className="mb-3 rounded-xl border border-amber-400/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-100">
+            {chatHistoryNotice}
+          </p>
+        )}
         {(error || voiceError) && (
           <div className="mb-3 rounded-xl border border-rose-500/30 bg-rose-500/10 px-3 py-2">
             <p role="alert" className="text-xs text-rose-200">{error || voiceError}</p>

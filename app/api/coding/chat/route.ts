@@ -138,6 +138,7 @@ function buildSystemPrompt(
   const workspaceInspectionRule = `- Treat the current workspace snapshot and its file contents as the source of truth. Never use model memory, stale conversation excerpts, or previously generated code as a substitute for reading the current file.
 - Before proposing changes to an existing file, inspect its current contents in this request. If the file is omitted from the snapshot, use read_workspace_files to retrieve it yourself before answering; do not ask the user to pull it up when an internal read tool is available.
 - Check the current workspace paths before saying a file cannot be found. Only report it unavailable after confirming it is absent from the workspace and attempting any available read tool.
+  - Do not narrate a future file read as a substitute for doing it. Inspect the file first, then give the result; when continuing a discussion, re-check file paths mentioned in recent messages against the current workspace.
 `;
   const lineNumberRule = "- Attached source lines are prefixed with 1-based line numbers for reference only. Use them for precise citations, but never include the prefixes in generated code, nexus-file blocks, or patch search/replace text.\n";
   const visionRule = input.agent === "deepseek-flash"
@@ -474,7 +475,7 @@ export async function POST(request: NextRequest) {
                 workspaceFileToolAvailable,
               ),
               ...(messages ? { messages } : { prompt: generationPrompt }),
-              ...(hasTools ? { tools, maxSteps: 4 } : {}),
+              ...(hasTools ? { tools, maxSteps: 8 } : {}),
               onError: (error) => {
                 streamError = error;
               },

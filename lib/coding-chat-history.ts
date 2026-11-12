@@ -15,6 +15,12 @@ const LEGACY_HISTORY_KEY = "nexus-coding-chat";
 const LEGACY_MIGRATED_KEY = "nexus-coding-chat-history:migrated";
 const CodingLegacyMigrationMarkerSchema = z.literal("1");
 
+export type CodingChatHistorySaveResult = {
+  history: CodingChatHistory;
+  prunedThreadCount: number;
+  prunedMessageCount: number;
+};
+
 function getStorage(): Storage {
   if (typeof window === "undefined") {
     throw new Error("Coding chat history is available only in a browser.");
@@ -153,7 +159,7 @@ export function loadCodingChatHistory(
     threads,
     updatedAt: now,
   });
-  saveCodingChatHistory(workspaceId, history);
+  const saved = saveCodingChatHistory(workspaceId, history);
   if (legacyRaw !== null) {
     try {
       storage.removeItem(LEGACY_HISTORY_KEY);
@@ -162,16 +168,76 @@ export function loadCodingChatHistory(
       throw new Error("Chat history was saved, but old conversation data could not be migrated cleanly.");
     }
   }
-  return history;
+  return saved.history;
 }
 
-export function saveCodingChatHistory(workspaceId: string, rawHistory: unknown): void {
+function isQuotaExceeded(error: unknown): boolean {
+  if (typeof DOMException !== "undefined" && error instanceof DOMException) {
+    return error.name === "QuotaExceededError" || error.code === 22 || error.code === 1014;
+  }
+  return typeof error === "object"
+    && error !== null
+    && "name" in error
+    && error.name === "QuotaExceededError";
+}
+
+function pruneOldestHistoryItem(
+  history: CodingChatHistory,
+): { history: CodingChatHistory; prunedThreadCount: number; prunedMessageCount: number } | null {
+  const oldestInactiveThread = history.threads
+    .filter((thread) => thread.id !== history.activeThreadId)
+    .sort((left, right) => Date.parse(left.updatedAt) - Date.parse(right.updatedAt))[0];
+  if (oldestInactiveThread) {
+    return {
+      history: {
+        ...history,
+        threads: history.threads.filter((thread) => thread.id !== oldestInactiveThread.id),
+      },
+      prunedThreadCount: 1,
+      prunedMessageCount: 0,
+    };
+  }
+
+  const activeThread = history.threads.find((thread) => thread.id === history.activeThreadId);
+  if (!activeThread || activeThread.messages.length <= 2) return null;
+  return {
+    history: {
+      ...history,
+      threads: history.threads.map((thread) => (
+        thread.id === history.activeThreadId
+          ? { ...thread, messages: thread.messages.slice(1) }
+          : thread
+      )),
+    },
+    prunedThreadCount: 0,
+    prunedMessageCount: 1,
+  };
+}
+
+export function saveCodingChatHistory(workspaceId: string, rawHistory: unknown): CodingChatHistorySaveResult {
   const parsed = CodingChatHistorySchema.safeParse(rawHistory);
   if (!parsed.success) throw new Error("Chat history could not be validated before saving.");
-  try {
-    getStorage().setItem(historyKey(workspaceId), JSON.stringify(parsed.data));
-  } catch {
-    throw new Error("Chat history could not be saved in this browser. Check available local storage.");
+  const storage = getStorage();
+  const key = historyKey(workspaceId);
+  let history = parsed.data;
+  let prunedThreadCount = 0;
+  let prunedMessageCount = 0;
+  while (true) {
+    try {
+      storage.setItem(key, JSON.stringify(history));
+      return { history, prunedThreadCount, prunedMessageCount };
+    } catch (error) {
+      if (!isQuotaExceeded(error)) {
+        throw new Error("Chat history could not be saved in this browser.");
+      }
+      const pruned = pruneOldestHistoryItem(history);
+      if (!pruned) {
+        throw new Error("Browser storage is full. Older chats were removed, but the active conversation still could not be saved.");
+      }
+      history = pruned.history;
+      prunedThreadCount += pruned.prunedThreadCount;
+      prunedMessageCount += pruned.prunedMessageCount;
+    }
   }
 }
 
