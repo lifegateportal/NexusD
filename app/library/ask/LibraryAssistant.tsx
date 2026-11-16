@@ -1,6 +1,7 @@
 "use client";
 
 import { FormEvent, useState } from "react";
+import type { ReactNode } from "react";
 import { z } from "zod";
 
 const SourceSchema = z.object({
@@ -33,6 +34,128 @@ function formatTime(seconds: number): string {
   return hours > 0
     ? `${hours}:${String(minutes).padStart(2, "0")}:${String(remaining).padStart(2, "0")}`
     : `${minutes}:${String(remaining).padStart(2, "0")}`;
+}
+
+function renderInlineMarkdown(text: string, keyPrefix: string, sourcePrefix: string): ReactNode[] {
+  const pattern = /\*\*([^*]+)\*\*|\*([^*]+)\*|`([^`]+)`|\[(S\d+)\]|\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g;
+  const nodes: ReactNode[] = [];
+  let cursor = 0;
+  let match: RegExpExecArray | null;
+  let index = 0;
+
+  while ((match = pattern.exec(text)) !== null) {
+    if (match.index > cursor) nodes.push(text.slice(cursor, match.index));
+    const key = `${keyPrefix}-${index++}`;
+    if (match[1]) nodes.push(<strong key={key} className="font-semibold text-slate-100">{match[1]}</strong>);
+    else if (match[2]) nodes.push(<em key={key}>{match[2]}</em>);
+    else if (match[3]) nodes.push(<code key={key} className="rounded bg-slate-800 px-1.5 py-0.5 font-mono text-[0.9em] text-amber-200">{match[3]}</code>);
+    else if (match[4]) {
+      nodes.push(
+        <a
+          key={key}
+          href={`#source-${sourcePrefix}-${match[4]}`}
+          className="whitespace-nowrap font-semibold text-amber-300 underline decoration-amber-500/40 underline-offset-2"
+          aria-label={`Jump to source ${match[4]}`}
+        >
+          [{match[4]}]
+        </a>,
+      );
+    } else if (match[5] && match[6]) {
+      nodes.push(
+        <a key={key} href={match[6]} target="_blank" rel="noreferrer" className="text-amber-300 underline underline-offset-2">
+          {match[5]}
+        </a>,
+      );
+    }
+    cursor = match.index + match[0].length;
+  }
+  if (cursor < text.length) nodes.push(text.slice(cursor));
+  return nodes;
+}
+
+function MarkdownMessage({ content, sourcePrefix }: { content: string; sourcePrefix: string }) {
+  const lines = content.replace(/\r\n?/g, "\n").split("\n");
+  const blocks: ReactNode[] = [];
+  let index = 0;
+
+  while (index < lines.length) {
+    const line = lines[index].trim();
+    if (!line) {
+      index += 1;
+      continue;
+    }
+
+    const heading = line.match(/^(#{1,3})\s+(.+)$/)
+      ?? line.match(/^\*\*([^*]+)\*\*$/);
+    if (heading) {
+      const text = heading[2] ?? heading[1];
+      blocks.push(
+        <h3 key={`heading-${index}`} className="mb-2 mt-5 text-sm font-bold tracking-wide text-white first:mt-0">
+          {renderInlineMarkdown(text, `heading-${index}`, sourcePrefix)}
+        </h3>,
+      );
+      index += 1;
+      continue;
+    }
+
+    if (/^[-*]\s+/.test(line)) {
+      const items: ReactNode[] = [];
+      while (index < lines.length && /^[-*]\s+/.test(lines[index].trim())) {
+        const item = lines[index].trim().replace(/^[-*]\s+/, "");
+        items.push(
+          <li key={`list-${index}`} className="pl-1">
+            {renderInlineMarkdown(item, `list-${index}`, sourcePrefix)}
+          </li>,
+        );
+        index += 1;
+      }
+      blocks.push(
+        <ul key={`ul-${index}`} className="my-2 list-disc space-y-1.5 pl-5 marker:text-amber-500">
+          {items}
+        </ul>,
+      );
+      continue;
+    }
+
+    if (/^\d+[.)]\s+/.test(line)) {
+      const items: ReactNode[] = [];
+      while (index < lines.length && /^\d+[.)]\s+/.test(lines[index].trim())) {
+        const item = lines[index].trim().replace(/^\d+[.)]\s+/, "");
+        items.push(
+          <li key={`ordered-${index}`} className="pl-1">
+            {renderInlineMarkdown(item, `ordered-${index}`, sourcePrefix)}
+          </li>,
+        );
+        index += 1;
+      }
+      blocks.push(
+        <ol key={`ol-${index}`} className="my-2 list-decimal space-y-1.5 pl-5 marker:text-amber-500">
+          {items}
+        </ol>,
+      );
+      continue;
+    }
+
+    const paragraph: string[] = [];
+    while (index < lines.length && lines[index].trim()) {
+      const next = lines[index].trim();
+      if (paragraph.length > 0 && (
+        /^#{1,3}\s+/.test(next)
+        || /^\*\*([^*]+)\*\*$/.test(next)
+        || /^[-*]\s+/.test(next)
+        || /^\d+[.)]\s+/.test(next)
+      )) break;
+      paragraph.push(next);
+      index += 1;
+    }
+    blocks.push(
+      <p key={`paragraph-${index}`} className="my-2 first:mt-0 last:mb-0">
+        {renderInlineMarkdown(paragraph.join(" "), `paragraph-${index}`, sourcePrefix)}
+      </p>,
+    );
+  }
+
+  return <div className="leading-7">{blocks}</div>;
 }
 
 export default function LibraryAssistant() {
@@ -91,19 +214,22 @@ export default function LibraryAssistant() {
         )}
         {messages.map((message, index) => (
           <article key={`${message.role}-${index}`} className={`max-w-3xl ${message.role === "user" ? "ml-auto" : ""}`}>
-            <p className={`whitespace-pre-wrap rounded-2xl px-4 py-3 text-sm leading-relaxed ${
+            <div className={`rounded-2xl px-4 py-3 text-sm leading-relaxed ${
               message.role === "user"
                 ? "bg-amber-500 text-slate-950"
                 : "border border-slate-800 bg-slate-900/70 text-slate-200"
             }`}>
-              {message.content}
-            </p>
+              {message.role === "assistant"
+                ? <MarkdownMessage content={message.content} sourcePrefix={String(index)} />
+                : <p className="whitespace-pre-wrap">{message.content}</p>}
+            </div>
             {message.sources && message.sources.length > 0 && (
               <div className="mt-3 space-y-2">
                 <p className="text-[10px] font-bold uppercase tracking-[0.2em] text-slate-500">Sources</p>
                 {message.sources.map((source) => (
                   <a
                     key={source.ref}
+                    id={`source-${index}-${source.ref}`}
                     href={source.href}
                     target={source.kind === "video" ? "_blank" : undefined}
                     rel={source.kind === "video" ? "noreferrer" : undefined}
