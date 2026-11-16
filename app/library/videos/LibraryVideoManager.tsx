@@ -1,258 +1,131 @@
 "use client";
 
-import { FormEvent, useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { z } from "zod";
 import { LibraryVideoCatalogSchema } from "@/lib/schemas/library-video";
 
-const TranscriptResponseSchema = z.object({
-  transcript: z.string().min(1),
-  videoId: z.string().regex(/^[A-Za-z0-9_-]{11}$/),
-  segments: z.array(z.object({
-    startSeconds: z.number().finite().min(0),
-    endSeconds: z.number().finite().min(0),
-    text: z.string().min(1),
-  }).strict()).min(1),
-}).strict();
-
-const UploadedMediaTranscriptSchema = z.object({
-  transcript: z.string().min(1),
-  segments: TranscriptResponseSchema.shape.segments,
-}).strict();
-
-const YouTubeAudioTranscriptSchema = TranscriptResponseSchema;
-
-const SaveResponseSchema = z.object({
-  video: LibraryVideoCatalogSchema.shape.videos.element,
-}).strict();
-
-const ErrorResponseSchema = z.object({ error: z.string() });
-const MAX_UPLOAD_BYTES = 100 * 1024 * 1024;
+type Video = z.infer<typeof LibraryVideoCatalogSchema>["videos"][number];
+const ErrorSchema = z.object({ error: z.string() });
 
 export default function LibraryVideoManager() {
-  const [catalog, setCatalog] = useState<z.infer<typeof LibraryVideoCatalogSchema> | null>(null);
-  const [url, setUrl] = useState("");
-  const [title, setTitle] = useState("");
-  const [mediaFile, setMediaFile] = useState<File | null>(null);
+  const [videos, setVideos] = useState<Video[]>([]);
+  const [activeVideoId, setActiveVideoId] = useState<string | null>(null);
+  const [query, setQuery] = useState("");
   const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
-  const [progress, setProgress] = useState("");
   const [error, setError] = useState("");
-  const [notice, setNotice] = useState("");
-  const mediaInputRef = useRef<HTMLInputElement>(null);
-
-  async function loadVideos() {
-    const response = await fetch("/api/library/videos");
-    const body: unknown = await response.json();
-    if (!response.ok) {
-      const parsedError = ErrorResponseSchema.safeParse(body);
-      throw new Error(parsedError.success ? parsedError.data.error : "Could not load videos.");
-    }
-    const parsed = LibraryVideoCatalogSchema.safeParse(body);
-    if (!parsed.success) throw new Error("The video catalog returned invalid data.");
-    setCatalog(parsed.data);
-  }
 
   useEffect(() => {
-    loadVideos()
-      .catch((loadError: unknown) => setError(loadError instanceof Error ? loadError.message : "Could not load videos."))
-      .finally(() => setLoading(false));
-  }, []);
-
-  async function addVideo(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    setSaving(true);
-    setError("");
-    setNotice("");
-    try {
-      let segments: z.infer<typeof TranscriptResponseSchema>["segments"];
-      if (mediaFile) {
-        if (mediaFile.size > MAX_UPLOAD_BYTES) {
-          throw new Error("Media files must be 100 MB or smaller. Select a smaller file or use the YouTube URL transcription option.");
-        }
-        setProgress("Transcribing uploaded audio/video…");
-        const formData = new FormData();
-        formData.set("file", mediaFile);
-        const response = await fetch("/api/transcribe", { method: "POST", body: formData });
+    let active = true;
+    fetch("/api/library/videos", { cache: "no-store" })
+      .then(async (response) => {
         const body: unknown = await response.json();
         if (!response.ok) {
-          const parsedError = ErrorResponseSchema.safeParse(body);
-          throw new Error(parsedError.success ? parsedError.data.error : `Could not transcribe the uploaded media (HTTP ${response.status}).`);
+          const parsed = ErrorSchema.safeParse(body);
+          throw new Error(parsed.success ? parsed.data.error : `Could not load videos (HTTP ${response.status}).`);
         }
-        const parsed = UploadedMediaTranscriptSchema.safeParse(body);
-        if (!parsed.success) throw new Error("The audio transcription response did not contain timestamped speech.");
-        segments = parsed.data.segments;
-      } else {
-        setProgress("Checking YouTube captions…");
-        const captionsResponse = await fetch("/api/fetch-youtube-transcript", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ url }),
-        });
-        const captionsBody: unknown = await captionsResponse.json();
-        const captions = captionsResponse.ok ? TranscriptResponseSchema.safeParse(captionsBody) : null;
-        if (captions?.success) {
-          segments = captions.data.segments;
-        } else {
-          setProgress("Captions unavailable; transcribing the YouTube audio…");
-          const audioResponse = await fetch("/api/library/videos/transcribe-youtube", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ url }),
-          });
-          const audioBody: unknown = await audioResponse.json();
-          if (!audioResponse.ok) {
-            const parsedError = ErrorResponseSchema.safeParse(audioBody);
-            throw new Error(parsedError.success
-              ? `YouTube captions were unavailable. Audio transcription failed: ${parsedError.data.error}`
-              : "YouTube captions were unavailable and audio transcription failed.");
-          }
-          const audioTranscript = YouTubeAudioTranscriptSchema.safeParse(audioBody);
-          if (!audioTranscript.success) throw new Error("Audio transcription returned no timestamped speech.");
-          segments = audioTranscript.data.segments;
-        }
-      }
-
-      const saveResponse = await fetch("/api/library/videos", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          url,
-          title,
-          segments,
-        }),
+        const parsed = LibraryVideoCatalogSchema.safeParse(body);
+        if (!parsed.success) throw new Error("The video catalog has an invalid format.");
+        if (active) setVideos(parsed.data.videos);
+      })
+      .catch((loadError: unknown) => {
+        if (active) setError(loadError instanceof Error ? loadError.message : "Could not load videos.");
+      })
+      .finally(() => {
+        if (active) setLoading(false);
       });
-      const saveBody: unknown = await saveResponse.json();
-      if (!saveResponse.ok) {
-        const parsedError = ErrorResponseSchema.safeParse(saveBody);
-        throw new Error(parsedError.success ? parsedError.data.error : "Could not save this video.");
-      }
-      const saved = SaveResponseSchema.safeParse(saveBody);
-      if (!saved.success) throw new Error("The saved video response was invalid.");
-      setCatalog((current) => ({
-        updatedAt: new Date().toISOString(),
-        videos: [saved.data.video, ...(current?.videos ?? []).filter((video) => video.videoId !== saved.data.video.videoId)],
-      }));
-      setUrl("");
-      setTitle("");
-      setMediaFile(null);
-      if (mediaInputRef.current) mediaInputRef.current.value = "";
-      setNotice("Video added and its transcript is ready for questions.");
-    } catch (requestError) {
-      setError(requestError instanceof Error ? requestError.message : "Could not add this video.");
-    } finally {
-      setSaving(false);
-      setProgress("");
-    }
-  }
+    return () => { active = false; };
+  }, []);
 
-  async function removeVideo(videoId: string) {
-    setError("");
-    setNotice("");
-    try {
-      const response = await fetch("/api/library/videos", {
-        method: "DELETE",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ videoId }),
-      });
-      const body: unknown = await response.json();
-      if (!response.ok) {
-        const parsedError = ErrorResponseSchema.safeParse(body);
-        throw new Error(parsedError.success ? parsedError.data.error : "Could not remove this video.");
-      }
-      setCatalog((current) => current
-        ? { ...current, videos: current.videos.filter((video) => video.videoId !== videoId) }
-        : current);
-      setNotice("Video removed from the library.");
-    } catch (requestError) {
-      setError(requestError instanceof Error ? requestError.message : "Could not remove this video.");
-    }
-  }
+  const filteredVideos = useMemo(() => {
+    const needle = query.trim().toLocaleLowerCase();
+    return videos.filter((video) => !needle || video.title.toLocaleLowerCase().includes(needle));
+  }, [query, videos]);
 
   return (
-    <div className="space-y-8">
-      <form onSubmit={addVideo} className="rounded-2xl border border-slate-800 bg-slate-900/40 p-4 sm:p-6">
-        <h2 className="text-lg font-semibold text-white">Add a YouTube video</h2>
-        <p className="mt-1 text-sm text-slate-400">We use captions when available; otherwise we transcribe the audio. The audio is processed for transcription and is not stored.</p>
-        <div className="mt-5 grid gap-4 sm:grid-cols-2">
-          <label className="block text-xs font-semibold text-slate-400">
-            YouTube URL
-            <input
-              value={url}
-              onChange={(event) => setUrl(event.target.value)}
-              type="url"
-              required
-              placeholder="https://youtube.com/watch?v=…"
-              className="mt-2 min-h-12 w-full rounded-xl border border-slate-700 bg-slate-950 px-3 text-base text-white outline-none focus:border-amber-500"
-            />
-          </label>
-          <label className="block text-xs font-semibold text-slate-400">
-            Video title
-            <input
-              value={title}
-              onChange={(event) => setTitle(event.target.value)}
-              required
-              maxLength={200}
-              placeholder="Give this video a title"
-              className="mt-2 min-h-12 w-full rounded-xl border border-slate-700 bg-slate-950 px-3 text-base text-white outline-none focus:border-amber-500"
-            />
-          </label>
+    <div className="space-y-6 pb-20 lg:pb-0">
+      <header className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+        <div>
+          <p className="text-[10px] font-bold uppercase tracking-[0.25em] text-cyan-300">Watch · Listen · Learn</p>
+          <h1 className="mt-2 text-3xl font-bold tracking-tight text-white sm:text-4xl">Video Library</h1>
+          <p className="mt-2 max-w-2xl text-sm leading-relaxed text-slate-400">
+            Watch approved Lifegate Broadcast videos, or ask the Library to find a specific answer in their transcripts.
+          </p>
         </div>
-        <label className="mt-4 block text-xs font-semibold text-slate-400">
-          Or upload the source audio/video (optional, max 100 MB)
+        <label className="w-full sm:max-w-xs">
+          <span className="sr-only">Search videos</span>
           <input
-            ref={mediaInputRef}
-            type="file"
-            accept="audio/*,video/*"
-            onChange={(event) => {
-              const file = event.target.files?.[0] ?? null;
-              setMediaFile(file);
-              if (file && file.size > MAX_UPLOAD_BYTES) {
-                setError("This file is over the 100 MB upload limit. Select a smaller file or use the YouTube URL transcription option.");
-              } else {
-                setError("");
-              }
-            }}
-            className="mt-2 block min-h-12 w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 text-base text-slate-300 file:mr-3 file:min-h-10 file:rounded-lg file:border-0 file:bg-slate-800 file:px-3 file:text-sm file:font-semibold file:text-white"
+            type="search"
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder="Search videos…"
+            className="min-h-12 w-full rounded-xl border border-slate-700 bg-slate-900 px-4 text-base text-white placeholder:text-slate-500 focus:border-cyan-400 focus:outline-none"
           />
-          {mediaFile && <span className="mt-1 block font-normal text-slate-500">{mediaFile.name}</span>}
         </label>
-        <button
-          type="submit"
-          disabled={saving}
-          className="mt-5 min-h-12 rounded-xl bg-amber-500 px-5 text-sm font-bold text-slate-950 disabled:opacity-60"
-        >
-          {saving ? progress || "Preparing transcript…" : "Add video"}
-        </button>
-        {error && <p role="alert" className="mt-4 rounded-xl border border-rose-900 bg-rose-950/40 p-3 text-sm text-rose-200">{error}</p>}
-        {notice && <p role="status" className="mt-4 rounded-xl border border-emerald-900 bg-emerald-950/30 p-3 text-sm text-emerald-200">{notice}</p>}
-      </form>
+      </header>
 
-      <section>
-        <div className="mb-4 flex items-center justify-between gap-3">
-          <h2 className="text-lg font-semibold text-white">Published videos</h2>
-          <a href="/library/ask" className="flex min-h-12 items-center rounded-xl border border-slate-700 px-4 text-sm font-semibold text-slate-300">Ask about these videos</a>
-        </div>
-        {loading ? (
-          <p className="py-8 text-sm text-slate-500">Loading videos…</p>
-        ) : !catalog || catalog.videos.length === 0 ? (
-          <p className="rounded-2xl border border-dashed border-slate-800 p-8 text-center text-sm text-slate-500">No videos have been added yet.</p>
-        ) : (
-          <ul className="space-y-3">
-            {catalog.videos.map((video) => (
-              <li key={video.videoId} className="flex flex-col gap-3 rounded-2xl border border-slate-800 bg-slate-900/30 p-4 sm:flex-row sm:items-center">
-                <div className="min-w-0 flex-1">
-                  <h3 className="font-semibold text-white">{video.title}</h3>
-                  <p className="mt-1 text-xs text-slate-500">Transcript indexed · {new Date(video.addedAt).toLocaleDateString()}</p>
+      {error && <p role="alert" className="rounded-xl border border-rose-900 bg-rose-950/40 p-4 text-sm text-rose-200">{error}</p>}
+      {loading ? (
+        <p className="py-12 text-center text-sm text-slate-400">Loading the approved video library…</p>
+      ) : filteredVideos.length === 0 ? (
+        <p className="rounded-2xl border border-dashed border-slate-700 p-10 text-center text-sm text-slate-400">
+          {videos.length ? "No videos match that search." : "No videos have been published yet."}
+        </p>
+      ) : (
+        <ul className="grid gap-5 sm:grid-cols-2 xl:grid-cols-3">
+          {filteredVideos.map((video) => {
+            const isPlaying = activeVideoId === video.videoId;
+            return (
+              <li key={video.videoId} className="overflow-hidden rounded-2xl border border-slate-800 bg-slate-900/50">
+                <div className="aspect-video bg-slate-950">
+                  {isPlaying ? (
+                    <iframe
+                      className="h-full w-full"
+                      src={`https://www.youtube-nocookie.com/embed/${encodeURIComponent(video.videoId)}?autoplay=1&rel=0`}
+                      title={video.title}
+                      allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+                      referrerPolicy="strict-origin-when-cross-origin"
+                      allowFullScreen
+                    />
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => setActiveVideoId(video.videoId)}
+                      className="group relative flex h-full w-full items-center justify-center focus-visible:outline focus-visible:outline-2 focus-visible:outline-cyan-300"
+                      aria-label={`Play ${video.title}`}
+                    >
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img
+                        src={`https://i.ytimg.com/vi/${video.videoId}/hqdefault.jpg`}
+                        alt=""
+                        loading="lazy"
+                        className="absolute inset-0 h-full w-full object-cover opacity-80"
+                      />
+                      <span className="relative flex min-h-12 items-center gap-2 rounded-full bg-slate-950/90 px-5 text-sm font-bold text-white">
+                        <svg viewBox="0 0 24 24" aria-hidden="true" className="h-5 w-5 fill-current"><path d="M8 5v14l11-7z" /></svg>
+                        Play video
+                      </span>
+                    </button>
+                  )}
                 </div>
-                <div className="flex flex-wrap gap-2">
-                  <a href={video.youtubeUrl} target="_blank" rel="noreferrer" className="flex min-h-12 items-center rounded-xl border border-slate-700 px-4 text-sm font-semibold text-slate-300">Watch ↗</a>
-                  <button type="button" onClick={() => removeVideo(video.videoId)} className="min-h-12 rounded-xl border border-rose-900/70 px-4 text-sm font-semibold text-rose-300">Remove</button>
+                <div className="p-4">
+                  <h2 className="font-semibold leading-snug text-white">{video.title}</h2>
+                  <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
+                    <span className="text-xs text-slate-500">Approved for watching and transcript search</span>
+                    <a
+                      href={video.youtubeUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="flex min-h-12 items-center rounded-lg px-3 text-xs font-semibold text-cyan-300"
+                    >
+                      Open on YouTube
+                    </a>
+                  </div>
                 </div>
               </li>
-            ))}
-          </ul>
-        )}
-      </section>
+            );
+          })}
+        </ul>
+      )}
     </div>
   );
 }

@@ -8,6 +8,7 @@ type NavItem = { id: string; label: string; href?: string };
 const NAV_ITEMS: NavItem[] = [
   { id: "overview", label: "Academy" },
   { id: "ebook", label: "Book" },
+  { id: "videos", label: "Videos", href: "/ebook/videos" },
   { id: "coding", label: "Code", href: "/coding" },
   { id: "translate", label: "Translate", href: "/translate" },
   { id: "projects", label: "Projects" },
@@ -33,6 +34,15 @@ function IconEbook() {
       <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20" strokeLinecap="round" strokeLinejoin="round" />
       <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z" strokeLinecap="round" strokeLinejoin="round" />
       <path d="M9 7h7M9 11h5" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function IconVideo() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} className="h-5 w-5">
+      <rect x="3" y="5" width="13" height="14" rx="2" />
+      <path d="m16 10 5-3v10l-5-3" strokeLinejoin="round" />
     </svg>
   );
 }
@@ -86,6 +96,7 @@ function IconSermon() {
 const NAV_ICONS: Record<string, () => React.JSX.Element> = {
   overview: IconGrid,
   ebook: IconEbook,
+  videos: IconVideo,
   coding: IconCoding,
   translate: IconTranslate,
   projects: IconProjects,

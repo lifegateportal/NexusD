@@ -30,7 +30,7 @@ const nextConfig: NextConfig = {
       "./node_modules/@sparticuz/chromium/bin/**/*",
       "./node_modules/@sparticuz/chromium/build/**/*",
     ],
-    "/api/library/videos/transcribe-youtube": ["./node_modules/youtube-dl-exec/bin/**/*"],
+    "/api/ebook/videos": ["./node_modules/youtube-dl-exec/bin/**/*"],
   },
   typescript: {
     ignoreBuildErrors: true,
