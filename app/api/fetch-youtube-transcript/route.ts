@@ -32,45 +32,61 @@ const WEB_HEADERS = {
 // Android UA — used when calling InnerTube as ANDROID client
 const ANDROID_UA = "com.google.android.youtube/17.36.4 (Linux; U; Android 12; GB) gzip";
 
-function parseXml(xml: string): string {
-  return [...xml.matchAll(/<text[^>]*>([^<]*)<\/text>/g)]
-    .map((m) =>
-      (m[1] ?? "")
-        .replace(/&#39;/g, "'")
-        .replace(/&amp;/g, "&")
-        .replace(/&lt;/g, "<")
-        .replace(/&gt;/g, ">")
-        .replace(/&quot;/g, '"')
-        .replace(/\n/g, " ")
-        .trim()
-    )
-    .filter(Boolean)
-    .join(" ");
-}
+type CaptionSegment = { startSeconds: number; endSeconds: number; text: string };
 
-function parseJson3(data: unknown): string {
-  type Seg = { utf8?: string };
-  type Event = { segs?: Seg[] };
-  const events: Event[] = (data as { events?: Event[] })?.events ?? [];
-  return events
-    .filter((e) => e.segs)
-    .flatMap((e) => (e.segs ?? []).map((s) => s.utf8 ?? ""))
-    .join(" ")
+function decodeCaptionText(value: string): string {
+  return value
+    .replace(/&#39;/g, "'")
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
     .replace(/\n/g, " ")
     .replace(/\s+/g, " ")
     .trim();
 }
 
+function parseXml(xml: string): CaptionSegment[] {
+  return [...xml.matchAll(/<text\b([^>]*)>([\s\S]*?)<\/text>/g)]
+    .map((match) => {
+      const start = Number(match[1]?.match(/\bstart="([\d.]+)"/)?.[1] ?? 0);
+      const duration = Number(match[1]?.match(/\bdur="([\d.]+)"/)?.[1] ?? 0);
+      return {
+        startSeconds: start,
+        endSeconds: start + duration,
+        text: decodeCaptionText(match[2] ?? ""),
+      };
+    })
+    .filter((segment) => segment.text);
+}
+
+function parseJson3(data: unknown): CaptionSegment[] {
+  type Seg = { utf8?: string };
+  type Event = { tStartMs?: number; dDurationMs?: number; segs?: Seg[] };
+  const events: Event[] = (data as { events?: Event[] })?.events ?? [];
+  return events
+    .filter((e) => e.segs)
+    .map((event) => {
+      const startSeconds = (event.tStartMs ?? 0) / 1000;
+      return {
+        startSeconds,
+        endSeconds: startSeconds + (event.dDurationMs ?? 0) / 1000,
+        text: decodeCaptionText((event.segs ?? []).map((segment) => segment.utf8 ?? "").join("")),
+      };
+    })
+    .filter((segment) => segment.text);
+}
+
 type CaptionTrack = { baseUrl: string; languageCode: string; kind?: string };
 
 /** Fetch a parsed transcript from a caption baseUrl (supports json3 + xml). */
-async function fetchCaptionUrl(baseUrl: string): Promise<string> {
+async function fetchCaptionUrl(baseUrl: string): Promise<CaptionSegment[]> {
   const json3Res = await fetch(baseUrl + "&fmt=json3", { headers: WEB_HEADERS });
   if (json3Res.ok) {
     const text = json3Res.status !== 204 ? await json3Res.text() : "";
     if (text && text.length > 10) {
       const parsed = parseJson3(JSON.parse(text) as unknown);
-      if (parsed.length > 50) return parsed;
+      if (parsed.length > 0) return parsed;
     }
   }
   // Fall back to XML
@@ -78,7 +94,7 @@ async function fetchCaptionUrl(baseUrl: string): Promise<string> {
   if (!xmlRes.ok) throw new Error(`Caption download failed: HTTP ${xmlRes.status}`);
   const xml = await xmlRes.text();
   const parsed = parseXml(xml);
-  if (!parsed) throw new Error("Transcript parsed but was empty.");
+  if (parsed.length === 0) throw new Error("Transcript parsed but was empty.");
   return parsed;
 }
 
@@ -91,7 +107,7 @@ function pickTrack(tracks: CaptionTrack[]): CaptionTrack | undefined {
   );
 }
 
-async function fetchTranscript(videoId: string): Promise<string> {
+async function fetchTranscript(videoId: string): Promise<CaptionSegment[]> {
   // ── Strategy 1: InnerTube ANDROID client ─────────────────────────────
   // YouTube's internal player API. The ANDROID client identity bypasses
   // bot-detection that blocks plain web scraping from cloud/Codespace IPs.
@@ -125,8 +141,8 @@ async function fetchTranscript(videoId: string): Promise<string> {
       const track = pickTrack(tracks);
       if (!track?.baseUrl) continue;
 
-      const transcript = await fetchCaptionUrl(track.baseUrl);
-      if (transcript.length > 50) return transcript;
+      const segments = await fetchCaptionUrl(track.baseUrl);
+      if (segments.map((segment) => segment.text).join(" ").length > 50) return segments;
     } catch { /* try next client */ }
   }
 
@@ -141,8 +157,8 @@ async function fetchTranscript(videoId: string): Promise<string> {
         if (!res.ok) continue;
         const raw = await res.text();
         if (!raw || raw === "{}" || raw.length < 20) continue;
-        const parsed = parseJson3(JSON.parse(raw) as unknown);
-        if (parsed.length > 80) return parsed;
+        const segments = parseJson3(JSON.parse(raw) as unknown);
+        if (segments.map((segment) => segment.text).join(" ").length > 80) return segments;
       } catch { /* try next */ }
     }
   }
@@ -190,8 +206,9 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const transcript = await fetchTranscript(videoId);
-    return NextResponse.json({ transcript, videoId });
+    const segments = await fetchTranscript(videoId);
+    const transcript = segments.map((segment) => segment.text).join(" ");
+    return NextResponse.json({ transcript, segments, videoId });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Failed to fetch transcript";
     return NextResponse.json({ error: message, ...(videoId ? { videoId } : {}) }, { status: 500 });

@@ -162,7 +162,7 @@ export default function LibraryGrid({ books }: { books: PublishedBookEntry[] }) 
           <p className="mb-1 text-slate-400">No books match your search.</p>
           <button
             onClick={() => setQuery("")}
-            className="mt-3 text-sm text-slate-600 underline-offset-2 transition hover:text-slate-400 hover:underline"
+            className="mt-3 inline-flex min-h-12 items-center px-4 text-sm text-slate-400 underline-offset-2 transition hover:text-white hover:underline"
           >
             Clear search
           </button>
