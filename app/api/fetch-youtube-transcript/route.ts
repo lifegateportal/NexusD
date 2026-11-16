@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 
 export const runtime = "nodejs";
-export const maxDuration = 30;
+export const maxDuration = 60;
 
 const RequestSchema = z.object({
   url: z.string().min(1),
@@ -29,18 +29,21 @@ const WEB_HEADERS = {
   "Accept-Language": "en-US,en;q=0.9",
   "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
 };
-// Android UA — used when calling InnerTube as ANDROID client
-const ANDROID_UA = "com.google.android.youtube/17.36.4 (Linux; U; Android 12; GB) gzip";
+const ANDROID_UA = "com.google.android.youtube/19.09.37 (Linux; U; Android 13; en_US) gzip";
+const IOS_UA = "com.google.ios.youtube/19.09.3 (iPhone16,2; U; CPU iOS 17_4 like Mac OS X)";
+const CAPTION_TIMEOUT_MS = 8_000;
 
 type CaptionSegment = { startSeconds: number; endSeconds: number; text: string };
 
 function decodeCaptionText(value: string): string {
   return value
-    .replace(/&#39;/g, "'")
+    .replace(/&#39;|&#x27;/gi, "'")
     .replace(/&amp;/g, "&")
     .replace(/&lt;/g, "<")
     .replace(/&gt;/g, ">")
     .replace(/&quot;/g, '"')
+    .replace(/&#(\d+);/g, (_, code: string) => String.fromCodePoint(Number(code)))
+    .replace(/&#x([0-9a-f]+);/gi, (_, code: string) => String.fromCodePoint(parseInt(code, 16)))
     .replace(/\n/g, " ")
     .replace(/\s+/g, " ")
     .trim();
@@ -81,7 +84,12 @@ type CaptionTrack = { baseUrl: string; languageCode: string; kind?: string };
 
 /** Fetch a parsed transcript from a caption baseUrl (supports json3 + xml). */
 async function fetchCaptionUrl(baseUrl: string): Promise<CaptionSegment[]> {
-  const json3Res = await fetch(baseUrl + "&fmt=json3", { headers: WEB_HEADERS });
+  const json3Url = new URL(baseUrl);
+  json3Url.searchParams.set("fmt", "json3");
+  const json3Res = await fetch(json3Url, {
+    headers: WEB_HEADERS,
+    signal: AbortSignal.timeout(CAPTION_TIMEOUT_MS),
+  });
   if (json3Res.ok) {
     const text = json3Res.status !== 204 ? await json3Res.text() : "";
     if (text && text.length > 10) {
@@ -89,8 +97,10 @@ async function fetchCaptionUrl(baseUrl: string): Promise<CaptionSegment[]> {
       if (parsed.length > 0) return parsed;
     }
   }
-  // Fall back to XML
-  const xmlRes = await fetch(baseUrl, { headers: WEB_HEADERS });
+  const xmlRes = await fetch(baseUrl, {
+    headers: WEB_HEADERS,
+    signal: AbortSignal.timeout(CAPTION_TIMEOUT_MS),
+  });
   if (!xmlRes.ok) throw new Error(`Caption download failed: HTTP ${xmlRes.status}`);
   const xml = await xmlRes.text();
   const parsed = parseXml(xml);
@@ -101,76 +111,86 @@ async function fetchCaptionUrl(baseUrl: string): Promise<CaptionSegment[]> {
 /** Pick best English track from a list, preferring ASR auto-captions. */
 function pickTrack(tracks: CaptionTrack[]): CaptionTrack | undefined {
   return (
-    tracks.find((t) => t.languageCode.startsWith("en") && t.kind === "asr") ??
     tracks.find((t) => t.languageCode.startsWith("en")) ??
+    tracks.find((t) => t.kind !== "asr") ??
     tracks[0]
   );
 }
 
 async function fetchTranscript(videoId: string): Promise<CaptionSegment[]> {
-  // ── Strategy 1: InnerTube ANDROID client ─────────────────────────────
-  // YouTube's internal player API. The ANDROID client identity bypasses
-  // bot-detection that blocks plain web scraping from cloud/Codespace IPs.
+  const failures: string[] = [];
   for (const clientConfig of [
-    { clientName: "ANDROID", clientVersion: "17.36.4", androidSdkVersion: 31 },
-    { clientName: "WEB_EMBEDDED_PLAYER", clientVersion: "1.20231121.01.00" },
+    {
+      clientId: "3",
+      userAgent: ANDROID_UA,
+      version: "19.09.37",
+      client: { clientName: "ANDROID", clientVersion: "19.09.37", androidSdkVersion: 33 },
+    },
+    {
+      clientId: "5",
+      userAgent: IOS_UA,
+      version: "19.09.3",
+      client: { clientName: "IOS", clientVersion: "19.09.3", deviceModel: "iPhone16,2" },
+    },
+    {
+      clientId: "56",
+      userAgent: WEB_HEADERS["User-Agent"],
+      version: "1.20231121.01.00",
+      client: { clientName: "WEB_EMBEDDED_PLAYER", clientVersion: "1.20231121.01.00" },
+    },
   ]) {
     try {
       const res = await fetch("https://www.youtube.com/youtubei/v1/player?prettyPrint=false", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          "User-Agent": ANDROID_UA,
+          "User-Agent": clientConfig.userAgent,
           "Accept-Language": "en-US,en;q=0.9",
-          "X-YouTube-Client-Name": "3",
-          "X-YouTube-Client-Version": clientConfig.clientVersion,
+          "X-YouTube-Client-Name": clientConfig.clientId,
+          "X-YouTube-Client-Version": clientConfig.version,
         },
         body: JSON.stringify({
           videoId,
           context: {
-            client: { hl: "en", gl: "US", ...clientConfig },
+            client: { hl: "en", gl: "US", ...clientConfig.client },
           },
         }),
+        signal: AbortSignal.timeout(CAPTION_TIMEOUT_MS),
       });
-      if (!res.ok) continue;
+      if (!res.ok) {
+        failures.push(`YouTube player (${clientConfig.client.clientName}): HTTP ${res.status}`);
+        continue;
+      }
 
       const data = (await res.json()) as {
         captions?: { playerCaptionsTracklistRenderer?: { captionTracks?: CaptionTrack[] } };
       };
       const tracks = data?.captions?.playerCaptionsTracklistRenderer?.captionTracks ?? [];
       const track = pickTrack(tracks);
-      if (!track?.baseUrl) continue;
+      if (!track?.baseUrl) {
+        failures.push(`YouTube player (${clientConfig.client.clientName}): no captions listed`);
+        continue;
+      }
 
       const segments = await fetchCaptionUrl(track.baseUrl);
       if (segments.map((segment) => segment.text).join(" ").length > 50) return segments;
-    } catch { /* try next client */ }
-  }
-
-  // ── Strategy 2: direct timedtext API ─────────────────────────────────
-  for (const lang of ["en", "en-US", "en-GB"]) {
-    for (const kind of ["asr", ""]) {
-      try {
-        const params = new URLSearchParams({ v: videoId, lang, fmt: "json3", ...(kind ? { kind } : {}) });
-        const res = await fetch(`https://www.youtube.com/api/timedtext?${params.toString()}`, {
-          headers: WEB_HEADERS,
-        });
-        if (!res.ok) continue;
-        const raw = await res.text();
-        if (!raw || raw === "{}" || raw.length < 20) continue;
-        const segments = parseJson3(JSON.parse(raw) as unknown);
-        if (segments.map((segment) => segment.text).join(" ").length > 80) return segments;
-      } catch { /* try next */ }
+    } catch (error) {
+      failures.push(`YouTube player (${clientConfig.client.clientName}): ${error instanceof Error ? error.message : "request failed"}`);
     }
   }
 
-  // ── Strategy 3: page scrape with consent cookie ───────────────────────
   const pageRes = await fetch(`https://www.youtube.com/watch?v=${videoId}`, {
-    headers: { ...WEB_HEADERS, Cookie: "CONSENT=YES+cb; YSC=aaaabbbb; VISITOR_INFO1_LIVE=ccccdddd;" },
+    headers: WEB_HEADERS,
+    signal: AbortSignal.timeout(CAPTION_TIMEOUT_MS),
+  }).catch((error: unknown) => {
+    failures.push(`YouTube watch page: ${error instanceof Error ? error.message : "request failed"}`);
+    return null;
   });
 
-  if (!pageRes.ok) {
+  if (!pageRes?.ok) {
+    const status = pageRes ? `HTTP ${pageRes.status}` : "network request failed";
     throw new Error(
-      `All fetch strategies failed (HTTP ${pageRes.status}). This video's captions are inaccessible from this server. Paste the transcript text directly into the pipeline input field instead.`
+      `Could not retrieve this video's captions (${status}). YouTube may block server-side caption access, or captions may be disabled. The library will try audio transcription next. ${failures.slice(-3).join("; ")}`
     );
   }
 
@@ -178,17 +198,15 @@ async function fetchTranscript(videoId: string): Promise<CaptionSegment[]> {
   const captionsIdx = html.indexOf('"captionTracks"');
   if (captionsIdx === -1) {
     throw new Error(
-      `YouTube is blocking transcript access from this server IP. Paste the transcript text directly into the pipeline input field (you can copy it from youtube.com/watch?v=${videoId} → ⋯ → Show transcript).`
+      "YouTube did not expose captions to the server. Captions may be disabled or blocked from server-side access; the library can try transcribing the video's audio instead."
     );
   }
 
-  const segment = html.slice(captionsIdx, captionsIdx + 4000);
-  const urlMatch = segment.match(/"baseUrl":"([^"]+)"/);
+  const segment = html.slice(captionsIdx, captionsIdx + 100_000);
+  const urlMatch = segment.match(/"baseUrl":"((?:\\.|[^"\\])*)"/);
   if (!urlMatch) throw new Error("Could not extract caption URL from page.");
 
-  const captionUrl = urlMatch[1].replace(/\\u([0-9a-fA-F]{4})/g, (_, c) =>
-    String.fromCharCode(parseInt(c, 16))
-  );
+  const captionUrl = JSON.parse(`"${urlMatch[1]}"`) as string;
   return fetchCaptionUrl(captionUrl);
 }
 

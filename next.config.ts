@@ -19,7 +19,7 @@ const nextConfig: NextConfig = {
       },
     ];
   },
-  serverExternalPackages: ["@deepgram/sdk", "epub-gen-memory", "pdfkit", "@sparticuz/chromium", "playwright-core"],
+  serverExternalPackages: ["@deepgram/sdk", "youtube-dl-exec", "epub-gen-memory", "pdfkit", "@sparticuz/chromium", "playwright-core"],
   experimental: {
     serverActions: { bodySizeLimit: "30mb" },
   },
@@ -30,6 +30,7 @@ const nextConfig: NextConfig = {
       "./node_modules/@sparticuz/chromium/bin/**/*",
       "./node_modules/@sparticuz/chromium/build/**/*",
     ],
+    "/api/library/videos/transcribe-youtube": ["./node_modules/youtube-dl-exec/bin/**/*"],
   },
   typescript: {
     ignoreBuildErrors: true,

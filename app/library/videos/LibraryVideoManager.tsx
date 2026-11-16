@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useEffect, useState } from "react";
+import { FormEvent, useEffect, useRef, useState } from "react";
 import { z } from "zod";
 import { LibraryVideoCatalogSchema } from "@/lib/schemas/library-video";
 
@@ -14,6 +14,13 @@ const TranscriptResponseSchema = z.object({
   }).strict()).min(1),
 }).strict();
 
+const UploadedMediaTranscriptSchema = z.object({
+  transcript: z.string().min(1),
+  segments: TranscriptResponseSchema.shape.segments,
+}).strict();
+
+const YouTubeAudioTranscriptSchema = TranscriptResponseSchema;
+
 const SaveResponseSchema = z.object({
   video: LibraryVideoCatalogSchema.shape.videos.element,
 }).strict();
@@ -24,10 +31,13 @@ export default function LibraryVideoManager() {
   const [catalog, setCatalog] = useState<z.infer<typeof LibraryVideoCatalogSchema> | null>(null);
   const [url, setUrl] = useState("");
   const [title, setTitle] = useState("");
+  const [mediaFile, setMediaFile] = useState<File | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [progress, setProgress] = useState("");
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+  const mediaInputRef = useRef<HTMLInputElement>(null);
 
   async function loadVideos() {
     const response = await fetch("/api/library/videos");
@@ -53,18 +63,50 @@ export default function LibraryVideoManager() {
     setError("");
     setNotice("");
     try {
-      const transcriptResponse = await fetch("/api/fetch-youtube-transcript", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ url }),
-      });
-      const transcriptBody: unknown = await transcriptResponse.json();
-      if (!transcriptResponse.ok) {
-        const parsedError = ErrorResponseSchema.safeParse(transcriptBody);
-        throw new Error(parsedError.success ? parsedError.data.error : "Could not fetch this video's transcript.");
+      let segments: z.infer<typeof TranscriptResponseSchema>["segments"];
+      if (mediaFile) {
+        setProgress("Transcribing uploaded audio/video…");
+        const formData = new FormData();
+        formData.set("file", mediaFile);
+        const response = await fetch("/api/transcribe", { method: "POST", body: formData });
+        const body: unknown = await response.json();
+        if (!response.ok) {
+          const parsedError = ErrorResponseSchema.safeParse(body);
+          throw new Error(parsedError.success ? parsedError.data.error : "Could not transcribe the uploaded media.");
+        }
+        const parsed = UploadedMediaTranscriptSchema.safeParse(body);
+        if (!parsed.success) throw new Error("The audio transcription response did not contain timestamped speech.");
+        segments = parsed.data.segments;
+      } else {
+        setProgress("Checking YouTube captions…");
+        const captionsResponse = await fetch("/api/fetch-youtube-transcript", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ url }),
+        });
+        const captionsBody: unknown = await captionsResponse.json();
+        const captions = captionsResponse.ok ? TranscriptResponseSchema.safeParse(captionsBody) : null;
+        if (captions?.success) {
+          segments = captions.data.segments;
+        } else {
+          setProgress("Captions unavailable; transcribing the YouTube audio…");
+          const audioResponse = await fetch("/api/library/videos/transcribe-youtube", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ url }),
+          });
+          const audioBody: unknown = await audioResponse.json();
+          if (!audioResponse.ok) {
+            const parsedError = ErrorResponseSchema.safeParse(audioBody);
+            throw new Error(parsedError.success
+              ? `YouTube captions were unavailable. Audio transcription failed: ${parsedError.data.error}`
+              : "YouTube captions were unavailable and audio transcription failed.");
+          }
+          const audioTranscript = YouTubeAudioTranscriptSchema.safeParse(audioBody);
+          if (!audioTranscript.success) throw new Error("Audio transcription returned no timestamped speech.");
+          segments = audioTranscript.data.segments;
+        }
       }
-      const transcript = TranscriptResponseSchema.safeParse(transcriptBody);
-      if (!transcript.success) throw new Error("The transcript response did not contain timestamped captions.");
 
       const saveResponse = await fetch("/api/library/videos", {
         method: "POST",
@@ -72,7 +114,7 @@ export default function LibraryVideoManager() {
         body: JSON.stringify({
           url,
           title,
-          segments: transcript.data.segments,
+          segments,
         }),
       });
       const saveBody: unknown = await saveResponse.json();
@@ -88,11 +130,14 @@ export default function LibraryVideoManager() {
       }));
       setUrl("");
       setTitle("");
+      setMediaFile(null);
+      if (mediaInputRef.current) mediaInputRef.current.value = "";
       setNotice("Video added and its transcript is ready for questions.");
     } catch (requestError) {
       setError(requestError instanceof Error ? requestError.message : "Could not add this video.");
     } finally {
       setSaving(false);
+      setProgress("");
     }
   }
 
@@ -123,7 +168,7 @@ export default function LibraryVideoManager() {
     <div className="space-y-8">
       <form onSubmit={addVideo} className="rounded-2xl border border-slate-800 bg-slate-900/40 p-4 sm:p-6">
         <h2 className="text-lg font-semibold text-white">Add a YouTube video</h2>
-        <p className="mt-1 text-sm text-slate-400">The video must have captions available. We store caption text and timestamps, not the video itself.</p>
+        <p className="mt-1 text-sm text-slate-400">We use captions when available; otherwise we transcribe the audio. The audio is processed for transcription and is not stored.</p>
         <div className="mt-5 grid gap-4 sm:grid-cols-2">
           <label className="block text-xs font-semibold text-slate-400">
             YouTube URL
@@ -148,12 +193,23 @@ export default function LibraryVideoManager() {
             />
           </label>
         </div>
+        <label className="mt-4 block text-xs font-semibold text-slate-400">
+          Or upload the source audio/video (optional, max 100 MB)
+          <input
+            ref={mediaInputRef}
+            type="file"
+            accept="audio/*,video/*"
+            onChange={(event) => setMediaFile(event.target.files?.[0] ?? null)}
+            className="mt-2 block min-h-12 w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 text-base text-slate-300 file:mr-3 file:min-h-10 file:rounded-lg file:border-0 file:bg-slate-800 file:px-3 file:text-sm file:font-semibold file:text-white"
+          />
+          {mediaFile && <span className="mt-1 block font-normal text-slate-500">{mediaFile.name}</span>}
+        </label>
         <button
           type="submit"
           disabled={saving}
           className="mt-5 min-h-12 rounded-xl bg-amber-500 px-5 text-sm font-bold text-slate-950 disabled:opacity-60"
         >
-          {saving ? "Fetching captions…" : "Add video"}
+          {saving ? progress || "Preparing transcript…" : "Add video"}
         </button>
         {error && <p role="alert" className="mt-4 rounded-xl border border-rose-900 bg-rose-950/40 p-3 text-sm text-rose-200">{error}</p>}
         {notice && <p role="status" className="mt-4 rounded-xl border border-emerald-900 bg-emerald-950/30 p-3 text-sm text-emerald-200">{notice}</p>}

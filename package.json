@@ -37,7 +37,8 @@
     "react-dom": "^19.2.7",
     "@tesseract.js-data/eng": "^1.0.0",
     "tesseract.js": "^7.0.0",
-    "zod": "^3.25.76"
+    "zod": "^3.25.76",
+    "youtube-dl-exec": "^3.1.19"
   },
   "devDependencies": {
     "@types/node": "^22.19.20",
