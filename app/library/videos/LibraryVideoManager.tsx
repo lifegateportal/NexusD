@@ -26,6 +26,7 @@ const SaveResponseSchema = z.object({
 }).strict();
 
 const ErrorResponseSchema = z.object({ error: z.string() });
+const MAX_UPLOAD_BYTES = 100 * 1024 * 1024;
 
 export default function LibraryVideoManager() {
   const [catalog, setCatalog] = useState<z.infer<typeof LibraryVideoCatalogSchema> | null>(null);
@@ -65,6 +66,9 @@ export default function LibraryVideoManager() {
     try {
       let segments: z.infer<typeof TranscriptResponseSchema>["segments"];
       if (mediaFile) {
+        if (mediaFile.size > MAX_UPLOAD_BYTES) {
+          throw new Error("Media files must be 100 MB or smaller. Select a smaller file or use the YouTube URL transcription option.");
+        }
         setProgress("Transcribing uploaded audio/video…");
         const formData = new FormData();
         formData.set("file", mediaFile);
@@ -72,7 +76,7 @@ export default function LibraryVideoManager() {
         const body: unknown = await response.json();
         if (!response.ok) {
           const parsedError = ErrorResponseSchema.safeParse(body);
-          throw new Error(parsedError.success ? parsedError.data.error : "Could not transcribe the uploaded media.");
+          throw new Error(parsedError.success ? parsedError.data.error : `Could not transcribe the uploaded media (HTTP ${response.status}).`);
         }
         const parsed = UploadedMediaTranscriptSchema.safeParse(body);
         if (!parsed.success) throw new Error("The audio transcription response did not contain timestamped speech.");
@@ -199,7 +203,15 @@ export default function LibraryVideoManager() {
             ref={mediaInputRef}
             type="file"
             accept="audio/*,video/*"
-            onChange={(event) => setMediaFile(event.target.files?.[0] ?? null)}
+            onChange={(event) => {
+              const file = event.target.files?.[0] ?? null;
+              setMediaFile(file);
+              if (file && file.size > MAX_UPLOAD_BYTES) {
+                setError("This file is over the 100 MB upload limit. Select a smaller file or use the YouTube URL transcription option.");
+              } else {
+                setError("");
+              }
+            }}
             className="mt-2 block min-h-12 w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 text-base text-slate-300 file:mr-3 file:min-h-10 file:rounded-lg file:border-0 file:bg-slate-800 file:px-3 file:text-sm file:font-semibold file:text-white"
           />
           {mediaFile && <span className="mt-1 block font-normal text-slate-500">{mediaFile.name}</span>}
