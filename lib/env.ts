@@ -6,6 +6,7 @@ const EnvironmentSchema = z.object({
   DEEPSEEK_API_KEY: z.string().min(1, "Missing DeepSeek API key"),
   ANTHROPIC_API_KEY: z.string().min(1, "Missing Anthropic API key").optional(),
   DEEPGRAM_API_KEY: z.string().optional(),
+  YOUTUBE_API_KEY: z.string().optional().transform((value) => value?.trim() || undefined),
   GEMINI_MODEL: z.string().default("gemini-2.0-flash"),
   DEEPSEEK_MODEL: z.enum(["deepseek-chat", "deepseek-reasoner"]).default("deepseek-chat"),
   CLAUDE_MODEL: z.string().default("claude-haiku-4-5"),

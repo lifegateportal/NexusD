@@ -2,8 +2,8 @@ import Link from "next/link";
 import DirectorVideos from "./DirectorVideos";
 
 export const metadata = {
-  title: "Video Publishing | Nexus Director",
-  description: "Import, transcribe, review, and approve videos for the Nexus Library.",
+  title: "Video Library | Nexus Director",
+  description: "Fetch channel videos, add timestamped transcripts, and approve videos for the Nexus Library.",
 };
 
 export default function DirectorVideosPage() {
@@ -15,9 +15,9 @@ export default function DirectorVideosPage() {
         </Link>
         <header className="mb-8 mt-4 border-b border-slate-800 pb-6">
           <p className="text-[10px] font-bold uppercase tracking-[0.25em] text-cyan-300">Director · Video publishing</p>
-          <h1 className="mt-2 text-3xl font-bold tracking-tight text-white sm:text-4xl">Review videos before they go public</h1>
+          <h1 className="mt-2 text-3xl font-bold tracking-tight text-white sm:text-4xl">Browse and prepare channel videos</h1>
           <p className="mt-3 max-w-3xl text-sm leading-relaxed text-slate-400 sm:text-base">
-            Discover videos from Lifegate Broadcast, transcribe and retain their timed transcripts privately, then approve only selected videos for the searchable Library.
+            Fetch Lifegate Broadcast uploads through YouTube’s official API, paste the transcript with timestamps, and approve selected videos for the searchable Library.
           </p>
         </header>
         <DirectorVideos />

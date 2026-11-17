@@ -1,9 +1,9 @@
 import { DeleteObjectCommand, GetObjectCommand, PutObjectCommand } from "@aws-sdk/client-s3";
 import { NextRequest, NextResponse } from "next/server";
-import youtubeDl from "youtube-dl-exec";
 import { z } from "zod";
 import { env } from "@/lib/env";
 import { makeR2Client } from "@/lib/r2-storage";
+import { fetchYoutubeChannelVideos } from "@/lib/youtube-channel";
 import {
   DirectorVideoCatalogSchema,
   DirectorVideoSchema,
@@ -13,42 +13,29 @@ import {
 } from "@/lib/schemas/library-video";
 
 export const runtime = "nodejs";
-export const maxDuration = 300;
+export const maxDuration = 30;
 
-const CHANNEL_URL = "https://www.youtube.com/@lifegatebroadcast/videos";
 const PRIVATE_CATALOG_KEY = "director/videos/index.json";
 const PUBLISHED_CATALOG_KEY = "published/videos/index.json";
 const VideoIdSchema = z.string().regex(/^[A-Za-z0-9_-]{11}$/);
 const ActionSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("discover") }).strict(),
-  z.object({ action: z.literal("process"), videoId: VideoIdSchema }).strict(),
+  z.object({
+    action: z.literal("add"),
+    url: z.string().url().max(2000),
+    title: z.string().trim().max(200).optional(),
+    transcript: z.string().max(1_000_000).optional(),
+  }).strict(),
+  z.object({
+    action: z.literal("save-transcript"),
+    videoId: VideoIdSchema,
+    transcript: z.string().min(1).max(1_000_000),
+  }).strict(),
   z.object({ action: z.literal("approve"), videoId: VideoIdSchema }).strict(),
   z.object({ action: z.literal("unpublish"), videoId: VideoIdSchema }).strict(),
   z.object({ action: z.literal("delete"), videoId: VideoIdSchema }).strict(),
 ]);
-const DeepgramResponseSchema = z.object({
-  err_msg: z.string().optional(),
-  results: z.object({
-    channels: z.array(z.object({
-      alternatives: z.array(z.object({ transcript: z.string().optional() })).default([]),
-    })).default([]),
-    utterances: z.array(z.object({
-      start: z.number().finite().min(0).optional(),
-      end: z.number().finite().min(0).optional(),
-      transcript: z.string().optional(),
-    })).optional(),
-  }).optional(),
-}).passthrough();
-const DiscoveryEntrySchema = z.object({
-  id: z.string().optional(),
-  title: z.string().optional(),
-  url: z.string().optional(),
-  webpage_url: z.string().optional(),
-  duration: z.number().optional(),
-}).passthrough();
-const DiscoveryResultSchema = z.object({
-  entries: z.array(z.unknown()).optional(),
-}).passthrough();
+class TranscriptInputError extends Error {}
 
 function isMissingObject(error: unknown): boolean {
   return error instanceof Error && ["NoSuchKey", "NotFound"].includes(error.name);
@@ -126,40 +113,100 @@ async function savePrivateCatalog(videos: z.infer<typeof DirectorVideoSchema>[])
   return catalog;
 }
 
-function videoIdFromEntry(entry: z.infer<typeof DiscoveryEntrySchema>): string | null {
-  const candidate = entry.id
-    ?? entry.url?.match(/(?:v=|youtu\.be\/|shorts\/|embed\/)([A-Za-z0-9_-]{11})/)?.[1]
-    ?? entry.webpage_url?.match(/(?:v=|youtu\.be\/|shorts\/|embed\/)([A-Za-z0-9_-]{11})/)?.[1];
-  return candidate && VideoIdSchema.safeParse(candidate).success ? candidate : null;
+function videoIdFromUrl(input: string): string | null {
+  try {
+    const url = new URL(input);
+    const hostname = url.hostname.toLowerCase().replace(/^www\./, "");
+    if (hostname === "youtu.be") {
+      const shortId = url.pathname.split("/").filter(Boolean)[0];
+      return shortId && VideoIdSchema.safeParse(shortId).success ? shortId : null;
+    }
+    if (hostname !== "youtube.com" && hostname !== "m.youtube.com" && hostname !== "youtube-nocookie.com") {
+      return null;
+    }
+    const candidate = url.searchParams.get("v")
+      ?? url.pathname.match(/^\/(?:embed|shorts|live)\/([A-Za-z0-9_-]{11})/)?.[1];
+    return candidate && VideoIdSchema.safeParse(candidate).success ? candidate : null;
+  } catch {
+    return null;
+  }
+}
+
+function parseTranscript(transcript: string): z.infer<typeof LibraryVideoSegmentSchema>[] {
+  const lines = transcript.replace(/^\uFEFF/, "").replace(/\r\n?/g, "\n").split("\n");
+  const timestampPattern = /^(?:(\d{1,2}):)?(\d{1,2}):(\d{2})(?:[,.](\d{1,3}))?$/;
+  const toSeconds = (value: string): number | null => {
+    const match = timestampPattern.exec(value);
+    if (!match) return null;
+    const hours = Number(match[1] ?? 0);
+    const minutes = Number(match[2]);
+    const seconds = Number(match[3]);
+    const milliseconds = Number((match[4] ?? "").padEnd(3, "0"));
+    if (minutes > 59 || seconds > 59) return null;
+    return hours * 3600 + minutes * 60 + seconds + milliseconds / 1000;
+  };
+  const cues: Array<{ startSeconds: number; endSeconds?: number; text: string }> = [];
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index].trim();
+    const ranged = line.match(/^((?:\d{1,2}:)?\d{1,2}:\d{2}(?:[,.]\d{1,3})?)\s*-->\s*((?:\d{1,2}:)?\d{1,2}:\d{2}(?:[,.]\d{1,3})?)/);
+    if (ranged) {
+      const startSeconds = toSeconds(ranged[1]);
+      const endSeconds = toSeconds(ranged[2]);
+      const text: string[] = [];
+      while (index + 1 < lines.length && lines[index + 1].trim() && !lines[index + 1].includes("-->")) {
+        index += 1;
+        text.push(lines[index].trim());
+      }
+      if (startSeconds !== null && endSeconds !== null && endSeconds > startSeconds && text.length > 0) {
+        cues.push({ startSeconds, endSeconds, text: text.join(" ").replace(/<[^>]*>/g, "").trim() });
+      }
+      continue;
+    }
+
+    const single = line.match(/^((?:\d{1,2}:)?\d{1,2}:\d{2}(?:[,.]\d{1,3})?)(?:\s+(.+))?$/);
+    if (!single) continue;
+    const startSeconds = toSeconds(single[1]);
+    if (startSeconds === null) continue;
+    const text = single[2] ? [single[2]] : [];
+    while (index + 1 < lines.length && lines[index + 1].trim()) {
+      const next = lines[index + 1].trim();
+      if (next.includes("-->") || /^((?:\d{1,2}:)?\d{1,2}:\d{2}(?:[,.]\d{1,3})?)(?:\s+.*)?$/.test(next)) break;
+      index += 1;
+      text.push(next);
+    }
+    const content = text.join(" ").replace(/<[^>]*>/g, "").trim();
+    if (content) cues.push({ startSeconds, text: content });
+  }
+
+  const segments = cues.map((cue, index) => {
+    const nextStart = cues[index + 1]?.startSeconds;
+    const parsed = LibraryVideoSegmentSchema.safeParse({
+      startSeconds: cue.startSeconds,
+      endSeconds: cue.endSeconds ?? (nextStart && nextStart > cue.startSeconds ? nextStart : cue.startSeconds + 5),
+      text: cue.text,
+    });
+    if (!parsed.success) {
+      throw new TranscriptInputError(`A timestamped transcript segment is invalid: ${parsed.error.issues[0]?.message ?? "check the timestamp and text length."}`);
+    }
+    return parsed.data;
+  });
+  if (segments.length === 0) {
+    throw new TranscriptInputError("No timestamped transcript lines found. Use lines like “0:00 Welcome” or SRT/VTT timestamp cues.");
+  }
+  return segments;
 }
 
 async function discoverChannelVideos() {
-  const raw: unknown = await youtubeDl(CHANNEL_URL, {
-    dumpSingleJson: true,
-    flatPlaylist: true,
-    ignoreErrors: true,
-    noWarnings: true,
-    playlistEnd: 100,
-    quiet: true,
-    skipDownload: true,
-  }, { timeout: 90_000 });
-  const result = DiscoveryResultSchema.parse(raw);
+  const { channelTitle, videos: entries } = await fetchYoutubeChannelVideos(100);
   const now = new Date().toISOString();
-  const discovered = (result.entries ?? []).flatMap((rawEntry) => {
-    const parsedEntry = DiscoveryEntrySchema.safeParse(rawEntry);
-    if (!parsedEntry.success) return [];
-    const videoId = videoIdFromEntry(parsedEntry.data);
-    const title = parsedEntry.data.title?.trim();
-    if (!videoId || !title) return [];
-    return [DirectorVideoSchema.parse({
-      videoId,
-      title: title.slice(0, 200),
-      youtubeUrl: `https://www.youtube.com/watch?v=${videoId}`,
+  const discovered = entries.map((entry) => DirectorVideoSchema.parse({
+      videoId: entry.videoId,
+      title: entry.title,
+      youtubeUrl: entry.youtubeUrl,
       status: "discovered",
       updatedAt: now,
       segments: [],
-    })];
-  });
+    }));
   const catalog = await readPrivateCatalog();
   const existing = new Map(catalog.videos.map((video) => [video.videoId, video]));
   const merged = discovered.map((video) => {
@@ -172,62 +219,12 @@ async function discoverChannelVideos() {
   const combined = [
     ...merged,
     ...catalog.videos.filter((video) => !foundIds.has(video.videoId)),
-  ].slice(0, 500);
+  ];
+  if (combined.length > 500) {
+    throw new Error("The Director queue has reached its 500-video limit. Delete unused entries before fetching more.");
+  }
   const saved = await savePrivateCatalog(combined);
-  return { catalog: saved, discoveredCount: discovered.length };
-}
-
-async function transcribeYoutubeVideo(videoId: string): Promise<z.infer<typeof LibraryVideoSegmentSchema>[]> {
-  if (!env.DEEPGRAM_API_KEY) throw new Error("DEEPGRAM_API_KEY is not configured on Nexus Director.");
-  const audioUrl = await youtubeDl(`https://www.youtube.com/watch?v=${videoId}`, {
-    format: "bestaudio/best",
-    getUrl: true,
-    noPlaylist: true,
-    noWarnings: true,
-    quiet: true,
-    socketTimeout: 20,
-  }, { timeout: 45_000 });
-  if (typeof audioUrl !== "string") throw new Error("YouTube did not return an audio stream.");
-  const directUrl = audioUrl.trim().split(/\r?\n/)[0];
-  if (!directUrl) throw new Error("YouTube did not return an audio stream.");
-  const parsedUrl = new URL(directUrl);
-  if (parsedUrl.protocol !== "https:" || !parsedUrl.hostname.endsWith(".googlevideo.com")) {
-    throw new Error("YouTube returned an unsupported audio stream URL.");
-  }
-
-  const params = new URLSearchParams({
-    model: "nova-3",
-    smart_format: "true",
-    punctuate: "true",
-    utterances: "true",
-    language: "en",
-  });
-  const response = await fetch(`https://api.deepgram.com/v1/listen?${params}`, {
-    method: "POST",
-    headers: {
-      Authorization: `Token ${env.DEEPGRAM_API_KEY}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({ url: directUrl }),
-    signal: AbortSignal.timeout(150_000),
-  });
-  const raw: unknown = await response.json();
-  const parsed = DeepgramResponseSchema.safeParse(raw);
-  if (!response.ok) {
-    throw new Error(parsed.success
-      ? parsed.data.err_msg ?? `Deepgram returned HTTP ${response.status}.`
-      : `Deepgram returned HTTP ${response.status}.`);
-  }
-  if (!parsed.success) throw new Error("Deepgram returned an invalid response.");
-  const segments = LibraryVideoSegmentSchema.array().parse(
-    (parsed.data.results?.utterances ?? []).flatMap((utterance) => {
-      const text = utterance.transcript?.trim() ?? "";
-      if (!text || utterance.start === undefined || utterance.end === undefined) return [];
-      return [{ startSeconds: utterance.start, endSeconds: utterance.end, text }];
-    }),
-  );
-  if (segments.length === 0) throw new Error("No timestamped speech was detected in the video.");
-  return segments;
+  return { catalog: saved, discoveredCount: discovered.length, channelTitle };
 }
 
 export async function GET() {
@@ -270,52 +267,57 @@ export async function POST(request: NextRequest) {
     if (action.action === "discover") return NextResponse.json(await discoverChannelVideos());
 
     const catalog = await readPrivateCatalog();
+    if (action.action === "add") {
+      const videoId = videoIdFromUrl(action.url);
+      if (!videoId) {
+        return NextResponse.json({ error: "Enter a valid YouTube video, Shorts, or youtu.be URL." }, { status: 400 });
+      }
+      if (catalog.videos.some((item) => item.videoId === videoId)) {
+        return NextResponse.json({ error: "This video is already in the Director queue." }, { status: 409 });
+      }
+      if (catalog.videos.length >= 500) {
+        return NextResponse.json({ error: "The Director video queue has reached its 500-video limit." }, { status: 409 });
+      }
+      const segments = action.transcript?.trim() ? parseTranscript(action.transcript) : [];
+      const video = DirectorVideoSchema.parse({
+        videoId,
+        title: action.title?.trim() || `YouTube video ${videoId}`,
+        youtubeUrl: `https://www.youtube.com/watch?v=${videoId}`,
+        status: segments.length ? "ready" : "discovered",
+        updatedAt: new Date().toISOString(),
+        segments,
+      });
+      if (segments.length) await writeJsonObject(`director/videos/${videoId}.json`, video);
+      const updatedCatalog = await savePrivateCatalog([video, ...catalog.videos]);
+      return NextResponse.json({ catalog: updatedCatalog });
+    }
+
+    if (action.action === "save-transcript") {
+      const video = catalog.videos.find((item) => item.videoId === action.videoId);
+      if (!video) return NextResponse.json({ error: "Video not found in the Director catalog." }, { status: 404 });
+      if (video.status === "published") {
+        return NextResponse.json({ error: "Unpublish this video before replacing its transcript." }, { status: 409 });
+      }
+      const updatedVideo = DirectorVideoSchema.parse({
+        ...video,
+        status: "ready",
+        updatedAt: new Date().toISOString(),
+        segments: parseTranscript(action.transcript),
+        error: undefined,
+      });
+      await writeJsonObject(`director/videos/${video.videoId}.json`, updatedVideo);
+      const updatedCatalog = await savePrivateCatalog(catalog.videos.map((item) =>
+        item.videoId === video.videoId ? updatedVideo : item,
+      ));
+      return NextResponse.json({ catalog: updatedCatalog });
+    }
+
     const video = catalog.videos.find((item) => item.videoId === action.videoId);
     if (!video) return NextResponse.json({ error: "Video not found in the Director catalog." }, { status: 404 });
 
-    if (action.action === "process") {
-      if (video.status === "published" && video.segments.length > 0) {
-        return NextResponse.json({ video });
-      }
-      const processing = DirectorVideoSchema.parse({
-        ...video,
-        status: "processing",
-        updatedAt: new Date().toISOString(),
-        error: undefined,
-      });
-      const processingCatalog = await savePrivateCatalog(catalog.videos.map((item) =>
-        item.videoId === video.videoId ? processing : item,
-      ));
-      try {
-        const segments = await transcribeYoutubeVideo(video.videoId);
-        const ready = DirectorVideoSchema.parse({
-          ...processing,
-          status: "ready",
-          updatedAt: new Date().toISOString(),
-          segments,
-        });
-        await writeJsonObject(`director/videos/${video.videoId}.json`, ready);
-        const saved = await savePrivateCatalog(processingCatalog.videos.map((item) =>
-          item.videoId === video.videoId ? ready : item,
-        ));
-        return NextResponse.json({ video: saved.videos.find((item) => item.videoId === video.videoId) });
-      } catch (error) {
-        const failed = DirectorVideoSchema.parse({
-          ...processing,
-          status: "failed",
-          updatedAt: new Date().toISOString(),
-          error: error instanceof Error ? error.message.slice(0, 1000) : "Transcription failed.",
-        });
-        await savePrivateCatalog(processingCatalog.videos.map((item) =>
-          item.videoId === video.videoId ? failed : item,
-        ));
-        throw error;
-      }
-    }
-
     if (action.action === "approve") {
       if (video.segments.length === 0) {
-        return NextResponse.json({ error: "Transcribe this video before approving it for the library." }, { status: 409 });
+        return NextResponse.json({ error: "Paste and save a timestamped transcript before approval." }, { status: 409 });
       }
       const publishedRecord = LibraryVideoRecordSchema.parse({
         videoId: video.videoId,
@@ -380,6 +382,9 @@ export async function POST(request: NextRequest) {
     const updatedCatalog = await savePrivateCatalog(catalog.videos.filter((item) => item.videoId !== video.videoId));
     return NextResponse.json({ catalog: updatedCatalog });
   } catch (error) {
+    if (error instanceof TranscriptInputError) {
+      return NextResponse.json({ error: error.message }, { status: 400 });
+    }
     return NextResponse.json(
       { error: error instanceof Error ? error.message : "Video operation failed." },
       { status: 502 },
