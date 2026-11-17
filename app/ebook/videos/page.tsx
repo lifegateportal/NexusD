@@ -1,5 +1,5 @@
 import Link from "next/link";
-import DirectorVideos from "./DirectorVideos";
+import VideoWorkspace from "./VideoWorkspace";
 
 export const metadata = {
   title: "Video Library | Nexus Director",
@@ -25,7 +25,7 @@ export default function DirectorVideosPage() {
             Fetch Lifegate Broadcast uploads through YouTube’s official API, paste the transcript with timestamps, and approve selected videos for the searchable Library.
           </p>
         </header>
-        <DirectorVideos />
+        <VideoWorkspace />
       </div>
     </main>
   );

@@ -1,0 +1,174 @@
+import { DeleteObjectCommand, GetObjectCommand, PutObjectCommand } from "@aws-sdk/client-s3";
+import { env } from "@/lib/env";
+import { makeR2Client } from "@/lib/r2-storage";
+import {
+  PublicShortCatalogSchema,
+  PublishedShortProjectSchema,
+  ShortCatalogSchema,
+  ShortProjectSchema,
+  type ShortProject,
+} from "@/lib/schemas/video-short";
+
+const PRIVATE_CATALOG_KEY = "director/shorts/index.json";
+const PUBLIC_CATALOG_KEY = "published/shorts/index.json";
+
+function assertStorageConfigured(): void {
+  if (!env.R2_ACCOUNT_ID || !env.R2_ACCESS_KEY_ID || !env.R2_SECRET_ACCESS_KEY || !env.R2_BUCKET_NAME) {
+    throw new Error("Configure Cloudflare R2 credentials and bucket to manage video shorts.");
+  }
+}
+
+async function readJsonObject(key: string): Promise<unknown | null> {
+  assertStorageConfigured();
+  try {
+    const result = await makeR2Client().send(new GetObjectCommand({
+      Bucket: env.R2_BUCKET_NAME,
+      Key: key,
+    }));
+    const raw = await result.Body?.transformToString();
+    if (!raw) throw new Error(`R2 object ${key} is empty.`);
+    return JSON.parse(raw) as unknown;
+  } catch (error) {
+    if (error instanceof Error && ["NoSuchKey", "NotFound"].includes(error.name)) return null;
+    throw error;
+  }
+}
+
+async function writeJsonObject(key: string, value: unknown, isPublic = false): Promise<void> {
+  assertStorageConfigured();
+  await makeR2Client().send(new PutObjectCommand({
+    Bucket: env.R2_BUCKET_NAME,
+    Key: key,
+    Body: JSON.stringify(value),
+    ContentType: "application/json",
+    CacheControl: isPublic ? "public, max-age=60" : "private, no-store",
+  }));
+}
+
+async function deleteObject(key: string): Promise<void> {
+  assertStorageConfigured();
+  await makeR2Client().send(new DeleteObjectCommand({ Bucket: env.R2_BUCKET_NAME, Key: key }));
+}
+
+function summaryFor(project: ShortProject) {
+  return {
+    slug: project.slug,
+    title: project.title,
+    sourceType: project.source.type,
+    ...(project.source.type === "youtube" ? { videoTitle: project.source.videoTitle } : {}),
+    status: project.status,
+    updatedAt: project.updatedAt,
+  };
+}
+
+export async function listPrivateShorts() {
+  const raw = await readJsonObject(PRIVATE_CATALOG_KEY);
+  return raw
+    ? ShortCatalogSchema.parse(raw)
+    : { updatedAt: new Date().toISOString(), shorts: [] };
+}
+
+export async function readPrivateShort(slug: string): Promise<ShortProject | null> {
+  const raw = await readJsonObject(`director/shorts/${slug}.json`);
+  return raw ? ShortProjectSchema.parse(raw) : null;
+}
+
+export async function savePrivateShort(
+  projectInput: unknown,
+  status: "draft" | "published" = "draft",
+): Promise<ShortProject> {
+  const project = ShortProjectSchema.parse(projectInput);
+  const catalog = await listPrivateShorts();
+  if (!catalog.shorts.some((short) => short.slug === project.slug) && catalog.shorts.length >= 500) {
+    throw new Error("The private Shorts Studio catalog has reached its 500-draft limit.");
+  }
+  const saved = ShortProjectSchema.parse({ ...project, status, updatedAt: new Date().toISOString() });
+  await writeJsonObject(`director/shorts/${saved.slug}.json`, saved);
+  await writeJsonObject(PRIVATE_CATALOG_KEY, ShortCatalogSchema.parse({
+    updatedAt: new Date().toISOString(),
+    shorts: [summaryFor(saved), ...catalog.shorts.filter((short) => short.slug !== saved.slug)],
+  }));
+  return saved;
+}
+
+export async function publishShort(projectInput: unknown): Promise<ShortProject> {
+  const project = PublishedShortProjectSchema.parse(projectInput);
+  if (project.source.type === "upload") {
+    if (!env.R2_PUBLIC_URL) throw new Error("Configure R2_PUBLIC_URL before publishing an uploaded video short.");
+    const expectedPrefix = `${env.R2_PUBLIC_URL.replace(/\/$/, "")}/published/shorts/assets/`;
+    if (!project.source.sourceUrl?.startsWith(expectedPrefix)) {
+      throw new Error("Uploaded source must use a video asset created by the Shorts Studio.");
+    }
+  }
+
+  const catalog = await listPublicShorts();
+  if (!catalog.shorts.some((short) => short.slug === project.slug) && catalog.shorts.length >= 500) {
+    throw new Error("The public video shorts catalog has reached its 500-short limit.");
+  }
+  const published = ShortProjectSchema.parse({ ...project, updatedAt: new Date().toISOString() });
+  await writeJsonObject(`published/shorts/${published.slug}.json`, published, true);
+  await writeJsonObject(PUBLIC_CATALOG_KEY, PublicShortCatalogSchema.parse({
+    updatedAt: new Date().toISOString(),
+    shorts: [
+      {
+        slug: published.slug,
+        title: published.title,
+        sourceType: published.source.type,
+        ...(published.source.type === "youtube" ? { videoTitle: published.source.videoTitle } : {}),
+        updatedAt: published.updatedAt,
+      },
+      ...catalog.shorts.filter((short) => short.slug !== published.slug),
+    ],
+  }), true);
+  await savePrivateShort(published, "published");
+  return published;
+}
+
+export async function listPublicShorts() {
+  const raw = await readJsonObject(PUBLIC_CATALOG_KEY);
+  return raw
+    ? PublicShortCatalogSchema.parse(raw)
+    : { updatedAt: new Date().toISOString(), shorts: [] };
+}
+
+export async function readPublicShort(slug: string): Promise<ShortProject | null> {
+  const raw = await readJsonObject(`published/shorts/${slug}.json`);
+  if (!raw) return null;
+  return PublishedShortProjectSchema.parse(raw);
+}
+
+export async function unpublishShort(slug: string): Promise<void> {
+  const project = await readPrivateShort(slug);
+  const catalog = await listPublicShorts();
+  if (!catalog.shorts.some((short) => short.slug === slug)) {
+    throw new Error("This short is not currently published.");
+  }
+  await deleteObject(`published/shorts/${slug}.json`);
+  await writeJsonObject(PUBLIC_CATALOG_KEY, PublicShortCatalogSchema.parse({
+    updatedAt: new Date().toISOString(),
+    shorts: catalog.shorts.filter((short) => short.slug !== slug),
+  }), true);
+  if (project) {
+    if (project.source.type === "upload" && project.source.sourceUrl && env.R2_PUBLIC_URL) {
+      const base = new URL(`${env.R2_PUBLIC_URL.replace(/\/$/, "")}/`);
+      const source = new URL(project.source.sourceUrl);
+      const key = source.origin === base.origin && source.pathname.startsWith(`${base.pathname}published/shorts/assets/`)
+        ? decodeURIComponent(source.pathname.slice(base.pathname.length))
+        : null;
+      if (key) await deleteObject(key);
+    }
+    const draft = project.source.type === "upload"
+      ? { ...project, source: { type: "upload" as const, fileName: project.source.fileName } }
+      : project;
+    await savePrivateShort(draft, "draft");
+  }
+}
+
+export async function deletePrivateShort(slug: string): Promise<void> {
+  const catalog = await listPrivateShorts();
+  await deleteObject(`director/shorts/${slug}.json`);
+  await writeJsonObject(PRIVATE_CATALOG_KEY, ShortCatalogSchema.parse({
+    updatedAt: new Date().toISOString(),
+    shorts: catalog.shorts.filter((short) => short.slug !== slug),
+  }));
+}
