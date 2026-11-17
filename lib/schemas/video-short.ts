@@ -2,6 +2,7 @@ import { z } from "zod";
 import { LibraryVideoSegmentSchema } from "@/lib/schemas/library-video";
 
 export const ShortAspectRatioSchema = z.enum(["9:16", "4:5", "1:1", "16:9"]);
+export const MAX_SHORT_DURATION_SECONDS = 3 * 60;
 
 export const ShortCropKeyframeSchema = z.object({
   timeSeconds: z.number().finite().min(0),
@@ -59,6 +60,9 @@ export const ShortProjectSchema = z.object({
   updatedAt: z.string().datetime(),
 }).strict().refine((project) => project.endSeconds > project.startSeconds, {
   message: "Short end must be after its start.",
+  path: ["endSeconds"],
+}).refine((project) => project.endSeconds - project.startSeconds <= MAX_SHORT_DURATION_SECONDS, {
+  message: "Shorts can be up to 3 minutes long.",
   path: ["endSeconds"],
 }).refine(
   (project) => project.frameSlots.every(

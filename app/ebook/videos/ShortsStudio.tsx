@@ -6,6 +6,7 @@ import ShortsPlayer from "@/app/components/ShortsPlayer";
 import { deleteShortSource, getShortSource, saveShortSource } from "@/lib/short-video-store";
 import {
   ShortCatalogSchema,
+  MAX_SHORT_DURATION_SECONDS,
   ShortProjectSchema,
   type ShortCropKeyframe,
   type ShortFrameSlot,
@@ -232,6 +233,10 @@ export default function ShortsStudio() {
     const startSeconds = field === "startSeconds" ? nextValue : project.startSeconds;
     const endSeconds = field === "endSeconds" ? nextValue : project.endSeconds;
     if (!Number.isFinite(nextValue) || startSeconds < 0 || endSeconds <= startSeconds) return;
+    if (endSeconds - startSeconds > MAX_SHORT_DURATION_SECONDS) {
+      setError("Shorts can be up to 3 minutes long.");
+      return;
+    }
     const frameSlots = [{
       ...activeSlot,
       startSeconds,
@@ -247,6 +252,7 @@ export default function ShortsStudio() {
       captions: filterCaptions(selectedVideo, startSeconds, endSeconds),
     });
     if (field === "startSeconds") setCurrentTime(nextValue);
+    setError("");
   }
 
   function setKeyframe(timeSeconds: number, x: number, y: number, zoom: number) {
@@ -654,6 +660,7 @@ export default function ShortsStudio() {
                     <input
                       type="number"
                       min="0"
+                      max={Math.max(0, project.endSeconds - 0.1)}
                       step="0.1"
                       value={project.startSeconds}
                       disabled={project.frameSlots.length > 1}
@@ -665,7 +672,8 @@ export default function ShortsStudio() {
                     End (seconds)
                     <input
                       type="number"
-                      min="0"
+                      min={project.startSeconds + 0.1}
+                      max={project.startSeconds + MAX_SHORT_DURATION_SECONDS}
                       step="0.1"
                       value={project.endSeconds}
                       disabled={project.frameSlots.length > 1}
@@ -674,6 +682,9 @@ export default function ShortsStudio() {
                     />
                   </label>
                 </div>
+                <p className="text-xs text-slate-400">
+                  Clip length: {formatTime(project.endSeconds - project.startSeconds)} · maximum 3:00
+                </p>
                 <div className="flex flex-wrap items-center gap-2">
                   <button type="button" onClick={splitFrameSlot} disabled={busy || project.frameSlots.length >= 100} className="min-h-12 rounded-lg border border-cyan-800 px-4 text-sm font-semibold text-cyan-200 disabled:opacity-50">
                     Split framing slot at {formatTime(currentTime)}

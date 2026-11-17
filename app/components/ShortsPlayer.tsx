@@ -8,9 +8,15 @@ type YouTubePlayerInstance = {
   destroy(): void;
   getCurrentTime(): number;
   getPlayerState(): number;
+  unloadModule(moduleName: string): void;
   pauseVideo(): void;
   playVideo(): void;
   seekTo(seconds: number, allowSeekAhead: boolean): void;
+};
+
+type NativeFullscreenVideo = HTMLVideoElement & {
+  webkitDisplayingFullscreen?: boolean;
+  webkitEnterFullscreen?: () => void;
 };
 
 type YouTubeApi = {
@@ -103,12 +109,16 @@ export default function ShortsPlayer({
   const videoRef = useRef<HTMLVideoElement>(null);
   const youtubeHostRef = useRef<HTMLDivElement>(null);
   const youtubePlayerRef = useRef<YouTubePlayerInstance | null>(null);
+  const fullscreenContainerRef = useRef<HTMLDivElement>(null);
   const timeCallbackRef = useRef(onTimeChange);
   const dragRef = useRef<{ x: number; y: number; clientX: number; clientY: number; width: number; height: number } | null>(null);
   const [currentTime, setCurrentTime] = useState(project.startSeconds);
   const [duration, setDuration] = useState(project.endSeconds);
   const [playing, setPlaying] = useState(false);
   const [playerError, setPlayerError] = useState("");
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  const [shareStatus, setShareStatus] = useState("");
+  const [shareError, setShareError] = useState("");
 
   timeCallbackRef.current = onTimeChange;
 
@@ -130,6 +140,26 @@ export default function ShortsPlayer({
   }, [project.startSeconds, project.endSeconds]);
 
   useEffect(() => {
+    const video = videoRef.current as NativeFullscreenVideo | null;
+    const updateFullscreen = () => {
+      setIsFullscreen(
+        document.fullscreenElement === fullscreenContainerRef.current
+        || Boolean(video?.webkitDisplayingFullscreen),
+      );
+    };
+    document.addEventListener("fullscreenchange", updateFullscreen);
+    document.addEventListener("webkitfullscreenchange", updateFullscreen);
+    video?.addEventListener("webkitbeginfullscreen", updateFullscreen);
+    video?.addEventListener("webkitendfullscreen", updateFullscreen);
+    return () => {
+      document.removeEventListener("fullscreenchange", updateFullscreen);
+      document.removeEventListener("webkitfullscreenchange", updateFullscreen);
+      video?.removeEventListener("webkitbeginfullscreen", updateFullscreen);
+      video?.removeEventListener("webkitendfullscreen", updateFullscreen);
+    };
+  }, [videoUrl]);
+
+  useEffect(() => {
     if (project.source.type !== "youtube") return;
     let timer: number | undefined;
     let disposed = false;
@@ -146,7 +176,9 @@ export default function ShortsPlayer({
         playerVars: {
           autoplay: 0,
           controls: 0,
+          cc_load_policy: 0,
           enablejsapi: 1,
+          fs: 1,
           playsinline: 1,
           rel: 0,
           start: Math.floor(startSeconds),
@@ -154,6 +186,8 @@ export default function ShortsPlayer({
         },
         events: {
           onReady: () => {
+            const player = youtubePlayerRef.current;
+            player?.unloadModule("captions");
             youtubePlayerRef.current?.seekTo(startSeconds, true);
             timer = window.setInterval(() => {
               const player = youtubePlayerRef.current;
@@ -235,6 +269,61 @@ export default function ShortsPlayer({
     setPlaying(!playing);
   }
 
+  async function toggleFullscreen() {
+    if (document.fullscreenElement) {
+      try {
+        await document.exitFullscreen();
+      } catch {
+        setPlayerError("The browser could not exit fullscreen mode.");
+      }
+      return;
+    }
+
+    const container = fullscreenContainerRef.current;
+    if (container?.requestFullscreen) {
+      try {
+        await container.requestFullscreen();
+        return;
+      } catch {
+        // Continue to the native video fallback for browsers that restrict element fullscreen.
+      }
+    }
+
+    const video = videoRef.current as NativeFullscreenVideo | null;
+    if (video?.webkitEnterFullscreen) {
+      video.webkitEnterFullscreen();
+      return;
+    }
+    setPlayerError("Fullscreen playback is not supported by this browser.");
+  }
+
+  async function shareShort() {
+    const url = new URL(`/library/shorts/${encodeURIComponent(project.slug)}`, window.location.origin).toString();
+    const shareData = {
+      title: project.title,
+      text: project.description || project.title,
+      url,
+    };
+    setShareError("");
+    setShareStatus("");
+    if (navigator.share) {
+      try {
+        await navigator.share(shareData);
+        setShareStatus("Short shared.");
+        return;
+      } catch (error) {
+        if (error instanceof Error && error.name === "AbortError") return;
+      }
+    }
+    try {
+      if (!navigator.clipboard?.writeText) throw new Error("Clipboard access is unavailable in this browser.");
+      await navigator.clipboard.writeText(url);
+      setShareStatus("Short link copied. Paste it into any app.");
+    } catch (error) {
+      setShareError(error instanceof Error ? error.message : "Could not share or copy the short link.");
+    }
+  }
+
   function onPointerDown(event: PointerEvent<HTMLDivElement>) {
     if (!editable || project.source.type !== "upload" || !onCropChange) return;
     const bounds = event.currentTarget.getBoundingClientRect();
@@ -281,59 +370,85 @@ export default function ShortsPlayer({
   return (
     <div className="w-full">
       <div
-        className={`relative w-full touch-none overflow-hidden rounded-xl bg-black ${editable && project.source.type === "upload" ? "cursor-move" : ""}`}
-        style={{ aspectRatio: activeSlot.aspectRatio.replace(":", "/") }}
+        ref={fullscreenContainerRef}
+        className={`relative w-full touch-none overflow-hidden bg-black ${
+          isFullscreen ? "flex h-dvh w-screen items-center justify-center rounded-none" : "rounded-xl"
+        } ${editable && project.source.type === "upload" ? "cursor-move" : ""}`}
+        style={isFullscreen
+          ? { width: "100vw", height: "100dvh", aspectRatio: "auto", borderRadius: 0 }
+          : { aspectRatio: activeSlot.aspectRatio.replace(":", "/") }}
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
         onPointerUp={() => { dragRef.current = null; }}
         onPointerCancel={() => { dragRef.current = null; }}
         aria-label={editable ? "Drag the video to adjust its crop" : undefined}
       >
-        {project.source.type === "youtube" ? (
-          <div
-            ref={youtubeHostRef}
-            className="absolute"
-            style={{
-              width: `${playerWidthPercent}%`,
-              height: `${playerHeightPercent}%`,
-              left: `${playerLeftPercent}%`,
-              top: `${playerTopPercent}%`,
-              transform: `scale(${position.zoom})`,
-              transformOrigin: `${position.x}% ${position.y}%`,
+        <div
+          className="relative h-full w-full overflow-hidden bg-black"
+          style={isFullscreen ? {
+            width: `min(100vw, ${ratio * 100}dvh)`,
+            height: `min(100dvh, ${100 / ratio}vw)`,
+          } : undefined}
+        >
+          {project.source.type === "youtube" ? (
+            <div
+              ref={youtubeHostRef}
+              className="absolute"
+              style={{
+                width: `${playerWidthPercent}%`,
+                height: `${playerHeightPercent}%`,
+                left: `${playerLeftPercent}%`,
+                top: `${playerTopPercent}%`,
+                transform: `scale(${position.zoom})`,
+                transformOrigin: `${position.x}% ${position.y}%`,
+              }}
+            />
+          ) : videoUrl ? (
+            <video
+              ref={videoRef}
+              src={videoUrl}
+              className="h-full w-full"
+              style={{
+                objectFit: activeSlot.fit,
+                objectPosition: `${position.x}% ${position.y}%`,
+                transform: `scale(${position.zoom})`,
+              }}
+              playsInline
+              preload="metadata"
+              onPlay={() => setPlaying(true)}
+              onPause={() => setPlaying(false)}
+            />
+          ) : (
+            <div className="flex h-full items-center justify-center p-4 text-center text-sm text-slate-400">
+              Choose an authorized MP4 or WebM source to preview reliable manual reframing.
+            </div>
+          )}
+          {project.captionsEnabled && activeCaption && (
+            <div
+              className={`pointer-events-none absolute left-3 right-3 z-10 text-center font-bold leading-snug text-white [text-shadow:0_2px_6px_#000] ${captionPosition} ${captionSize}`}
+            >
+              <span className="rounded-md bg-black/70 px-2 py-1">{activeCaption.text}</span>
+            </div>
+          )}
+          <button
+            type="button"
+            onPointerDown={(event) => event.stopPropagation()}
+            onClick={(event) => {
+              event.stopPropagation();
+              void toggleFullscreen();
             }}
-          />
-        ) : videoUrl ? (
-          <video
-            ref={videoRef}
-            src={videoUrl}
-            className="h-full w-full"
-            style={{
-              objectFit: activeSlot.fit,
-              objectPosition: `${position.x}% ${position.y}%`,
-              transform: `scale(${position.zoom})`,
-            }}
-            playsInline
-            preload="metadata"
-            onPlay={() => setPlaying(true)}
-            onPause={() => setPlaying(false)}
-          />
-        ) : (
-          <div className="flex h-full items-center justify-center p-4 text-center text-sm text-slate-400">
-            Choose an authorized MP4 or WebM source to preview reliable manual reframing.
-          </div>
-        )}
-        {project.captionsEnabled && activeCaption && (
-          <div
-            className={`pointer-events-none absolute left-3 right-3 z-10 text-center font-bold leading-snug text-white [text-shadow:0_2px_6px_#000] ${captionPosition} ${captionSize}`}
+            aria-label={isFullscreen ? "Exit fullscreen" : "Expand video to fullscreen"}
+            title={isFullscreen ? "Exit fullscreen" : "Expand video"}
+            className="absolute right-2 top-2 z-20 flex min-h-12 min-w-12 items-center justify-center rounded-lg bg-black/75 px-3 text-xs font-semibold text-white"
           >
-            <span className="rounded-md bg-black/70 px-2 py-1">{activeCaption.text}</span>
-          </div>
-        )}
-        {playerError && (
-          <p role="alert" className="absolute inset-x-2 top-2 rounded-lg bg-rose-950/90 p-2 text-xs text-rose-100">
-            {playerError}
-          </p>
-        )}
+            {isFullscreen ? "Exit" : "Expand"}
+          </button>
+          {playerError && (
+            <p role="alert" className="absolute inset-x-2 top-14 z-20 rounded-lg bg-rose-950/90 p-2 text-xs text-rose-100">
+              {playerError}
+            </p>
+          )}
+        </div>
       </div>
       <div className="mt-3 flex items-center gap-3">
         <button
@@ -357,6 +472,19 @@ export default function ShortsPlayer({
         />
         <span className="min-w-16 text-right text-xs tabular-nums text-slate-400">{formatTime(currentTime)}</span>
       </div>
+      {project.status === "published" && (
+        <div className="mt-2">
+          <button
+            type="button"
+            onClick={() => void shareShort()}
+            className="min-h-12 rounded-lg border border-slate-700 px-4 text-sm font-semibold text-slate-200"
+          >
+            Share short
+          </button>
+          {shareStatus && <p role="status" className="mt-2 text-xs text-emerald-300">{shareStatus}</p>}
+          {shareError && <p role="alert" className="mt-2 text-xs text-rose-300">{shareError}</p>}
+        </div>
+      )}
       {project.source.type === "youtube" && (
         <a
           href={`https://www.youtube.com/watch?v=${project.source.videoId}`}
