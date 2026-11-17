@@ -150,7 +150,11 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({ error: "Generate an answer from published books and videos before publishing this FAQ." }, { status: 409 });
       }
       const publishedFaq = LibraryFaqSchema.parse({
-        ...faq,
+        id: faq.id,
+        category: faq.category,
+        question: faq.question,
+        answer: faq.answer,
+        sources: faq.sources,
         publishedAt: now,
         updatedAt: now,
       });

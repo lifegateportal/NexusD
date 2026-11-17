@@ -8,8 +8,7 @@ type NavItem = { id: string; label: string; href?: string };
 const NAV_ITEMS: NavItem[] = [
   { id: "overview", label: "Academy" },
   { id: "ebook", label: "Book" },
-  { id: "videos", label: "Videos", href: "/ebook/videos" },
-  { id: "faqs", label: "FAQs", href: "/ebook/faqs" },
+  { id: "library", label: "Library", href: "/ebook/library" },
   { id: "coding", label: "Code", href: "/coding" },
   { id: "translate", label: "Translate", href: "/translate" },
   { id: "projects", label: "Projects" },
@@ -39,20 +38,12 @@ function IconEbook() {
   );
 }
 
-function IconVideo() {
+function IconLibrary() {
   return (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} className="h-5 w-5">
-      <rect x="3" y="5" width="13" height="14" rx="2" />
-      <path d="m16 10 5-3v10l-5-3" strokeLinejoin="round" />
-    </svg>
-  );
-}
-
-function IconFaq() {
-  return (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} className="h-5 w-5">
-      <circle cx="12" cy="12" r="9" />
-      <path d="M9.6 9a2.5 2.5 0 0 1 4.8 1c0 1.7-2.4 2-2.4 3.5M12 17h.01" strokeLinecap="round" />
+      <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M9 7h7M9 11h5" strokeLinecap="round" />
     </svg>
   );
 }
@@ -106,8 +97,7 @@ function IconSermon() {
 const NAV_ICONS: Record<string, () => React.JSX.Element> = {
   overview: IconGrid,
   ebook: IconEbook,
-  videos: IconVideo,
-  faqs: IconFaq,
+  library: IconLibrary,
   coding: IconCoding,
   translate: IconTranslate,
   projects: IconProjects,
@@ -186,7 +176,7 @@ export function NexusNav({ active, onSelect }: NexusNavProps) {
               ? pathname.startsWith(item.href)
               : isAcademyGroup
                 ? active !== "ebook" && active !== "sermon" && active !== "projects"
-                      && active !== "translate" && active !== "coding" && active !== "faqs"
+                        && active !== "translate" && active !== "coding" && active !== "library"
                 : active === item.id;
             const btnClass = [
               "focus-ring relative flex min-h-12 w-12 items-center justify-center rounded-xl transition-all duration-150",
@@ -287,7 +277,7 @@ export function NexusNav({ active, onSelect }: NexusNavProps) {
             ? pathname.startsWith(item.href)
             : isAcademyGroup
               ? active !== "ebook" && active !== "sermon" && active !== "projects"
-                  && active !== "translate" && active !== "coding" && active !== "faqs"
+                  && active !== "translate" && active !== "coding" && active !== "library"
               : active === item.id;
           const inner = (
             <>
