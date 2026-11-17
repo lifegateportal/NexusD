@@ -46,6 +46,7 @@ type ParagraphModel = {
   isBlockQuote: boolean;
   heading: number;
   runs: InlineModel[];
+  listNumber: number | null;
   pageIndex: number;
   widthTwips: number | null;
   alignment: "left" | "center" | "right" | "justify";
@@ -260,17 +261,24 @@ async function extractDocumentModel(html: string): Promise<DocumentModel> {
         for (const child of Array.from(root.childNodes)) visit(child, root.closest("a")?.href ?? null);
         return runs;
       }
-      function paragraphFor(element: Element, list: "bullet" | "number" | null = null): ParagraphModel {
+      function paragraphFor(
+        element: Element,
+        list: "bullet" | "number" | null = null,
+        listNumber: number | null = null,
+      ): ParagraphModel {
         const style = styleFor(element);
         const rect = element.getBoundingClientRect();
         const heading = /^H([1-6])$/.test(element.tagName) ? Number(element.tagName.slice(1)) : 0;
         const parentList = element.closest("ol,ul");
-        const listKind = list ?? (parentList?.tagName === "OL" ? "number" : parentList?.tagName === "UL" ? "bullet" : null);
+        const listKind = listNumber !== null
+          ? null
+          : list ?? (parentList?.tagName === "OL" ? "number" : parentList?.tagName === "UL" ? "bullet" : null);
         return {
           kind: "paragraph",
           isBlockQuote: element.tagName === "BLOCKQUOTE",
           heading,
           runs: runsFor(element, element.tagName === "PRE"),
+          listNumber,
           pageIndex: Math.max(0, Math.floor(Math.max(0, rect.top - 1) / window.innerHeight)),
           widthTwips: rect.width > 0 ? Math.round(rect.width * 15) : null,
           alignment: style.alignment,
@@ -328,8 +336,16 @@ async function extractDocumentModel(html: string): Promise<DocumentModel> {
           } else if (blockTags.has(child.tagName)) {
             blocks.push(paragraphFor(child));
           } else if (child.tagName === "UL" || child.tagName === "OL") {
-            for (const item of Array.from(child.children).filter((element) => element.tagName === "LI")) {
-              blocks.push(paragraphFor(item, child.tagName === "OL" ? "number" : "bullet"));
+            const items = Array.from(child.children).filter((element) => element.tagName === "LI");
+            let nextNumber = Number((child as HTMLOListElement).start) || 1;
+            for (const item of items) {
+              if (child.tagName === "OL") {
+                const itemNumber = Number((item as HTMLLIElement).value) || nextNumber;
+                blocks.push(paragraphFor(item, null, itemNumber));
+                nextNumber = itemNumber + 1;
+              } else {
+                blocks.push(paragraphFor(item, "bullet"));
+              }
             }
           } else if (containerTags.has(child.tagName)) {
             const hasBlockChild = Array.from(child.children).some(isBlock);
@@ -376,8 +392,19 @@ function runFor(model: InlineModel): TextRun | ExternalHyperlink {
 function paragraphFor(model: ParagraphModel): Paragraph {
   const leftIndent = model.leftTwips || (model.isBlockQuote ? model.paddingLeftTwips : 0);
   const rightIndent = model.rightTwips;
+  const firstRun = model.runs[0];
+  const children = model.runs.length > 0 ? model.runs.map(runFor) : [new TextRun({ text: "" })];
+  if (model.listNumber !== null) {
+    children.unshift(new TextRun({
+      text: `${model.listNumber}. `,
+      bold: true,
+      font: firstRun?.fontFamily,
+      size: firstRun ? Math.max(2, Math.round(firstRun.fontSizePt * 2)) : undefined,
+      color: firstRun?.color ?? undefined,
+    }));
+  }
   const options = {
-    children: model.runs.length > 0 ? model.runs.map(runFor) : [new TextRun({ text: "" })],
+    children,
     alignment: alignment(model.alignment),
     spacing: {
       before: model.beforeTwips,
@@ -419,9 +446,9 @@ function paragraphFor(model: ParagraphModel): Paragraph {
   return new Paragraph(options);
 }
 
-function isBoxedParagraph(model: ParagraphModel): boolean {
+function isBoxedParagraph(model: ParagraphModel, teachingOutline = false): boolean {
   return Boolean(
-    !model.isBlockQuote && (
+    (teachingOutline && model.isBlockQuote) || (
       model.backgroundColor
       || model.paddingTopTwips
       || model.paddingRightTwips
@@ -474,8 +501,8 @@ function normalizeTeachingOutlineDocxBlocks(blocks: DocumentModel["blocks"]): Do
       borderLeftWidth: block.isBlockQuote ? Math.max(block.borderLeftWidth, 24) : block.borderLeftWidth,
       runs: block.runs.map((run) => ({
         ...run,
-        color: colorLuminance(run.color) !== null && colorLuminance(run.color)! < 0.35
-          ? "1F2937"
+        color: block.isBlockQuote || (colorLuminance(run.color) !== null && colorLuminance(run.color)! < 0.35)
+          ? "334155"
           : run.color,
         backgroundColor: null,
       })),
@@ -589,7 +616,8 @@ export async function renderHtmlToEditableDocxBuffer(html: string): Promise<Buff
     throw new Error("The HTML design has no editable document content.");
   }
   const extractedModel = await extractDocumentModel(html);
-  const model = html.includes('id="nexuslm-teaching-outline-docx"')
+  const isTeachingOutline = html.includes('id="nexuslm-teaching-outline-docx"');
+  const model = isTeachingOutline
     ? { ...extractedModel, blocks: normalizeTeachingOutlineDocxBlocks(extractedModel.blocks) }
     : extractedModel;
   if (model.blocks.length === 0) throw new Error("The HTML design has no editable document content.");
@@ -606,7 +634,7 @@ export async function renderHtmlToEditableDocxBuffer(html: string): Promise<Buff
     }
     children.push(block.kind === "table"
       ? tableFor(block, contentWidthTwips)
-      : isBoxedParagraph(block) ? boxedParagraphFor(block) : paragraphFor(block));
+      : isBoxedParagraph(block, isTeachingOutline) ? boxedParagraphFor(block) : paragraphFor(block));
     previousPageIndex = Math.max(previousPageIndex, block.pageIndex);
   }
   const document = new DocxDocument({

@@ -151,6 +151,7 @@ function MarkdownMessage({ content, sourcePrefix }: { content: string; sourcePre
 
     if (/^\d+[.)]\s+/.test(line)) {
       const items: ReactNode[] = [];
+      const start = Number.parseInt(line.match(/^(\d+)/)?.[1] ?? "1", 10);
       while (index < lines.length && /^\d+[.)]\s+/.test(lines[index].trim())) {
         const item = lines[index].trim().replace(/^\d+[.)]\s+/, "");
         items.push(
@@ -161,7 +162,7 @@ function MarkdownMessage({ content, sourcePrefix }: { content: string; sourcePre
         index += 1;
       }
       blocks.push(
-        <ol key={`ol-${index}`} className="my-2 list-decimal space-y-1.5 pl-5 marker:text-amber-500">
+        <ol key={`ol-${index}`} start={start} className="my-2 list-decimal space-y-1.5 pl-5 marker:text-amber-500">
           {items}
         </ol>,
       );

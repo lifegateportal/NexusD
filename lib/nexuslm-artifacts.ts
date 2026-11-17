@@ -171,14 +171,16 @@ function renderNexusLMMarkdownBlocks(content: string, format: NexusLMArtifactFor
   let codeLines: string[] = [];
   let listItems: string[] = [];
   let listType: "ul" | "ol" | null = null;
+  let listStart = 1;
   let paragraphLines: string[] = [];
 
   const flushList = () => {
     if (listItems.length === 0) return;
     const tag = listType ?? "ul";
-    body.push(`<${tag}>${listItems.map((item) => `<li>${item}</li>`).join("")}</${tag}>`);
+    body.push(`<${tag}${tag === "ol" && listStart !== 1 ? ` start="${listStart}"` : ""}>${listItems.map((item) => `<li>${item}</li>`).join("")}</${tag}>`);
     listItems = [];
     listType = null;
+    listStart = 1;
   };
   const flushParagraph = () => {
     if (paragraphLines.length === 0) return;
@@ -274,6 +276,7 @@ function renderNexusLMMarkdownBlocks(content: string, format: NexusLMArtifactFor
       flushParagraph();
       const nextListType = /^\d/.test(listItem[1]) ? "ol" : "ul";
       if (listType && listType !== nextListType) flushList();
+      if (!listType) listStart = nextListType === "ol" ? Number.parseInt(listItem[1], 10) : 1;
       listType = nextListType;
       listItems.push(renderNexusLMInlineHtml(listItem[2]));
       continue;
