@@ -22,6 +22,7 @@ const ManuscriptChapterSchema = z.object({
 
 const ExportRequestSchema = z.object({
   format: z.enum(["pdf", "docx", "html", "txt", "md", "json", "csv", "xlsx"]).default("pdf"),
+  documentStyle: z.enum(["teaching-outline"]).optional(),
   title: z.string().trim().min(1).max(300),
   subtitle: z.string().max(500).default(""),
   authorName: z.string().trim().min(1).max(200).default("NexusLM"),
@@ -58,6 +59,26 @@ const ExportRequestSchema = z.object({
     });
   }
 });
+
+function applyDocumentStyle(html: string, style?: "teaching-outline"): string {
+  if (style !== "teaching-outline") return html;
+  const outlineStyles = `<style id="nexuslm-teaching-outline">
+    @page { margin: 0.8in; }
+    body { font-family: Arial, Calibri, sans-serif !important; font-size: 12pt !important; line-height: 1.55 !important; color: #1f2937 !important; max-width: 7in !important; }
+    h1 { font-size: 22pt !important; line-height: 1.2 !important; margin: 0 0 18pt !important; }
+    h2 { font-size: 17pt !important; line-height: 1.25 !important; margin: 20pt 0 9pt !important; break-after: avoid-page !important; }
+    h3 { font-size: 13pt !important; line-height: 1.3 !important; margin: 14pt 0 6pt !important; break-after: avoid-page !important; }
+    p, li, blockquote { font-size: 12pt !important; line-height: 1.55 !important; }
+    p { margin: 0 0 9pt !important; }
+    li { margin-bottom: 5pt !important; }
+    blockquote { margin: 10pt 0 14pt !important; padding: 8pt 12pt !important; border-left: 3pt solid #0e7490 !important; background: #f1f5f9 !important; }
+    strong { font-weight: 700 !important; }
+    h1, h2, h3, blockquote, li { break-inside: avoid-page; }
+  </style>`;
+  return /<\/head\s*>/i.test(html)
+    ? html.replace(/<\/head\s*>/i, `${outlineStyles}</head>`)
+    : `${outlineStyles}${html}`;
+}
 
 export async function POST(request: NextRequest) {
   let input: z.infer<typeof ExportRequestSchema>;
@@ -107,7 +128,10 @@ export async function POST(request: NextRequest) {
           },
         });
       }
-      const sourceHtml = input.html ?? nexusLMContentToHtml(input.content ?? "", input.title, format);
+      const sourceHtml = applyDocumentStyle(
+        input.html ?? nexusLMContentToHtml(input.content ?? "", input.title, format),
+        input.documentStyle,
+      );
       const artifact = format === "docx"
         ? await renderHtmlToEditableDocxBuffer(sourceHtml)
         : format === "xlsx"

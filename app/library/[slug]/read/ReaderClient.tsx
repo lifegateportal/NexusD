@@ -1078,6 +1078,10 @@ export function ReaderClient({ manifest, slug, initialChapter }: Props) {
   const [settings, setSettings] = useState<ReaderSettings>({
     theme: "paper", fontSize: 3, lineHeight: 2, fontFamily: "serif",
   });
+  const theme      = THEMES[settings.theme];
+  const fontSize   = FONT_SIZES[settings.fontSize - 1];
+  const lineHeight = LINE_HEIGHTS[settings.lineHeight - 1];
+  const fontFamily = FONT_FAMILIES[settings.fontFamily];
   const [chapterIndex, setChapterIndex] = useState(initialChapter ?? 0);
   const [showChrome,   setShowChrome]   = useState(true);
   const [tocOpen,      setTocOpen]      = useState(false);
@@ -1766,11 +1770,6 @@ export function ReaderClient({ manifest, slug, initialChapter }: Props) {
     setSettings(next);
     saveReaderSettings(next);
   };
-
-  const theme      = THEMES[settings.theme];
-  const fontSize   = FONT_SIZES[settings.fontSize - 1];
-  const lineHeight = LINE_HEIGHTS[settings.lineHeight - 1];
-  const fontFamily = FONT_FAMILIES[settings.fontFamily];
 
   // ToC items for ChapterDrawer
   const tocItems: TocItem[] = virtualSections.map((s, i) => {

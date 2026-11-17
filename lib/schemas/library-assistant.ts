@@ -12,4 +12,11 @@ export const LibraryChapterCatalogSchema = z.object({
   chapters: z.array(LibraryChapterOptionSchema).max(10_000),
 }).strict();
 
+export const LibraryBookCatalogSchema = z.object({
+  books: z.array(z.object({
+    slug: z.string().trim().min(1).max(160),
+    title: z.string().trim().min(1).max(300),
+  }).strict()).max(10_000),
+}).strict();
+
 export type LibraryChapterOption = z.infer<typeof LibraryChapterOptionSchema>;

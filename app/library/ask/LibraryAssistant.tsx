@@ -4,6 +4,7 @@ import { FormEvent, useEffect, useMemo, useState } from "react";
 import type { ReactNode } from "react";
 import { z } from "zod";
 import {
+  LibraryBookCatalogSchema,
   LibraryChapterCatalogSchema,
   type LibraryChapterOption,
 } from "@/lib/schemas/library-assistant";
@@ -198,10 +199,14 @@ export default function LibraryAssistant() {
   const [storageError, setStorageError] = useState("");
   const [storageReady, setStorageReady] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
-  const [chapterOptions, setChapterOptions] = useState<LibraryChapterOption[]>([]);
-  const [chapterCatalogLoading, setChapterCatalogLoading] = useState(true);
+  const [books, setBooks] = useState<Array<{ slug: string; title: string }>>([]);
+  const [chaptersInSelectedBook, setChaptersInSelectedBook] = useState<LibraryChapterOption[]>([]);
+  const [bookCatalogLoading, setBookCatalogLoading] = useState(true);
+  const [chaptersLoading, setChaptersLoading] = useState(false);
   const [chapterCatalogError, setChapterCatalogError] = useState("");
-  const [selectedChapterKey, setSelectedChapterKey] = useState("");
+  const [selectedBookSlug, setSelectedBookSlug] = useState("");
+  const [selectedChapterNumber, setSelectedChapterNumber] = useState("");
+  const [outlinePickerOpen, setOutlinePickerOpen] = useState(false);
   const [exportingOutline, setExportingOutline] = useState<string | null>(null);
 
   const activeConversation = useMemo(
@@ -209,18 +214,10 @@ export default function LibraryAssistant() {
     [activeId, conversations],
   );
   const messages = activeConversation?.messages ?? [];
-  const selectedChapter = chapterOptions.find(
-    (chapter) => `${chapter.slug}:${chapter.chapterNumber}` === selectedChapterKey,
+  const selectedBook = books.find((book) => book.slug === selectedBookSlug) ?? null;
+  const selectedChapter = chaptersInSelectedBook.find(
+    (chapter) => String(chapter.chapterNumber) === selectedChapterNumber,
   ) ?? null;
-  const chapterGroups = useMemo(() => {
-    const groups = new Map<string, { title: string; chapters: LibraryChapterOption[] }>();
-    for (const chapter of chapterOptions) {
-      const group = groups.get(chapter.slug) ?? { title: chapter.bookTitle, chapters: [] };
-      group.chapters.push(chapter);
-      groups.set(chapter.slug, group);
-    }
-    return [...groups.entries()];
-  }, [chapterOptions]);
 
   useEffect(() => {
     try {
@@ -248,8 +245,8 @@ export default function LibraryAssistant() {
 
   useEffect(() => {
     let cancelled = false;
-    async function loadChapterOptions() {
-      setChapterCatalogLoading(true);
+    async function loadBooks() {
+      setBookCatalogLoading(true);
       try {
         const response = await fetch("/api/library/ask", { cache: "no-store" });
         const body: unknown = await response.json();
@@ -257,10 +254,10 @@ export default function LibraryAssistant() {
           const parsedError = z.object({ error: z.string() }).safeParse(body);
           throw new Error(parsedError.success ? parsedError.data.error : "The library chapter list could not be loaded.");
         }
-        const parsed = LibraryChapterCatalogSchema.safeParse(body);
-        if (!parsed.success) throw new Error("The library returned an invalid chapter list.");
+        const parsed = LibraryBookCatalogSchema.safeParse(body);
+        if (!parsed.success) throw new Error("The library returned an invalid book list.");
         if (!cancelled) {
-          setChapterOptions(parsed.data.chapters);
+          setBooks(parsed.data.books);
           setChapterCatalogError("");
         }
       } catch (loadError) {
@@ -268,12 +265,47 @@ export default function LibraryAssistant() {
           setChapterCatalogError(loadError instanceof Error ? loadError.message : "The chapter list could not be loaded.");
         }
       } finally {
-        if (!cancelled) setChapterCatalogLoading(false);
+        if (!cancelled) setBookCatalogLoading(false);
       }
     }
-    void loadChapterOptions();
+    void loadBooks();
     return () => { cancelled = true; };
   }, []);
+
+  useEffect(() => {
+    if (!selectedBookSlug) {
+      setChaptersInSelectedBook([]);
+      setChaptersLoading(false);
+      return;
+    }
+
+    const controller = new AbortController();
+    async function loadBookChapters() {
+      setChaptersLoading(true);
+      setChapterCatalogError("");
+      try {
+        const response = await fetch(`/api/library/ask?slug=${encodeURIComponent(selectedBookSlug)}`, {
+          cache: "no-store",
+          signal: controller.signal,
+        });
+        const body: unknown = await response.json();
+        if (!response.ok) {
+          const parsedError = z.object({ error: z.string() }).safeParse(body);
+          throw new Error(parsedError.success ? parsedError.data.error : "The selected book's chapters could not be loaded.");
+        }
+        const parsed = LibraryChapterCatalogSchema.safeParse(body);
+        if (!parsed.success) throw new Error("The library returned an invalid chapter list.");
+        setChaptersInSelectedBook(parsed.data.chapters);
+      } catch (loadError) {
+        if (loadError instanceof DOMException && loadError.name === "AbortError") return;
+        setChapterCatalogError(loadError instanceof Error ? loadError.message : "The chapters could not be loaded.");
+      } finally {
+        if (!controller.signal.aborted) setChaptersLoading(false);
+      }
+    }
+    void loadBookChapters();
+    return () => controller.abort();
+  }, [selectedBookSlug]);
 
   useEffect(() => {
     if (!storageReady) return;
@@ -301,6 +333,7 @@ export default function LibraryAssistant() {
     setQuestion("");
     setError("");
     setHistoryOpen(false);
+    setOutlinePickerOpen(false);
   }
 
   function refreshSavedChats() {
@@ -414,6 +447,7 @@ export default function LibraryAssistant() {
       `Create a teaching outline for Chapter ${selectedChapter.chapterNumber}: ${selectedChapter.chapterTitle}.`,
       "teaching-outline",
     );
+    setOutlinePickerOpen(false);
   }
 
   async function downloadOutline(message: Message, messageIndex: number, format: "docx" | "pdf") {
@@ -425,14 +459,18 @@ export default function LibraryAssistant() {
     setExportingOutline(exportKey);
     setError("");
     try {
+      const documentContent = message.content
+        .replace(/\s*\[S\d+\]/g, "")
+        .replace(/^# (.+)$/m, "## $1");
       const response = await fetch("/api/nexuslm/export", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           format,
+          documentStyle: "teaching-outline",
           title: message.artifactTitle,
           authorName: "Nexus Library",
-          content: message.content,
+          content: documentContent,
         }),
       });
       if (!response.ok) {
@@ -474,7 +512,7 @@ export default function LibraryAssistant() {
           </button>
           <button
             type="button"
-            onClick={() => setHistoryOpen((open) => !open)}
+            onClick={() => { setHistoryOpen((open) => !open); setOutlinePickerOpen(false); }}
             className="min-h-12 rounded-xl border border-slate-700 px-4 text-sm font-semibold text-slate-200"
             aria-expanded={historyOpen}
           >
@@ -482,18 +520,28 @@ export default function LibraryAssistant() {
           </button>
           <button
             type="button"
-            onClick={refreshSavedChats}
-            className="min-h-12 rounded-xl border border-slate-700 px-4 text-sm font-semibold text-slate-300"
-            aria-label="Refresh saved chats from this browser"
+            onClick={() => { setOutlinePickerOpen((open) => !open); setHistoryOpen(false); }}
+            className="min-h-12 rounded-xl border border-emerald-500/50 px-4 text-sm font-semibold text-emerald-300"
+            aria-expanded={outlinePickerOpen}
           >
-            Refresh
+            {outlinePickerOpen ? "Close outline setup" : "Choose chapter"}
           </button>
-          <span className="ml-auto text-xs text-emerald-400" role="status">
+          <span className="ml-auto hidden text-xs text-emerald-400 sm:inline" role="status">
             {storageReady && !storageError ? "Saved locally" : storageReady ? "Not saved" : "Loading chats…"}
           </span>
         </div>
         {historyOpen && (
           <div className="mt-3 max-h-56 space-y-2 overflow-y-auto rounded-xl border border-slate-800 bg-slate-900/40 p-2">
+            <div className="flex justify-end">
+              <button
+                type="button"
+                onClick={refreshSavedChats}
+                className="min-h-12 rounded-lg px-3 text-sm font-semibold text-slate-300"
+                aria-label="Refresh saved chats from this browser"
+              >
+                Refresh
+              </button>
+            </div>
             {conversations.length === 0 ? (
               <p className="p-3 text-sm text-slate-500">No saved chats yet. Your questions and answers are saved in this browser automatically.</p>
             ) : conversations.map((conversation) => (
@@ -530,43 +578,57 @@ export default function LibraryAssistant() {
           </div>
         )}
         {storageError && <p role="alert" className="mt-2 text-xs text-rose-300">{storageError}</p>}
-        {chapterCatalogError && <p role="alert" className="mt-2 text-xs text-rose-300">{chapterCatalogError}</p>}
-        <div className="mt-3 grid grid-cols-1 gap-2 lg:grid-cols-[minmax(0,1fr)_auto]">
-          <label htmlFor="library-chapter-context" className="min-w-0">
-            <span className="mb-1 block text-xs font-semibold text-slate-400">Chapter context (optional)</span>
-            <select
-              id="library-chapter-context"
-              value={selectedChapterKey}
-              onChange={(event) => setSelectedChapterKey(event.target.value)}
-              disabled={chapterCatalogLoading || busy || chapterOptions.length === 0}
-              className="min-h-12 w-full rounded-xl border border-slate-700 bg-slate-900 px-3 text-base text-white outline-none focus:border-amber-500 disabled:opacity-60"
+        {outlinePickerOpen && (
+          <div className="mt-3 grid grid-cols-1 gap-2 rounded-xl border border-slate-800 bg-slate-900/70 p-3 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto]">
+            <label htmlFor="library-book-context" className="min-w-0">
+              <span className="mb-1 block text-xs font-semibold text-slate-400">1. Choose a book</span>
+              <select
+                id="library-book-context"
+                value={selectedBookSlug}
+                onChange={(event) => {
+                  setSelectedBookSlug(event.target.value);
+                  setSelectedChapterNumber("");
+                  setChaptersInSelectedBook([]);
+                }}
+                disabled={bookCatalogLoading || busy || books.length === 0}
+                className="min-h-12 w-full rounded-xl border border-slate-700 bg-slate-950 px-3 text-base text-white outline-none focus:border-amber-500 disabled:opacity-60"
+              >
+                <option value="">{bookCatalogLoading ? "Loading books…" : "Select a book"}</option>
+                {books.map((book) => (
+                  <option key={book.slug} value={book.slug}>{book.title}</option>
+                ))}
+              </select>
+            </label>
+            <label htmlFor="library-chapter-context" className="min-w-0">
+              <span className="mb-1 block text-xs font-semibold text-slate-400">2. Choose a chapter</span>
+              <select
+                id="library-chapter-context"
+                value={selectedChapterNumber}
+                onChange={(event) => setSelectedChapterNumber(event.target.value)}
+                disabled={busy || !selectedBook || chaptersLoading}
+                className="min-h-12 w-full rounded-xl border border-slate-700 bg-slate-950 px-3 text-base text-white outline-none focus:border-amber-500 disabled:opacity-60"
+              >
+                <option value="">
+                  {chaptersLoading ? "Loading chapters…" : selectedBook ? "Select a chapter" : "Choose a book first"}
+                </option>
+                {chaptersInSelectedBook.map((chapter) => (
+                  <option key={chapter.chapterNumber} value={String(chapter.chapterNumber)}>
+                    Chapter {chapter.chapterNumber}: {chapter.chapterTitle}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <button
+              type="button"
+              onClick={createTeachingOutline}
+              disabled={busy || !storageReady || !selectedChapter}
+              className="min-h-12 rounded-xl bg-emerald-400 px-4 text-sm font-bold text-slate-950 disabled:cursor-not-allowed disabled:opacity-50 lg:self-end"
             >
-              <option value="">
-                {chapterCatalogLoading ? "Loading chapters…" : "Search the whole library"}
-              </option>
-              {chapterGroups.map(([slug, group]) => (
-                <optgroup key={slug} label={group.title}>
-                  {group.chapters.map((chapter) => (
-                    <option
-                      key={`${chapter.slug}:${chapter.chapterNumber}`}
-                      value={`${chapter.slug}:${chapter.chapterNumber}`}
-                    >
-                      Chapter {chapter.chapterNumber}: {chapter.chapterTitle}
-                    </option>
-                  ))}
-                </optgroup>
-              ))}
-            </select>
-          </label>
-          <button
-            type="button"
-            onClick={createTeachingOutline}
-            disabled={busy || !storageReady || !selectedChapter}
-            className="min-h-12 rounded-xl bg-emerald-400 px-4 text-sm font-bold text-slate-950 disabled:cursor-not-allowed disabled:opacity-50 lg:self-end"
-          >
-            Create teaching outline
-          </button>
-        </div>
+              Create outline
+            </button>
+            {chapterCatalogError && <p role="alert" className="text-xs text-rose-300 lg:col-span-3">{chapterCatalogError}</p>}
+          </div>
+        )}
       </div>
       <section
         aria-live="polite"
