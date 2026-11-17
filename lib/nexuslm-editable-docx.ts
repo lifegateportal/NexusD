@@ -432,6 +432,57 @@ function isBoxedParagraph(model: ParagraphModel): boolean {
   );
 }
 
+function colorLuminance(color: string | null): number | null {
+  if (!color || !/^[0-9A-F]{6}$/i.test(color)) return null;
+  const channels = color.match(/.{2}/g)?.map((channel) => Number.parseInt(channel, 16) / 255);
+  if (!channels || channels.length !== 3) return null;
+  const linear = channels.map((channel) => channel <= 0.04045 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4);
+  return 0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2];
+}
+
+function normalizeTeachingOutlineDocxBlocks(blocks: DocumentModel["blocks"]): DocumentModel["blocks"] {
+  return blocks.map((block) => {
+    if (block.kind === "table") {
+      return {
+        ...block,
+        rows: block.rows.map((row) => row.map((cell) => ({
+          ...cell,
+          backgroundColor: colorLuminance(cell.backgroundColor) !== null
+            && colorLuminance(cell.backgroundColor)! < 0.35
+            ? "F8FAFC"
+            : cell.backgroundColor,
+          runs: cell.runs.map((run) => ({
+            ...run,
+            color: colorLuminance(run.color) !== null && colorLuminance(run.color)! < 0.35
+              ? "1F2937"
+              : run.color,
+            backgroundColor: null,
+          })),
+        }))),
+      };
+    }
+
+    const darkBackground = colorLuminance(block.backgroundColor) !== null
+      && colorLuminance(block.backgroundColor)! < 0.35;
+    return {
+      ...block,
+      backgroundColor: block.isBlockQuote
+        ? "F1F5F9"
+        : darkBackground ? "F8FAFC" : block.backgroundColor,
+      backgroundImage: null,
+      borderLeftColor: block.isBlockQuote ? "0E7490" : block.borderLeftColor,
+      borderLeftWidth: block.isBlockQuote ? Math.max(block.borderLeftWidth, 24) : block.borderLeftWidth,
+      runs: block.runs.map((run) => ({
+        ...run,
+        color: colorLuminance(run.color) !== null && colorLuminance(run.color)! < 0.35
+          ? "1F2937"
+          : run.color,
+        backgroundColor: null,
+      })),
+    };
+  });
+}
+
 function boxedParagraphFor(model: ParagraphModel): Table {
   const inner = paragraphFor({
     ...model,
@@ -537,7 +588,10 @@ export async function renderHtmlToEditableDocxBuffer(html: string): Promise<Buff
   if (!/<(?:body|main|article|section|p|h[1-6]|div)\b/i.test(html)) {
     throw new Error("The HTML design has no editable document content.");
   }
-  const model = await extractDocumentModel(html);
+  const extractedModel = await extractDocumentModel(html);
+  const model = html.includes('id="nexuslm-teaching-outline-docx"')
+    ? { ...extractedModel, blocks: normalizeTeachingOutlineDocxBlocks(extractedModel.blocks) }
+    : extractedModel;
   if (model.blocks.length === 0) throw new Error("The HTML design has no editable document content.");
   const useMeasuredPageBreaks = !html.includes('id="nexuslm-teaching-outline-docx"');
   const children: Array<Paragraph | Table> = [];
