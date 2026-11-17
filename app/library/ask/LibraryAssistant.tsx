@@ -467,7 +467,7 @@ export default function LibraryAssistant() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           format,
-          documentStyle: "teaching-outline",
+          documentStyle: format === "docx" ? "teaching-outline-docx" : "teaching-outline",
           title: message.artifactTitle,
           authorName: "Nexus Library",
           content: documentContent,
@@ -501,19 +501,19 @@ export default function LibraryAssistant() {
   return (
     <>
       <div className="shrink-0 border-b border-slate-800/70 py-3">
-        <div className="flex flex-wrap items-center gap-2">
+        <div className="grid grid-cols-3 gap-2 lg:flex lg:flex-wrap">
           <button
             type="button"
             onClick={createNewChat}
             disabled={busy}
-            className="min-h-12 rounded-xl bg-amber-500 px-4 text-sm font-bold text-slate-950 disabled:opacity-50"
+            className="min-h-12 min-w-0 whitespace-nowrap rounded-xl bg-amber-500 px-2 text-[11px] font-bold text-slate-950 disabled:opacity-50 sm:px-4 sm:text-sm lg:min-w-fit"
           >
             + New chat
           </button>
           <button
             type="button"
             onClick={() => { setHistoryOpen((open) => !open); setOutlinePickerOpen(false); }}
-            className="min-h-12 rounded-xl border border-slate-700 px-4 text-sm font-semibold text-slate-200"
+            className="min-h-12 min-w-0 whitespace-nowrap rounded-xl border border-slate-700 px-2 text-[11px] font-semibold text-slate-200 sm:px-4 sm:text-sm lg:min-w-fit"
             aria-expanded={historyOpen}
           >
             Saved chats ({conversations.length})
@@ -521,7 +521,7 @@ export default function LibraryAssistant() {
           <button
             type="button"
             onClick={() => { setOutlinePickerOpen((open) => !open); setHistoryOpen(false); }}
-            className="min-h-12 rounded-xl border border-emerald-500/50 px-4 text-sm font-semibold text-emerald-300"
+            className="min-h-12 min-w-0 whitespace-nowrap rounded-xl border border-emerald-500/50 px-2 text-[11px] font-semibold text-emerald-300 sm:px-4 sm:text-sm lg:min-w-fit"
             aria-expanded={outlinePickerOpen}
           >
             {outlinePickerOpen ? "Close outline setup" : "Choose chapter"}

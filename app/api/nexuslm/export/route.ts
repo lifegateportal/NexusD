@@ -22,7 +22,7 @@ const ManuscriptChapterSchema = z.object({
 
 const ExportRequestSchema = z.object({
   format: z.enum(["pdf", "docx", "html", "txt", "md", "json", "csv", "xlsx"]).default("pdf"),
-  documentStyle: z.enum(["teaching-outline"]).optional(),
+  documentStyle: z.enum(["teaching-outline", "teaching-outline-docx"]).optional(),
   title: z.string().trim().min(1).max(300),
   subtitle: z.string().max(500).default(""),
   authorName: z.string().trim().min(1).max(200).default("NexusLM"),
@@ -60,8 +60,8 @@ const ExportRequestSchema = z.object({
   }
 });
 
-function applyDocumentStyle(html: string, style?: "teaching-outline"): string {
-  if (style !== "teaching-outline") return html;
+function applyDocumentStyle(html: string, style?: "teaching-outline" | "teaching-outline-docx"): string {
+  if (!style) return html;
   const outlineStyles = `<style id="nexuslm-teaching-outline">
     @page { margin: 0.8in; }
     body { font-family: Arial, Calibri, sans-serif !important; font-size: 12pt !important; line-height: 1.55 !important; color: #1f2937 !important; max-width: 7in !important; }
@@ -75,9 +75,17 @@ function applyDocumentStyle(html: string, style?: "teaching-outline"): string {
     strong { font-weight: 700 !important; }
     h1, h2, h3, blockquote, li { break-inside: avoid-page; }
   </style>`;
-  return /<\/head\s*>/i.test(html)
-    ? html.replace(/<\/head\s*>/i, `${outlineStyles}</head>`)
-    : `${outlineStyles}${html}`;
+  const docxStyles = style === "teaching-outline-docx"
+    ? `<style id="nexuslm-teaching-outline-docx">
+        body { background: #ffffff !important; color: #1f2937 !important; }
+        blockquote { color: #1f2937 !important; background: #f8fafc !important; background-image: none !important; }
+        blockquote * { color: #1f2937 !important; background: transparent !important; background-image: none !important; }
+      </style>`
+    : "";
+  const styledHtml = /<\/head\s*>/i.test(html)
+    ? html.replace(/<\/head\s*>/i, `${outlineStyles}${docxStyles}</head>`)
+    : `${outlineStyles}${docxStyles}${html}`;
+  return styledHtml;
 }
 
 export async function POST(request: NextRequest) {

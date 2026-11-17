@@ -539,6 +539,7 @@ export async function renderHtmlToEditableDocxBuffer(html: string): Promise<Buff
   }
   const model = await extractDocumentModel(html);
   if (model.blocks.length === 0) throw new Error("The HTML design has no editable document content.");
+  const useMeasuredPageBreaks = !html.includes('id="nexuslm-teaching-outline-docx"');
   const children: Array<Paragraph | Table> = [];
   const contentWidthTwips = Math.max(
     1,
@@ -546,7 +547,7 @@ export async function renderHtmlToEditableDocxBuffer(html: string): Promise<Buff
   );
   let previousPageIndex = 0;
   for (const block of model.blocks) {
-    if (block.pageIndex > previousPageIndex) {
+    if (useMeasuredPageBreaks && block.pageIndex > previousPageIndex) {
       children.push(new Paragraph({ pageBreakBefore: true }));
     }
     children.push(block.kind === "table"
