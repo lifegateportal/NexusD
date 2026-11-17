@@ -73,7 +73,7 @@ const FONT_FAMILIES = {
 const CHROME_H = "3.25rem";
 const VOICE_STUDIO_STORAGE_PREFIX = "nexus_voice_studio_";
 
-type WordTapHandler = (wordIndex: number) => void;
+type WordTapHandler = (paraKey: string, wordIndex: number) => void;
 
 function renderWordSpans(
   text: string,
@@ -93,7 +93,9 @@ function renderWordSpans(
 // The first ~45% of each word is bolded; the rest rendered at normal weight.
 // This guides the eye to the fixation point and increases reading speed.
 
-function BionicText({ text, onWordTap }: { text: string; onWordTap?: WordTapHandler }) {
+function BionicText({
+  text, paraKey, onWordTap, wordIndexOffset = 0,
+}: { text: string; paraKey?: string; onWordTap?: WordTapHandler; wordIndexOffset?: number }) {
   return (
     <>
       {renderWordSpans(text, (tok, wordIndex) => {
@@ -101,8 +103,13 @@ function BionicText({ text, onWordTap }: { text: string; onWordTap?: WordTapHand
         const boldLen = Math.max(1, Math.ceil(clean.length * 0.45));
         return (
             <span
-              onClick={onWordTap ? (e) => { e.stopPropagation(); onWordTap(wordIndex); } : undefined}
-              data-word-index={onWordTap ? wordIndex : undefined}
+              onClick={onWordTap && paraKey ? (e) => {
+                e.stopPropagation();
+                const words = e.currentTarget.closest<HTMLElement>("[data-pkey]")?.querySelectorAll<HTMLElement>("[data-word-index]");
+                const clickedIndex = words ? Array.from(words).indexOf(e.currentTarget) : wordIndexOffset + wordIndex;
+                onWordTap(paraKey, clickedIndex);
+              } : undefined}
+              data-word-index={paraKey ? wordIndexOffset + wordIndex : undefined}
               style={{ cursor: onWordTap ? "pointer" : undefined, touchAction: "manipulation" }}
             >
             <strong style={{ fontWeight: 750 }}>{clean.slice(0, boldLen)}</strong>
@@ -120,7 +127,9 @@ function BionicText({ text, onWordTap }: { text: string; onWordTap?: WordTapHand
 // "Colossians 1:12–14 puts it this way:", "1 Corinthians 13:4", "Psalm 23:1–6"
 const BIBLE_REF_START = /^(?:\d\s+)?[A-Z][a-z]+(?:(?:\s+of\s+|\s+)[A-Z]?[a-z]+)?\s+\d+:\d+/;
 
-function InlineText({ text, onWordTap }: { text: string; onWordTap?: WordTapHandler }) {
+function InlineText({
+  text, paraKey, onWordTap, wordIndexOffset = 0,
+}: { text: string; paraKey?: string; onWordTap?: WordTapHandler; wordIndexOffset?: number }) {
   const parts: { t: "text" | "bold" | "italic" | "bolditalic" | "strike"; v: string }[] = [];
   const re = /(\*\*\*([^*\n]+?)\*\*\*|\*\*([^*\n]+?)\*\*|\*([^*\n]+?)\*|~~([^~\n]+?)~~)/g;
   let last = 0;
@@ -138,12 +147,17 @@ function InlineText({ text, onWordTap }: { text: string; onWordTap?: WordTapHand
   return (
     <>
       {(() => {
-        let wordOffset = 0;
+        let wordOffset = wordIndexOffset;
         return parts.map((p, i) => {
           const textNodes = renderWordSpans(p.v, (word, wordIndex) => (
             <span
-              onClick={onWordTap ? (e) => { e.stopPropagation(); onWordTap(wordOffset + wordIndex); } : undefined}
-              data-word-index={onWordTap ? wordOffset + wordIndex : undefined}
+              onClick={onWordTap && paraKey ? (e) => {
+                e.stopPropagation();
+                const words = e.currentTarget.closest<HTMLElement>("[data-pkey]")?.querySelectorAll<HTMLElement>("[data-word-index]");
+                const clickedIndex = words ? Array.from(words).indexOf(e.currentTarget) : wordOffset + wordIndex;
+                onWordTap(paraKey, clickedIndex);
+              } : undefined}
+              data-word-index={paraKey ? wordOffset + wordIndex : undefined}
               style={{ cursor: onWordTap ? "pointer" : undefined, touchAction: "manipulation" }}
             >
               {word}
@@ -170,10 +184,12 @@ function InlineText({ text, onWordTap }: { text: string; onWordTap?: WordTapHand
 function HighlightedLine({
   text,
   annotations,
+  paraKey,
   onWordTap,
 }: {
   text: string;
   annotations: { selectedText: string; color: AnnotationColor }[];
+  paraKey?: string;
   onWordTap?: WordTapHandler;
 }) {
   // Derive plain text by stripping inline markdown
@@ -193,7 +209,7 @@ function HighlightedLine({
     }
   }
 
-  if (ranges.length === 0) return <InlineText text={text} onWordTap={onWordTap} />;
+  if (ranges.length === 0) return <InlineText text={text} paraKey={paraKey} onWordTap={onWordTap} />;
 
   // Sort and remove overlaps (keep first match's colour)
   ranges.sort((a, b) => a.start - b.start);
@@ -211,7 +227,7 @@ function HighlightedLine({
   let cursor = 0;
   for (const range of merged) {
     if (range.start > cursor) {
-      nodes.push(<InlineText key={`t-${cursor}`} text={plain.slice(cursor, range.start)} onWordTap={onWordTap} />);
+      nodes.push(<InlineText key={`t-${cursor}`} text={plain.slice(cursor, range.start)} paraKey={paraKey} onWordTap={onWordTap} />);
     }
     nodes.push(
       <mark
@@ -225,13 +241,13 @@ function HighlightedLine({
           WebkitBoxDecorationBreak: "clone",
         } as React.CSSProperties}
       >
-        <InlineText text={plain.slice(range.start, range.end)} onWordTap={onWordTap} />
+        <InlineText text={plain.slice(range.start, range.end)} paraKey={paraKey} onWordTap={onWordTap} />
       </mark>,
     );
     cursor = range.end;
   }
   if (cursor < plain.length) {
-    nodes.push(<InlineText key={`t-${cursor}`} text={plain.slice(cursor)} onWordTap={onWordTap} />);
+    nodes.push(<InlineText key={`t-${cursor}`} text={plain.slice(cursor)} paraKey={paraKey} onWordTap={onWordTap} />);
   }
   return <>{nodes}</>;
 }
@@ -279,7 +295,7 @@ function renderBody(
       const k = pkey();
       nodes.push(
         <h3 key={i} data-pkey={k} style={{ ...hlBg(k), color: theme.muted, fontSize: "0.68em", letterSpacing: "0.16em", textTransform: "uppercase" as const, marginTop: "2.5em", marginBottom: "0.5em", fontWeight: 700, breakInside: "avoid", breakAfter: "avoid", cursor: audioOpen ? "pointer" : undefined } as React.CSSProperties}>
-          <InlineText text={line.slice(4)} onWordTap={onWordTap} />
+          <InlineText text={line.slice(4)} paraKey={k} onWordTap={onWordTap} />
         </h3>,
       );
       blockIdx++; i++; continue;
@@ -288,7 +304,7 @@ function renderBody(
       const k = pkey();
       nodes.push(
         <h2 key={i} data-pkey={k} style={{ ...hlBg(k), color: theme.heading, fontSize: "1.15em", fontWeight: 700, marginTop: "2.5em", marginBottom: "0.85em", letterSpacing: "-0.01em", breakInside: "avoid", breakAfter: "avoid", cursor: audioOpen ? "pointer" : undefined } as React.CSSProperties}>
-          <InlineText text={line.slice(3)} onWordTap={onWordTap} />
+          <InlineText text={line.slice(3)} paraKey={k} onWordTap={onWordTap} />
         </h2>,
       );
       blockIdx++; i++; continue;
@@ -297,7 +313,7 @@ function renderBody(
       const k = pkey();
       nodes.push(
         <h2 key={i} data-pkey={k} style={{ ...hlBg(k), color: theme.heading, fontSize: "1.25em", fontWeight: 700, marginTop: "2.5em", marginBottom: "0.85em", breakInside: "avoid", breakAfter: "avoid", cursor: audioOpen ? "pointer" : undefined } as React.CSSProperties}>
-          <InlineText text={line.slice(2)} onWordTap={onWordTap} />
+          <InlineText text={line.slice(2)} paraKey={k} onWordTap={onWordTap} />
         </h2>,
       );
       blockIdx++; i++; continue;
@@ -330,7 +346,7 @@ function renderBody(
         >
           {qLines.map((ql, qi) => (
             <p key={qi} style={{ marginBottom: qi < qLines.length - 1 ? "0.4em" : 0 }}>
-              <HighlightedLine text={ql} annotations={annotations} onWordTap={onWordTap} />
+              <HighlightedLine text={ql} annotations={annotations} paraKey={k} onWordTap={onWordTap} />
             </p>
           ))}
         </blockquote>,
@@ -351,7 +367,7 @@ function renderBody(
         <ul key={`ul-${s}`} data-pkey={k} style={{ ...hlBg(k), paddingLeft: "1.5em", margin: "1em 0", color: theme.text, cursor: audioOpen ? "pointer" : undefined } as React.CSSProperties}>
           {items.map((item, ii) => (
             <li key={ii} style={{ marginBottom: "0.4em", lineHeight: 1.7 }}>
-              <HighlightedLine text={item} annotations={annotations} onWordTap={onWordTap} />
+              <HighlightedLine text={item} annotations={annotations} paraKey={k} onWordTap={onWordTap} />
             </li>
           ))}
         </ul>,
@@ -372,7 +388,7 @@ function renderBody(
         <ol key={`ol-${s}`} data-pkey={k} style={{ ...hlBg(k), paddingLeft: "1.5em", margin: "1em 0", color: theme.text, cursor: audioOpen ? "pointer" : undefined } as React.CSSProperties}>
           {items.map((item, ii) => (
             <li key={ii} style={{ marginBottom: "0.4em", lineHeight: 1.7 }}>
-              <HighlightedLine text={item} annotations={annotations} onWordTap={onWordTap} />
+              <HighlightedLine text={item} annotations={annotations} paraKey={k} onWordTap={onWordTap} />
             </li>
           ))}
         </ol>,
@@ -404,7 +420,7 @@ function renderBody(
           } as React.CSSProperties}
         >
           <p style={{ margin: 0 }}>
-            <HighlightedLine text={line} annotations={annotations} onWordTap={onWordTap} />
+            <HighlightedLine text={line} annotations={annotations} paraKey={k} onWordTap={onWordTap} />
           </p>
         </blockquote>,
       );
@@ -446,14 +462,14 @@ function renderBody(
               {line.charAt(0)}
             </span>
             {bionicMode
-              ? <BionicText text={line.slice(1)} onWordTap={onWordTap} />
-              : <HighlightedLine text={line.slice(1)} annotations={annotations} onWordTap={onWordTap} />
+              ? <BionicText text={line.slice(1)} paraKey={k} onWordTap={onWordTap} />
+              : <HighlightedLine text={line.slice(1)} annotations={annotations} paraKey={k} onWordTap={onWordTap} />
             }
           </>
         ) : (
           bionicMode
-            ? <BionicText text={line} onWordTap={onWordTap} />
-            : <HighlightedLine text={line} annotations={annotations} onWordTap={onWordTap} />
+            ? <BionicText text={line} paraKey={k} onWordTap={onWordTap} />
+            : <HighlightedLine text={line} annotations={annotations} paraKey={k} onWordTap={onWordTap} />
         )}
       </p>,
     );
@@ -491,21 +507,31 @@ function ChapterView({
   return (
     <article style={baseStyle}>
       {/* Chapter header */}
-      <header style={{ textAlign: "center", marginBottom: "3.5em" }}>
-        <p style={{ fontSize: "0.65em", letterSpacing: "0.3em", textTransform: "uppercase", color: theme.muted, marginBottom: "0.6em", fontFamily }}>
-          Chapter {chapter.number}
+      <header
+        data-pkey="title"
+        style={{ textAlign: "center", marginBottom: "3.5em", ...hlBg("title") }}
+      >
+      <p style={{ fontSize: "0.65em", letterSpacing: "0.3em", textTransform: "uppercase", color: theme.muted, marginBottom: "0.6em", fontFamily }}>
+        <InlineText
+          text={`Chapter ${chapter.number}`}
+          paraKey="title"
+          onWordTap={onWordTap}
+        />
         </p>
         <h1
-          data-pkey="title"
           style={{
-            ...hlBg("title"),
             fontSize: "1.9em", fontWeight: 700, color: theme.heading,
             lineHeight: 1.2, letterSpacing: "-0.02em", marginBottom: "0.5em",
             fontFamily: "Georgia, serif",
             cursor: audioOpen ? "pointer" : undefined,
           } as React.CSSProperties}
         >
-          {chapter.title}
+        <InlineText
+          text={chapter.title}
+          paraKey="title"
+          wordIndexOffset={chapter.number > 0 ? 2 : 0}
+          onWordTap={onWordTap}
+        />
         </h1>
         <div style={{ width: "2.5em", height: "2px", background: theme.accent, margin: "1em auto 0", borderRadius: "1px" }} />
       </header>
@@ -528,7 +554,14 @@ function ChapterView({
           } as React.CSSProperties}
         >
           {chapter.epigraph.split("\n").map((line, i, arr) => (
-            <p key={i} style={{ marginBottom: i < arr.length - 1 ? "0.35em" : 0 }}>{line}</p>
+            <p key={i} style={{ marginBottom: i < arr.length - 1 ? "0.35em" : 0 }}>
+              <InlineText
+                text={line}
+                paraKey="epigraph"
+                wordIndexOffset={arr.slice(0, i).join(" ").split(/\s+/).filter(Boolean).length}
+                onWordTap={onWordTap}
+              />
+            </p>
           ))}
         </blockquote>
       )}
@@ -536,9 +569,7 @@ function ChapterView({
       {/* Chapter opener — consolidated premise + question, centered italic */}
       {chapter.intro && (
         <div
-          data-pkey="intro"
           style={{
-            ...hlBg("intro"),
             textAlign:    "center",
             fontStyle:    "italic",
             fontWeight:   600,
@@ -576,7 +607,7 @@ function ChapterView({
                 cursor:        audioOpen ? "pointer" : undefined,
               } as React.CSSProperties}
             >
-              {section.heading}
+              <InlineText text={section.heading} paraKey={`s${idx}_h`} onWordTap={onWordTap} />
             </h2>
           )}
           <div>{renderBody(section.body, theme, idx === 0, annotations, onWordTap, `s${idx}`, audioParaKey, audioOpen, bionicMode)}</div>
@@ -589,8 +620,8 @@ function ChapterView({
           <div style={{ textAlign: "center", margin: "2.5em 0", color: theme.accent, letterSpacing: "0.5em", fontSize: "0.85em" }}>
             ✦ ✦ ✦
           </div>
-          <p style={{ textAlign: "center", fontStyle: "italic", color: theme.muted, fontSize: "1.02em" }}>
-            {chapter.forwardQuestion}
+          <p data-pkey="fwd" style={{ textAlign: "center", fontStyle: "italic", color: theme.muted, fontSize: "1.02em" }}>
+            <InlineText text={chapter.forwardQuestion} paraKey="fwd" onWordTap={onWordTap} />
           </p>
         </section>
       )}
@@ -1063,6 +1094,7 @@ export function ReaderClient({ manifest, slug, initialChapter }: Props) {
   const [annotationMode, setAnnotationMode] = useState(false);
   const [audioOpen,      setAudioOpen]      = useState(false);
   const [audioParaKey,   setAudioParaKey]   = useState<string | null>(null);
+  const [audioWordPosition, setAudioWordPosition] = useState<{ paraKey: string; wordIndex: number } | null>(null);
   const [chapterAudioUrl, setChapterAudioUrl] = useState<string | null>(null);
   const [recordedSeekRequest, setRecordedSeekRequest] = useState<{ token: number; segIdx: number; wordIdx: number } | null>(null);
   const [annoPanelOpen,  setAnnoPanelOpen]  = useState(false);
@@ -1082,7 +1114,13 @@ export function ReaderClient({ manifest, slug, initialChapter }: Props) {
   const [annotations,    setAnnotations]    = useState<Pick<Annotation, "selectedText" | "color">[]>([]);
 
   // Global audio context — seekTo for tap-to-start; currentSeg drives auto-flip
-  const { seekTo: audioSeekTo, seekToWord: audioSeekToWord, currentSeg: audioCurrentSeg } = useAudioPlayer();
+  const {
+    seekTo: audioSeekTo,
+    seekToWord: audioSeekToWord,
+    currentSeg: audioCurrentSeg,
+    currentWord: audioCurrentWord,
+    segIdx: audioSegIdx,
+  } = useAudioPlayer();
 
   const containerRef    = useRef<HTMLDivElement>(null);
   const columnTrackRef  = useRef<HTMLDivElement>(null);
@@ -1093,6 +1131,7 @@ export function ReaderClient({ manifest, slug, initialChapter }: Props) {
   const pageIndexRef    = useRef(pageIndex);
   const paraKeyMapRef      = useRef<Record<string, number>>({});
   const paraWordMapRef     = useRef<Record<string, Array<{ segIdx: number; startWord: number; endWord: number }>>>({});
+  const activeAudioWordRef = useRef<HTMLElement | null>(null);
   const seekTokenRef       = useRef(0);
   // When navigating back to a previous chapter, land on its last page
   const goToLastPageRef    = useRef(false);
@@ -1406,6 +1445,12 @@ export function ReaderClient({ manifest, slug, initialChapter }: Props) {
     }
   }, [audioSeekTo, audioSeekToWord, chapterAudioUrl]);
 
+  const handleRecordedWordPositionChange = useCallback((
+    position: { paraKey: string; wordIndex: number } | null,
+  ) => {
+    setAudioWordPosition(position);
+  }, []);
+
   // ── Derive audioParaKey from the global audio context directly ─────────────
   // This is more reliable than the onProgress callback chain because it doesn't
   // depend on the callback being kept fresh across re-renders.
@@ -1415,8 +1460,56 @@ export function ReaderClient({ manifest, slug, initialChapter }: Props) {
     if (!audioCurrentSeg) { setAudioParaKey(null); return; }
     setAudioParaKey(audioCurrentSeg.paraKey);
   }, [audioOpen, audioCurrentSeg, chapterAudioUrl]);
-  useEffect(() => { if (!audioOpen) setAudioParaKey(null); }, [audioOpen]);
-  useEffect(() => { setAudioParaKey(null); }, [chapterIndex]);
+  useEffect(() => {
+    if (chapterAudioUrl) return;
+    if (!audioOpen || !audioCurrentSeg || audioCurrentWord < 0) {
+      setAudioWordPosition(null);
+      return;
+    }
+
+    const segment = paraWordMapRef.current[audioCurrentSeg.paraKey]
+      ?.find((entry) => entry.segIdx === audioSegIdx);
+    if (!segment) {
+      setAudioWordPosition(null);
+      return;
+    }
+
+    setAudioWordPosition({
+      paraKey: audioCurrentSeg.paraKey,
+      wordIndex: segment.startWord + Math.min(audioCurrentWord, segment.endWord - segment.startWord - 1),
+    });
+  }, [audioOpen, audioCurrentSeg, audioCurrentWord, audioSegIdx, chapterAudioUrl]);
+  useEffect(() => { if (!audioOpen) { setAudioParaKey(null); setAudioWordPosition(null); } }, [audioOpen]);
+  useEffect(() => { setAudioParaKey(null); setAudioWordPosition(null); }, [chapterIndex]);
+
+  useEffect(() => {
+    const previous = activeAudioWordRef.current;
+    if (previous) {
+      previous.style.removeProperty("background-color");
+      previous.style.removeProperty("color");
+      previous.style.removeProperty("border-radius");
+      previous.style.removeProperty("transition");
+      previous.style.removeProperty("box-shadow");
+      activeAudioWordRef.current = null;
+    }
+
+    if (!audioOpen || !audioWordPosition || !columnTrackRef.current) return;
+
+    const blocks = Array.from(columnTrackRef.current.querySelectorAll<HTMLElement>("[data-pkey]"))
+      .filter((element) => element.getAttribute("data-pkey") === audioWordPosition.paraKey);
+    const words = blocks.flatMap((block) =>
+      Array.from(block.querySelectorAll<HTMLElement>("[data-word-index]")),
+    );
+    const activeWord = words[audioWordPosition.wordIndex];
+    if (!activeWord) return;
+
+    activeWord.style.setProperty("background-color", `${theme.accent}32`);
+    activeWord.style.setProperty("color", theme.accent);
+    activeWord.style.setProperty("border-radius", "0.15em");
+    activeWord.style.setProperty("box-shadow", `0 0 0 1px ${theme.accent}32`);
+    activeWord.style.setProperty("transition", "background-color 0.09s ease, color 0.09s ease");
+    activeAudioWordRef.current = activeWord;
+  }, [audioOpen, audioWordPosition, chapterIndex, theme.accent]);
 
   // ── Auto-flip page when audio advances to a paragraph on another page ─────
   // Uses getBoundingClientRect() instead of offsetLeft because CSS multi-column
@@ -2022,6 +2115,7 @@ export function ReaderClient({ manifest, slug, initialChapter }: Props) {
           chapterAudioUrl={chapterAudioUrl}
           recordedSeekRequest={recordedSeekRequest}
           onRecordedParaKeyChange={chapterAudioUrl ? setAudioParaKey : undefined}
+          onRecordedWordPositionChange={chapterAudioUrl ? handleRecordedWordPositionChange : undefined}
           theme={theme}
           fontFamily={fontFamily}
           onClose={() => setAudioOpen(false)}

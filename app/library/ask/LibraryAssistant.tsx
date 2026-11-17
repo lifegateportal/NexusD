@@ -3,6 +3,10 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import type { ReactNode } from "react";
 import { z } from "zod";
+import {
+  LibraryChapterCatalogSchema,
+  type LibraryChapterOption,
+} from "@/lib/schemas/library-assistant";
 
 const SourceSchema = z.object({
   ref: z.string(),
@@ -23,6 +27,8 @@ const MessageSchema = z.object({
   role: z.enum(["user", "assistant"]),
   content: z.string(),
   sources: z.array(SourceSchema).optional(),
+  outline: z.boolean().optional(),
+  artifactTitle: z.string().min(1).max(300).optional(),
 }).strict();
 
 const ConversationSchema = z.object({
@@ -192,12 +198,29 @@ export default function LibraryAssistant() {
   const [storageError, setStorageError] = useState("");
   const [storageReady, setStorageReady] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
+  const [chapterOptions, setChapterOptions] = useState<LibraryChapterOption[]>([]);
+  const [chapterCatalogLoading, setChapterCatalogLoading] = useState(true);
+  const [chapterCatalogError, setChapterCatalogError] = useState("");
+  const [selectedChapterKey, setSelectedChapterKey] = useState("");
+  const [exportingOutline, setExportingOutline] = useState<string | null>(null);
 
   const activeConversation = useMemo(
     () => conversations.find((conversation) => conversation.id === activeId) ?? null,
     [activeId, conversations],
   );
   const messages = activeConversation?.messages ?? [];
+  const selectedChapter = chapterOptions.find(
+    (chapter) => `${chapter.slug}:${chapter.chapterNumber}` === selectedChapterKey,
+  ) ?? null;
+  const chapterGroups = useMemo(() => {
+    const groups = new Map<string, { title: string; chapters: LibraryChapterOption[] }>();
+    for (const chapter of chapterOptions) {
+      const group = groups.get(chapter.slug) ?? { title: chapter.bookTitle, chapters: [] };
+      group.chapters.push(chapter);
+      groups.set(chapter.slug, group);
+    }
+    return [...groups.entries()];
+  }, [chapterOptions]);
 
   useEffect(() => {
     try {
@@ -221,6 +244,35 @@ export default function LibraryAssistant() {
     } finally {
       setStorageReady(true);
     }
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function loadChapterOptions() {
+      setChapterCatalogLoading(true);
+      try {
+        const response = await fetch("/api/library/ask", { cache: "no-store" });
+        const body: unknown = await response.json();
+        if (!response.ok) {
+          const parsedError = z.object({ error: z.string() }).safeParse(body);
+          throw new Error(parsedError.success ? parsedError.data.error : "The library chapter list could not be loaded.");
+        }
+        const parsed = LibraryChapterCatalogSchema.safeParse(body);
+        if (!parsed.success) throw new Error("The library returned an invalid chapter list.");
+        if (!cancelled) {
+          setChapterOptions(parsed.data.chapters);
+          setChapterCatalogError("");
+        }
+      } catch (loadError) {
+        if (!cancelled) {
+          setChapterCatalogError(loadError instanceof Error ? loadError.message : "The chapter list could not be loaded.");
+        }
+      } finally {
+        if (!cancelled) setChapterCatalogLoading(false);
+      }
+    }
+    void loadChapterOptions();
+    return () => { cancelled = true; };
   }, []);
 
   useEffect(() => {
@@ -278,13 +330,20 @@ export default function LibraryAssistant() {
     setError("");
   }
 
-  async function submitQuestion(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    const query = question.trim();
+  async function sendMessage(
+    rawQuery: string,
+    purpose: "chat" | "teaching-outline" = "chat",
+  ) {
+    const query = rawQuery.trim();
     if (!query || busy || !storageReady) return;
 
     setQuestion("");
     setError("");
+    const requestChapter = selectedChapter;
+    const isOutline = Boolean(requestChapter && (
+      purpose === "teaching-outline"
+      || /\boutline\b|\bteaching plan\b|\blesson plan\b/i.test(query)
+    ));
     const conversation = activeConversation ?? makeConversation();
     if (!activeConversation) {
       setConversations((current) => [conversation, ...current].slice(0, 100));
@@ -303,7 +362,16 @@ export default function LibraryAssistant() {
       const response = await fetch("/api/library/ask", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ query }),
+        body: JSON.stringify({
+          query,
+          purpose,
+          ...(requestChapter ? {
+            chapter: {
+              slug: requestChapter.slug,
+              chapterNumber: requestChapter.chapterNumber,
+            },
+          } : {}),
+        }),
       });
       const body: unknown = await response.json();
       if (!response.ok) {
@@ -316,15 +384,79 @@ export default function LibraryAssistant() {
         ...current,
         updatedAt: new Date().toISOString(),
         messages: [...current.messages, {
-        role: "assistant",
-        content: parsed.data.answer,
-        sources: parsed.data.sources,
+          role: "assistant",
+          content: parsed.data.answer,
+          sources: parsed.data.sources,
+          outline: isOutline,
+          ...(isOutline && requestChapter ? {
+            artifactTitle: `${requestChapter.bookTitle} - Chapter ${requestChapter.chapterNumber} - Teaching Outline`,
+          } : {}),
         }],
       }));
     } catch (requestError) {
       setError(requestError instanceof Error ? requestError.message : "The library assistant could not answer.");
     } finally {
       setBusy(false);
+    }
+  }
+
+  function submitQuestion(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    void sendMessage(question);
+  }
+
+  function createTeachingOutline() {
+    if (!selectedChapter) {
+      setError("Choose a chapter before creating a teaching outline.");
+      return;
+    }
+    void sendMessage(
+      `Create a teaching outline for Chapter ${selectedChapter.chapterNumber}: ${selectedChapter.chapterTitle}.`,
+      "teaching-outline",
+    );
+  }
+
+  async function downloadOutline(message: Message, messageIndex: number, format: "docx" | "pdf") {
+    if (!message.outline || !message.artifactTitle || !message.content.trim()) {
+      setError("This response is not a downloadable chapter outline.");
+      return;
+    }
+    const exportKey = `${messageIndex}:${format}`;
+    setExportingOutline(exportKey);
+    setError("");
+    try {
+      const response = await fetch("/api/nexuslm/export", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          format,
+          title: message.artifactTitle,
+          authorName: "Nexus Library",
+          content: message.content,
+        }),
+      });
+      if (!response.ok) {
+        const body: unknown = await response.json().catch(() => null);
+        const parsedError = z.object({ error: z.string() }).safeParse(body);
+        throw new Error(parsedError.success ? parsedError.data.error : `${format.toUpperCase()} export failed (${response.status}).`);
+      }
+      const filename = message.artifactTitle
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, "-")
+        .replace(/^-|-$/g, "")
+        .slice(0, 80) || "teaching-outline";
+      const url = URL.createObjectURL(await response.blob());
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = `${filename}.${format}`;
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      window.setTimeout(() => URL.revokeObjectURL(url), 1_000);
+    } catch (exportError) {
+      setError(exportError instanceof Error ? exportError.message : `The ${format.toUpperCase()} export failed.`);
+    } finally {
+      setExportingOutline(null);
     }
   }
 
@@ -398,6 +530,43 @@ export default function LibraryAssistant() {
           </div>
         )}
         {storageError && <p role="alert" className="mt-2 text-xs text-rose-300">{storageError}</p>}
+        {chapterCatalogError && <p role="alert" className="mt-2 text-xs text-rose-300">{chapterCatalogError}</p>}
+        <div className="mt-3 grid grid-cols-1 gap-2 lg:grid-cols-[minmax(0,1fr)_auto]">
+          <label htmlFor="library-chapter-context" className="min-w-0">
+            <span className="mb-1 block text-xs font-semibold text-slate-400">Chapter context (optional)</span>
+            <select
+              id="library-chapter-context"
+              value={selectedChapterKey}
+              onChange={(event) => setSelectedChapterKey(event.target.value)}
+              disabled={chapterCatalogLoading || busy || chapterOptions.length === 0}
+              className="min-h-12 w-full rounded-xl border border-slate-700 bg-slate-900 px-3 text-base text-white outline-none focus:border-amber-500 disabled:opacity-60"
+            >
+              <option value="">
+                {chapterCatalogLoading ? "Loading chapters…" : "Search the whole library"}
+              </option>
+              {chapterGroups.map(([slug, group]) => (
+                <optgroup key={slug} label={group.title}>
+                  {group.chapters.map((chapter) => (
+                    <option
+                      key={`${chapter.slug}:${chapter.chapterNumber}`}
+                      value={`${chapter.slug}:${chapter.chapterNumber}`}
+                    >
+                      Chapter {chapter.chapterNumber}: {chapter.chapterTitle}
+                    </option>
+                  ))}
+                </optgroup>
+              ))}
+            </select>
+          </label>
+          <button
+            type="button"
+            onClick={createTeachingOutline}
+            disabled={busy || !storageReady || !selectedChapter}
+            className="min-h-12 rounded-xl bg-emerald-400 px-4 text-sm font-bold text-slate-950 disabled:cursor-not-allowed disabled:opacity-50 lg:self-end"
+          >
+            Create teaching outline
+          </button>
+        </div>
       </div>
       <section
         aria-live="polite"
@@ -407,7 +576,7 @@ export default function LibraryAssistant() {
           <div className="mx-auto mt-8 max-w-xl rounded-2xl border border-slate-800 bg-slate-900/50 p-6 sm:mt-16">
             <p className="mb-2 text-lg font-semibold text-white">Questions, answered from the source.</p>
             <p className="text-sm leading-relaxed text-slate-400">
-              Ask about an idea, story, or teaching. The assistant will only use your published books and video transcripts, and will link you to supporting passages or video timestamps.
+              Ask about an idea across the library, or choose a chapter above to ask questions and create a teaching outline from its full text.
             </p>
           </div>
         )}
@@ -422,6 +591,25 @@ export default function LibraryAssistant() {
                 ? <MarkdownMessage content={message.content} sourcePrefix={String(index)} />
                 : <p className="whitespace-pre-wrap">{message.content}</p>}
             </div>
+            {message.role === "assistant" && message.outline && message.artifactTitle && (
+              <div className="mt-2 flex flex-wrap gap-2">
+                {(["docx", "pdf"] as const).map((format) => {
+                  const key = `${index}:${format}`;
+                  const isExporting = exportingOutline === key;
+                  return (
+                    <button
+                      key={format}
+                      type="button"
+                      onClick={() => void downloadOutline(message, index, format)}
+                      disabled={exportingOutline !== null}
+                      className="min-h-12 rounded-xl border border-slate-700 px-4 text-sm font-semibold text-slate-200 disabled:opacity-50"
+                    >
+                      {isExporting ? `Preparing ${format === "docx" ? "Word" : "PDF"}…` : `Download ${format === "docx" ? "Word" : "PDF"}`}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
             {message.sources && message.sources.length > 0 && (
               <div className="mt-3 space-y-2">
                 <p className="text-[10px] font-bold uppercase tracking-[0.2em] text-slate-500">Sources</p>
@@ -446,7 +634,13 @@ export default function LibraryAssistant() {
             )}
           </article>
         ))}
-        {busy && <p className="text-sm text-slate-500" role="status">Searching your books and transcripts…</p>}
+        {busy && (
+          <p className="text-sm text-slate-500" role="status">
+            {selectedChapter
+              ? `Working from ${selectedChapter.bookTitle}, Chapter ${selectedChapter.chapterNumber}…`
+              : "Searching your books and transcripts…"}
+          </p>
+        )}
         {error && <p className="rounded-xl border border-rose-900/70 bg-rose-950/40 p-3 text-sm text-rose-200" role="alert">{error}</p>}
       </section>
 
@@ -457,7 +651,7 @@ export default function LibraryAssistant() {
             id="library-question"
             value={question}
             onChange={(event) => setQuestion(event.target.value)}
-            placeholder="Ask a question about the library…"
+            placeholder="Ask about the library or your selected chapter…"
             maxLength={2000}
             className="min-h-12 min-w-0 flex-1 rounded-xl border border-slate-700 bg-slate-900 px-4 text-base text-white outline-none focus:border-amber-500"
           />
