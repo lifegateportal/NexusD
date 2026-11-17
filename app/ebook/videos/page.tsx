@@ -10,9 +10,14 @@ export default function DirectorVideosPage() {
   return (
     <main className="min-h-dvh bg-slate-950 px-4 py-6 text-slate-100 sm:px-6 lg:px-10 lg:py-10">
       <div className="mx-auto max-w-5xl">
-        <Link href="/ebook" className="inline-flex min-h-12 items-center text-sm font-semibold text-cyan-300">
-          ← Nexus Director
-        </Link>
+        <div className="flex flex-wrap gap-x-6 gap-y-2">
+          <Link href="/ebook" className="inline-flex min-h-12 items-center text-sm font-semibold text-cyan-300">
+            ← Nexus Director
+          </Link>
+          <Link href="/ebook/faqs" className="inline-flex min-h-12 items-center text-sm font-semibold text-cyan-300">
+            FAQ publishing
+          </Link>
+        </div>
         <header className="mb-8 mt-4 border-b border-slate-800 pb-6">
           <p className="text-[10px] font-bold uppercase tracking-[0.25em] text-cyan-300">Director · Video publishing</p>
           <h1 className="mt-2 text-3xl font-bold tracking-tight text-white sm:text-4xl">Browse and prepare channel videos</h1>

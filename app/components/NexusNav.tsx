@@ -9,6 +9,7 @@ const NAV_ITEMS: NavItem[] = [
   { id: "overview", label: "Academy" },
   { id: "ebook", label: "Book" },
   { id: "videos", label: "Videos", href: "/ebook/videos" },
+  { id: "faqs", label: "FAQs", href: "/ebook/faqs" },
   { id: "coding", label: "Code", href: "/coding" },
   { id: "translate", label: "Translate", href: "/translate" },
   { id: "projects", label: "Projects" },
@@ -43,6 +44,15 @@ function IconVideo() {
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} className="h-5 w-5">
       <rect x="3" y="5" width="13" height="14" rx="2" />
       <path d="m16 10 5-3v10l-5-3" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+function IconFaq() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} className="h-5 w-5">
+      <circle cx="12" cy="12" r="9" />
+      <path d="M9.6 9a2.5 2.5 0 0 1 4.8 1c0 1.7-2.4 2-2.4 3.5M12 17h.01" strokeLinecap="round" />
     </svg>
   );
 }
@@ -97,6 +107,7 @@ const NAV_ICONS: Record<string, () => React.JSX.Element> = {
   overview: IconGrid,
   ebook: IconEbook,
   videos: IconVideo,
+  faqs: IconFaq,
   coding: IconCoding,
   translate: IconTranslate,
   projects: IconProjects,
@@ -125,7 +136,7 @@ export function NexusNav({ active, onSelect }: NexusNavProps) {
   const navigateTo = useCallback((href: string) => {
     // Skip redundant pushes to avoid unnecessary route remounts.
     if (href === "/translate" && pathname.startsWith("/translate")) return;
-    if (href.startsWith("/ebook") && pathname.startsWith("/ebook")) return;
+    if (pathname === href) return;
     if (href.startsWith("/coding") && pathname.startsWith("/coding")) return;
     if (href === "/" && pathname === "/") return;
     if (href === "/coding") {
@@ -175,7 +186,7 @@ export function NexusNav({ active, onSelect }: NexusNavProps) {
               ? pathname.startsWith(item.href)
               : isAcademyGroup
                 ? active !== "ebook" && active !== "sermon" && active !== "projects"
-                    && active !== "translate" && active !== "coding"
+                      && active !== "translate" && active !== "coding" && active !== "faqs"
                 : active === item.id;
             const btnClass = [
               "focus-ring relative flex min-h-12 w-12 items-center justify-center rounded-xl transition-all duration-150",
@@ -276,7 +287,7 @@ export function NexusNav({ active, onSelect }: NexusNavProps) {
             ? pathname.startsWith(item.href)
             : isAcademyGroup
               ? active !== "ebook" && active !== "sermon" && active !== "projects"
-                  && active !== "translate" && active !== "coding"
+                  && active !== "translate" && active !== "coding" && active !== "faqs"
               : active === item.id;
           const inner = (
             <>

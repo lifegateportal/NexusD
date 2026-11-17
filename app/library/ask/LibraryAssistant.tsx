@@ -8,18 +8,13 @@ import {
   LibraryChapterCatalogSchema,
   type LibraryChapterOption,
 } from "@/lib/schemas/library-assistant";
+import {
+  LibraryFaqCatalogSchema,
+  LibraryFaqSourceSchema,
+} from "@/lib/schemas/library-faq";
 import { LibraryVideoCatalogSchema } from "@/lib/schemas/library-video";
 
-const SourceSchema = z.object({
-  ref: z.string(),
-  kind: z.enum(["book", "video"]),
-  title: z.string(),
-  excerpt: z.string(),
-  href: z.string().optional(),
-  videoId: z.string().regex(/^[A-Za-z0-9_-]{11}$/).optional(),
-  startSeconds: z.number().optional(),
-  endSeconds: z.number().optional(),
-}).strict();
+const SourceSchema = LibraryFaqSourceSchema;
 
 const AnswerSchema = z.object({
   answer: z.string(),
@@ -195,6 +190,61 @@ function MarkdownMessage({ content, sourcePrefix }: { content: string; sourcePre
   return <div className="leading-7">{blocks}</div>;
 }
 
+function SourceCards({
+  sources,
+  sourcePrefix,
+  onPlayVideo,
+}: {
+  sources: Source[];
+  sourcePrefix: string;
+  onPlayVideo: (source: Source) => void;
+}) {
+  return (
+    <div className="mt-3 space-y-2">
+      <p className="text-[10px] font-bold uppercase tracking-[0.2em] text-slate-500">Sources</p>
+      {sources.map((source) => {
+        const content = (
+          <>
+            <span className="text-xs font-semibold text-amber-300">
+              [{source.ref}] {source.kind === "video" ? "Video" : "Book"} · {source.title}
+              {source.startSeconds !== undefined && ` · ${formatTime(source.startSeconds)}${source.endSeconds !== undefined ? `–${formatTime(source.endSeconds)}` : ""}`}
+            </span>
+            <span className="mt-1 block text-xs leading-relaxed text-slate-400">{source.excerpt}</span>
+            {source.href && <span className="mt-2 block text-xs font-semibold text-slate-300">Open source ↗</span>}
+          </>
+        );
+        const className = "block min-h-12 w-full rounded-xl border border-slate-800 bg-slate-900/40 p-3 text-left";
+        const videoId = source.videoId;
+        if (source.kind === "video" && videoId) {
+          return (
+            <button
+              key={source.ref}
+              id={`source-${sourcePrefix}-${source.ref}`}
+              type="button"
+              onClick={() => onPlayVideo(source)}
+              className={`${className} focus-visible:border-cyan-400`}
+            >
+              {content}
+            </button>
+          );
+        }
+        return (
+          <a
+            key={source.ref}
+            id={`source-${sourcePrefix}-${source.ref}`}
+            href={source.href}
+            target={source.href?.startsWith("https://") ? "_blank" : undefined}
+            rel={source.href?.startsWith("https://") ? "noreferrer" : undefined}
+            className={className}
+          >
+            {content}
+          </a>
+        );
+      })}
+    </div>
+  );
+}
+
 export default function LibraryAssistant() {
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
@@ -220,6 +270,11 @@ export default function LibraryAssistant() {
   const [videoCatalogLoading, setVideoCatalogLoading] = useState(false);
   const [videoCatalogLoaded, setVideoCatalogLoaded] = useState(false);
   const [videoPreview, setVideoPreview] = useState<{ videoId: string; title: string; startSeconds: number; key: number } | null>(null);
+  const [mobileToolsOpen, setMobileToolsOpen] = useState(false);
+  const [faqOpen, setFaqOpen] = useState(false);
+  const [publishedFaqs, setPublishedFaqs] = useState<z.infer<typeof LibraryFaqCatalogSchema>["faqs"]>([]);
+  const [faqCatalogLoading, setFaqCatalogLoading] = useState(false);
+  const [faqCatalogLoaded, setFaqCatalogLoaded] = useState(false);
 
   const activeConversation = useMemo(
     () => conversations.find((conversation) => conversation.id === activeId) ?? null,
@@ -397,6 +452,61 @@ export default function LibraryAssistant() {
     }
   }
 
+  async function loadPublishedFaqs() {
+    if (faqCatalogLoaded || faqCatalogLoading) return;
+    setFaqCatalogLoading(true);
+    try {
+      const response = await fetch("/api/library/faqs", { cache: "no-store" });
+      const body: unknown = await response.json();
+      if (!response.ok) {
+        const parsed = z.object({ error: z.string() }).safeParse(body);
+        throw new Error(parsed.success ? parsed.data.error : "Published FAQs could not be loaded.");
+      }
+      const parsed = LibraryFaqCatalogSchema.safeParse(body);
+      if (!parsed.success) throw new Error("The published FAQ list has an invalid format.");
+      setPublishedFaqs(parsed.data.faqs);
+      setFaqCatalogLoaded(true);
+    } catch (loadError) {
+      setError(loadError instanceof Error ? loadError.message : "Published FAQs could not be loaded.");
+    } finally {
+      setFaqCatalogLoading(false);
+    }
+  }
+
+  function showFaqInChat(faq: (typeof publishedFaqs)[number]) {
+    if (!storageReady || busy) return;
+    const conversation = activeConversation ?? makeConversation();
+    if (!activeConversation) {
+      setConversations((current) => [conversation, ...current].slice(0, 100));
+      setActiveId(conversation.id);
+    }
+    updateConversation(conversation.id, (current) => ({
+      ...current,
+      title: current.messages.length === 0 ? faq.question.slice(0, 72) : current.title,
+      updatedAt: new Date().toISOString(),
+      messages: [
+        ...current.messages,
+        { role: "user", content: faq.question },
+        { role: "assistant", content: faq.answer, sources: faq.sources },
+      ],
+    }));
+    setScope("all");
+    setFaqOpen(false);
+    setMobileToolsOpen(false);
+    setHistoryOpen(false);
+    setError("");
+  }
+
+  function playVideoSource(source: Source) {
+    if (!source.videoId) return;
+    setVideoPreview({
+      videoId: source.videoId,
+      title: source.title,
+      startSeconds: source.startSeconds ?? 0,
+      key: Date.now(),
+    });
+  }
+
   async function sendMessage(
     rawQuery: string,
     purpose: "chat" | "teaching-outline" | "video-transcript" | "video-teaching-outline" = "chat",
@@ -569,20 +679,66 @@ export default function LibraryAssistant() {
 
   return (
     <>
-      <div className="shrink-0 border-b border-slate-800/70 py-3">
-        <div className="grid grid-cols-3 gap-2 lg:flex lg:flex-wrap">
+      <div className="shrink-0 border-b border-slate-800/70 py-2 lg:py-3">
+        <div className="grid grid-cols-4 gap-2 lg:hidden">
           <button
             type="button"
             onClick={createNewChat}
             disabled={busy}
-            className="min-h-12 min-w-0 whitespace-nowrap rounded-xl bg-amber-500 px-2 text-[11px] font-bold text-slate-950 disabled:opacity-50 sm:px-4 sm:text-sm lg:min-w-fit"
+            className="min-h-12 rounded-xl bg-amber-500 px-2 text-xs font-bold text-slate-950 disabled:opacity-50"
+          >
+            + New chat
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              const nextOpen = !faqOpen;
+              setFaqOpen(nextOpen);
+              setMobileToolsOpen(false);
+              if (nextOpen) void loadPublishedFaqs();
+            }}
+            aria-expanded={faqOpen}
+            className="min-h-12 rounded-xl border border-emerald-800 px-2 text-xs font-semibold text-emerald-200"
+          >
+            Popular FAQs
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setMobileToolsOpen((open) => !open);
+              setFaqOpen(false);
+            }}
+            aria-expanded={mobileToolsOpen}
+            className="min-h-12 rounded-xl border border-slate-700 px-2 text-xs font-semibold text-slate-200"
+          >
+            {mobileToolsOpen ? "Close tools" : "Tools"}
+          </button>
+          <label>
+            <span className="sr-only">Search scope</span>
+            <select
+              value={scope}
+              onChange={(event) => setScope(event.target.value as SearchScope)}
+              className="min-h-12 w-full rounded-xl border border-slate-700 bg-slate-900 px-1 text-base font-semibold text-slate-200"
+            >
+              <option value="all">All</option>
+              <option value="books">Books</option>
+              <option value="videos">Videos</option>
+            </select>
+          </label>
+        </div>
+        <div className="hidden grid-cols-3 gap-2 lg:flex lg:flex-wrap">
+          <button
+            type="button"
+            onClick={createNewChat}
+            disabled={busy}
+            className="min-h-12 min-w-fit whitespace-nowrap rounded-xl bg-amber-500 px-4 text-sm font-bold text-slate-950 disabled:opacity-50"
           >
             + New chat
           </button>
           <button
             type="button"
             onClick={() => { setHistoryOpen((open) => !open); setOutlinePickerOpen(false); }}
-            className="min-h-12 min-w-0 whitespace-nowrap rounded-xl border border-slate-700 px-2 text-[11px] font-semibold text-slate-200 sm:px-4 sm:text-sm lg:min-w-fit"
+            className="min-h-12 min-w-fit whitespace-nowrap rounded-xl border border-slate-700 px-4 text-sm font-semibold text-slate-200"
             aria-expanded={historyOpen}
           >
             Saved chats ({conversations.length})
@@ -590,16 +746,28 @@ export default function LibraryAssistant() {
           <button
             type="button"
             onClick={() => { setOutlinePickerOpen((open) => !open); setHistoryOpen(false); }}
-            className="min-h-12 min-w-0 whitespace-nowrap rounded-xl border border-emerald-500/50 px-2 text-[11px] font-semibold text-emerald-300 sm:px-4 sm:text-sm lg:min-w-fit"
+            className="min-h-12 min-w-fit whitespace-nowrap rounded-xl border border-emerald-500/50 px-4 text-sm font-semibold text-emerald-300"
             aria-expanded={outlinePickerOpen}
           >
             {outlinePickerOpen ? "Close outline setup" : "Choose chapter"}
           </button>
-          <span className="ml-auto hidden text-xs text-emerald-400 sm:inline" role="status">
+          <button
+            type="button"
+            onClick={() => {
+              const nextOpen = !faqOpen;
+              setFaqOpen(nextOpen);
+              if (nextOpen) void loadPublishedFaqs();
+            }}
+            aria-expanded={faqOpen}
+            className="min-h-12 min-w-fit rounded-xl border border-emerald-800 px-4 text-sm font-semibold text-emerald-200"
+          >
+            Popular FAQs
+          </button>
+          <span className="ml-auto text-xs text-emerald-400" role="status">
             {storageReady && !storageError ? "Saved locally" : storageReady ? "Not saved" : "Loading chats…"}
           </span>
         </div>
-        <div className="mt-3 flex flex-wrap items-center gap-2">
+        <div className="mt-2 hidden flex-wrap items-center gap-2 lg:flex">
           <span className="mr-1 text-xs font-semibold text-slate-400">Search:</span>
           {([
             ["all", "All library"],
@@ -633,6 +801,65 @@ export default function LibraryAssistant() {
             Video transcript & outline
           </button>
         </div>
+        {mobileToolsOpen && (
+          <div className="mt-2 space-y-2 rounded-xl border border-slate-800 bg-slate-900/70 p-2 lg:hidden">
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                type="button"
+                onClick={() => { setHistoryOpen((open) => !open); setOutlinePickerOpen(false); }}
+                aria-expanded={historyOpen}
+                className="min-h-12 rounded-xl border border-slate-700 px-3 text-sm font-semibold text-slate-200"
+              >
+                Saved chats ({conversations.length})
+              </button>
+              <button
+                type="button"
+                onClick={() => { setOutlinePickerOpen((open) => !open); setHistoryOpen(false); }}
+                aria-expanded={outlinePickerOpen}
+                className="min-h-12 rounded-xl border border-emerald-800 px-3 text-sm font-semibold text-emerald-200"
+              >
+                {outlinePickerOpen ? "Close chapter" : "Choose chapter"}
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  const nextOpen = !videoToolsOpen;
+                  setVideoToolsOpen(nextOpen);
+                  if (nextOpen) void loadPublishedVideos();
+                }}
+                aria-expanded={videoToolsOpen}
+                className="col-span-2 min-h-12 rounded-xl border border-cyan-800 px-3 text-sm font-semibold text-cyan-200"
+              >
+                Video transcript & outline
+              </button>
+            </div>
+          </div>
+        )}
+        {faqOpen && (
+          <div className="mt-2 max-h-[34dvh] overflow-y-auto rounded-xl border border-slate-800 bg-slate-900/70 p-2">
+            {faqCatalogLoading ? (
+              <p className="p-3 text-sm text-slate-400">Loading published FAQs…</p>
+            ) : publishedFaqs.length === 0 ? (
+              <p className="p-3 text-sm text-slate-400">No FAQs have been published yet.</p>
+            ) : (
+              <ul className="space-y-1">
+                {publishedFaqs.map((faq) => (
+                  <li key={faq.id}>
+                    <button
+                      type="button"
+                      onClick={() => showFaqInChat(faq)}
+                      disabled={!storageReady || busy}
+                      className="min-h-12 w-full rounded-lg px-3 py-2 text-left disabled:opacity-50"
+                    >
+                      <span className="block text-[10px] font-bold uppercase tracking-wider text-cyan-300">{faq.category}</span>
+                      <span className="block text-sm text-slate-100">{faq.question}</span>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        )}
         {videoToolsOpen && (
           <div className="mt-3 grid gap-2 rounded-xl border border-slate-800 bg-slate-900/50 p-3 sm:grid-cols-[minmax(0,1fr)_auto_auto]">
             <label>
@@ -841,51 +1068,11 @@ export default function LibraryAssistant() {
               </div>
             )}
             {message.sources && message.sources.length > 0 && (
-              <div className="mt-3 space-y-2">
-                <p className="text-[10px] font-bold uppercase tracking-[0.2em] text-slate-500">Sources</p>
-                {message.sources.map((source) => {
-                  const sourceContent = (
-                    <>
-                      <span className="text-xs font-semibold text-amber-300">
-                        [{source.ref}] {source.kind === "video" ? "Video" : "Book"} · {source.title}
-                        {source.startSeconds !== undefined && ` · ${formatTime(source.startSeconds)}${source.endSeconds !== undefined ? `–${formatTime(source.endSeconds)}` : ""}`}
-                      </span>
-                      <span className="mt-1 block text-xs leading-relaxed text-slate-400">{source.excerpt}</span>
-                      {source.href && <span className="mt-2 block text-xs font-semibold text-slate-300">Open source ↗</span>}
-                    </>
-                  );
-                  const className = "block min-h-12 w-full rounded-xl border border-slate-800 bg-slate-900/40 p-3 text-left";
-                  const sourceVideoId = source.videoId;
-                  if (source.kind === "video" && sourceVideoId) {
-                    return (
-                      <button
-                        key={source.ref}
-                        id={`source-${index}-${source.ref}`}
-                        type="button"
-                        onClick={() => setVideoPreview({
-                          videoId: sourceVideoId,
-                          title: source.title,
-                          startSeconds: source.startSeconds ?? 0,
-                          key: Date.now(),
-                        })}
-                        className={`${className} focus-visible:border-cyan-400`}
-                      >
-                        {sourceContent}
-                      </button>
-                    );
-                  }
-                  return (
-                    <a
-                      key={source.ref}
-                      id={`source-${index}-${source.ref}`}
-                      href={source.href}
-                      className={className}
-                    >
-                      {sourceContent}
-                    </a>
-                  );
-                })}
-              </div>
+              <SourceCards
+                sources={message.sources}
+                sourcePrefix={String(index)}
+                onPlayVideo={playVideoSource}
+              />
             )}
           </article>
         ))}
