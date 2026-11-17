@@ -23,7 +23,7 @@ export const ShortFrameSlotSchema = z.object({
     (frame) => frame.timeSeconds >= slot.startSeconds && frame.timeSeconds <= slot.endSeconds,
   ),
   { message: "Crop keyframes must be inside their framing slot.", path: ["keyframes"] },
-});
+);
 
 const YouTubeShortSourceSchema = z.object({
   type: z.literal("youtube"),
@@ -77,7 +77,7 @@ export const ShortProjectSchema = z.object({
 }, {
   message: "Framing slots must cover the short continuously without gaps or overlaps.",
   path: ["frameSlots"],
-);
+});
 
 export const PublishedShortProjectSchema = ShortProjectSchema.superRefine((project, context) => {
   if (project.status !== "published") {
