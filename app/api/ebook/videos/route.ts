@@ -3,7 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { env } from "@/lib/env";
 import { makeR2Client } from "@/lib/r2-storage";
-import { fetchYoutubeChannelVideos } from "@/lib/youtube-channel";
+import { fetchYoutubeChannelVideos, YoutubePageTokenSchema } from "@/lib/youtube-channel";
 import {
   DirectorVideoCatalogSchema,
   DirectorVideoSchema,
@@ -18,18 +18,27 @@ export const maxDuration = 30;
 const PRIVATE_CATALOG_KEY = "director/videos/index.json";
 const PUBLISHED_CATALOG_KEY = "published/videos/index.json";
 const VideoIdSchema = z.string().regex(/^[A-Za-z0-9_-]{11}$/);
+const PlaylistNamesSchema = z.array(z.string().trim().min(1).max(60)).max(12);
 const ActionSchema = z.discriminatedUnion("action", [
-  z.object({ action: z.literal("discover") }).strict(),
+  z.object({ action: z.literal("discover"), pageToken: YoutubePageTokenSchema }).strict(),
   z.object({
     action: z.literal("add"),
     url: z.string().url().max(2000),
     title: z.string().trim().max(200).optional(),
     transcript: z.string().max(1_000_000).optional(),
+    playlists: PlaylistNamesSchema.optional(),
+    sermonStartSeconds: z.number().finite().min(0).optional(),
   }).strict(),
   z.object({
     action: z.literal("save-transcript"),
     videoId: VideoIdSchema,
     transcript: z.string().min(1).max(1_000_000),
+  }).strict(),
+  z.object({
+    action: z.literal("save-details"),
+    videoId: VideoIdSchema,
+    playlists: PlaylistNamesSchema,
+    sermonStartSeconds: z.number().finite().min(0).nullable(),
   }).strict(),
   z.object({ action: z.literal("approve"), videoId: VideoIdSchema }).strict(),
   z.object({ action: z.literal("unpublish"), videoId: VideoIdSchema }).strict(),
@@ -178,8 +187,9 @@ function parseTranscript(transcript: string): z.infer<typeof LibraryVideoSegment
     if (content) cues.push({ startSeconds, text: content });
   }
 
-  const segments = cues.map((cue, index) => {
-    const nextStart = cues[index + 1]?.startSeconds;
+  const orderedCues = cues.sort((left, right) => left.startSeconds - right.startSeconds);
+  const segments = orderedCues.map((cue, index) => {
+    const nextStart = orderedCues[index + 1]?.startSeconds;
     const parsed = LibraryVideoSegmentSchema.safeParse({
       startSeconds: cue.startSeconds,
       endSeconds: cue.endSeconds ?? (nextStart && nextStart > cue.startSeconds ? nextStart : cue.startSeconds + 5),
@@ -190,14 +200,17 @@ function parseTranscript(transcript: string): z.infer<typeof LibraryVideoSegment
     }
     return parsed.data;
   });
+  if (segments.length > 20000) {
+    throw new TranscriptInputError("The transcript contains more than 20,000 timestamped segments.");
+  }
   if (segments.length === 0) {
     throw new TranscriptInputError("No timestamped transcript lines found. Use lines like “0:00 Welcome” or SRT/VTT timestamp cues.");
   }
   return segments;
 }
 
-async function discoverChannelVideos() {
-  const { channelTitle, videos: entries } = await fetchYoutubeChannelVideos(100);
+async function discoverChannelVideos(pageToken?: string) {
+  const { channelTitle, videos: entries, nextPageToken } = await fetchYoutubeChannelVideos(pageToken);
   const now = new Date().toISOString();
   const discovered = entries.map((entry) => DirectorVideoSchema.parse({
       videoId: entry.videoId,
@@ -220,11 +233,16 @@ async function discoverChannelVideos() {
     ...merged,
     ...catalog.videos.filter((video) => !foundIds.has(video.videoId)),
   ];
-  if (combined.length > 500) {
-    throw new Error("The Director queue has reached its 500-video limit. Delete unused entries before fetching more.");
+  if (combined.length > 10000) {
+    throw new Error("The Director queue has reached its 10,000-video limit.");
   }
   const saved = await savePrivateCatalog(combined);
-  return { catalog: saved, discoveredCount: discovered.length, channelTitle };
+  return {
+    catalog: saved,
+    discoveredCount: discovered.length,
+    channelTitle,
+    ...(nextPageToken ? { nextPageToken } : {}),
+  };
 }
 
 export async function GET() {
@@ -264,7 +282,7 @@ export async function POST(request: NextRequest) {
   }
 
   try {
-    if (action.action === "discover") return NextResponse.json(await discoverChannelVideos());
+    if (action.action === "discover") return NextResponse.json(await discoverChannelVideos(action.pageToken));
 
     const catalog = await readPrivateCatalog();
     if (action.action === "add") {
@@ -275,20 +293,72 @@ export async function POST(request: NextRequest) {
       if (catalog.videos.some((item) => item.videoId === videoId)) {
         return NextResponse.json({ error: "This video is already in the Director queue." }, { status: 409 });
       }
-      if (catalog.videos.length >= 500) {
-        return NextResponse.json({ error: "The Director video queue has reached its 500-video limit." }, { status: 409 });
+      if (catalog.videos.length >= 10000) {
+        return NextResponse.json({ error: "The Director video queue has reached its 10,000-video limit." }, { status: 409 });
       }
       const segments = action.transcript?.trim() ? parseTranscript(action.transcript) : [];
       const video = DirectorVideoSchema.parse({
         videoId,
         title: action.title?.trim() || `YouTube video ${videoId}`,
         youtubeUrl: `https://www.youtube.com/watch?v=${videoId}`,
+        playlists: action.playlists ?? [],
+        ...(action.sermonStartSeconds !== undefined ? { sermonStartSeconds: action.sermonStartSeconds } : {}),
         status: segments.length ? "ready" : "discovered",
         updatedAt: new Date().toISOString(),
         segments,
       });
       if (segments.length) await writeJsonObject(`director/videos/${videoId}.json`, video);
       const updatedCatalog = await savePrivateCatalog([video, ...catalog.videos]);
+      return NextResponse.json({ catalog: updatedCatalog });
+    }
+
+    if (action.action === "save-details") {
+      const video = catalog.videos.find((item) => item.videoId === action.videoId);
+      if (!video) return NextResponse.json({ error: "Video not found in the Director catalog." }, { status: 404 });
+      const updatedVideo = DirectorVideoSchema.parse({
+        ...video,
+        playlists: [...new Set(action.playlists.map((name) => name.trim()).filter(Boolean))],
+        sermonStartSeconds: action.sermonStartSeconds ?? undefined,
+        updatedAt: new Date().toISOString(),
+      });
+      if (video.status === "published") {
+        const publishedRecord = LibraryVideoRecordSchema.parse(
+          await readJsonObject(`published/videos/${video.videoId}.json`),
+        );
+        const updatedRecord = LibraryVideoRecordSchema.parse({
+          ...publishedRecord,
+          playlists: updatedVideo.playlists,
+          sermonStartSeconds: updatedVideo.sermonStartSeconds,
+        });
+        await writeJsonObject(`published/videos/${video.videoId}.json`, updatedRecord, true);
+        const publishedCatalog = await readPublishedCatalog();
+        if (!publishedCatalog.videos.some((item) => item.videoId === video.videoId)) {
+          throw new Error("The published video is missing from the public catalog.");
+        }
+        const updatedPublicCatalog = LibraryVideoCatalogSchema.parse({
+          updatedAt: new Date().toISOString(),
+          videos: publishedCatalog.videos.map((item) => item.videoId === video.videoId
+            ? {
+              videoId: updatedRecord.videoId,
+              title: updatedRecord.title,
+              youtubeUrl: updatedRecord.youtubeUrl,
+              addedAt: updatedRecord.addedAt,
+              playlists: updatedRecord.playlists,
+              ...(updatedRecord.sermonStartSeconds !== undefined
+                ? { sermonStartSeconds: updatedRecord.sermonStartSeconds }
+                : {}),
+            }
+            : item),
+        });
+        await writeJsonObject(PUBLISHED_CATALOG_KEY, updatedPublicCatalog, true);
+      } else {
+        const detailKey = `director/videos/${video.videoId}.json`;
+        const privateRecord = await readJsonObject(detailKey);
+        if (privateRecord) await writeJsonObject(detailKey, updatedVideo);
+      }
+      const updatedCatalog = await savePrivateCatalog(catalog.videos.map((item) =>
+        item.videoId === video.videoId ? updatedVideo : item,
+      ));
       return NextResponse.json({ catalog: updatedCatalog });
     }
 
@@ -324,6 +394,8 @@ export async function POST(request: NextRequest) {
         title: video.title,
         youtubeUrl: video.youtubeUrl,
         addedAt: new Date().toISOString(),
+        playlists: video.playlists,
+        ...(video.sermonStartSeconds !== undefined ? { sermonStartSeconds: video.sermonStartSeconds } : {}),
         segments: video.segments,
       });
       const publishedCatalog = await readPublishedCatalog();
@@ -341,6 +413,10 @@ export async function POST(request: NextRequest) {
           title: publishedRecord.title,
           youtubeUrl: publishedRecord.youtubeUrl,
           addedAt: publishedRecord.addedAt,
+          playlists: publishedRecord.playlists,
+          ...(publishedRecord.sermonStartSeconds !== undefined
+            ? { sermonStartSeconds: publishedRecord.sermonStartSeconds }
+            : {}),
         }, ...publishedCatalog.videos.filter((item) => item.videoId !== video.videoId)],
       });
       await writeJsonObject(PUBLISHED_CATALOG_KEY, updatedPublicCatalog, true);
@@ -358,9 +434,14 @@ export async function POST(request: NextRequest) {
 
     if (action.action === "unpublish") {
       const publishedCatalog = await readPublishedCatalog();
+      const publishedRecord = await readJsonObject(`published/videos/${video.videoId}.json`);
+      const transcript = publishedRecord
+        ? LibraryVideoRecordSchema.parse(publishedRecord).segments
+        : video.segments;
       const updatedPublicCatalog = LibraryVideoCatalogSchema.parse({
         updatedAt: new Date().toISOString(),
-        videos: publishedCatalog.videos.filter((item) => item.videoId !== video.videoId),
+        videos: publishedCatalog.videos
+          .filter((item) => item.videoId !== video.videoId),
       });
       await writeJsonObject(PUBLISHED_CATALOG_KEY, updatedPublicCatalog, true);
       await deleteObject(`published/videos/${video.videoId}.json`);
@@ -368,7 +449,9 @@ export async function POST(request: NextRequest) {
         ...video,
         status: "ready",
         updatedAt: new Date().toISOString(),
+        segments: transcript,
       });
+      await writeJsonObject(`director/videos/${video.videoId}.json`, draft);
       const updatedPrivateCatalog = await savePrivateCatalog(catalog.videos.map((item) =>
         item.videoId === video.videoId ? draft : item,
       ));

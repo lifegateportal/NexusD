@@ -6,11 +6,15 @@ export const LibraryVideoSegmentSchema = z.object({
   text: z.string().trim().min(1).max(2000),
 }).strict();
 
+const VideoPlaylistsSchema = z.array(z.string().trim().min(1).max(60)).max(12).default([]);
+
 export const LibraryVideoSchema = z.object({
   videoId: z.string().regex(/^[A-Za-z0-9_-]{11}$/),
   title: z.string().trim().min(1).max(200),
   youtubeUrl: z.string().url(),
   addedAt: z.string().datetime(),
+  playlists: VideoPlaylistsSchema,
+  sermonStartSeconds: z.number().finite().min(0).optional(),
 }).strip();
 
 export const LibraryVideoCatalogSchema = z.object({
@@ -36,13 +40,15 @@ export const DirectorVideoSchema = z.object({
   youtubeUrl: z.string().url(),
   status: DirectorVideoStatusSchema,
   updatedAt: z.string().datetime(),
+  playlists: VideoPlaylistsSchema,
+  sermonStartSeconds: z.number().finite().min(0).optional(),
   segments: z.array(LibraryVideoSegmentSchema).max(20000).default([]),
   error: z.string().max(1000).optional(),
 }).strict();
 
 export const DirectorVideoCatalogSchema = z.object({
   updatedAt: z.string().datetime(),
-  videos: z.array(DirectorVideoSchema).max(500),
+  videos: z.array(DirectorVideoSchema).max(10000),
 }).strict();
 
 export type LibraryVideo = z.infer<typeof LibraryVideoSchema>;

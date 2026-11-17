@@ -30,6 +30,8 @@ export type YoutubeChannelVideo = {
   thumbnailUrl: string;
 };
 
+export const YoutubePageTokenSchema = z.string().min(1).max(2048).optional();
+
 async function youtubeApiRequest<T>(url: URL, schema: z.ZodType<T>, revalidateSeconds: number): Promise<T> {
   const response = await fetch(url, revalidateSeconds
     ? { next: { revalidate: revalidateSeconds } }
@@ -45,9 +47,9 @@ async function youtubeApiRequest<T>(url: URL, schema: z.ZodType<T>, revalidateSe
 }
 
 export async function fetchYoutubeChannelVideos(
-  limit: 50 | 100,
+  pageToken?: string,
   revalidateSeconds = 0,
-): Promise<{ channelTitle: string; videos: YoutubeChannelVideo[] }> {
+): Promise<{ channelTitle: string; videos: YoutubeChannelVideo[]; nextPageToken?: string }> {
   if (!env.YOUTUBE_API_KEY) {
     throw new Error("Add YOUTUBE_API_KEY to Nexus Director to fetch the channel using YouTube’s official API.");
   }
@@ -62,32 +64,29 @@ export async function fetchYoutubeChannelVideos(
   const channelDetails = channel.items?.[0];
   if (!channelDetails) throw new Error("YouTube could not find channel @lifegatebroadcast.");
 
-  const videos: YoutubeChannelVideo[] = [];
-  let pageToken: string | undefined;
-  const pages = Math.ceil(limit / 50);
-  for (let page = 0; page < pages; page += 1) {
-    const playlistUrl = new URL("https://www.googleapis.com/youtube/v3/playlistItems");
-    const params = new URLSearchParams({
-      part: "snippet",
-      playlistId: channelDetails.contentDetails.relatedPlaylists.uploads,
-      maxResults: "50",
-      key: env.YOUTUBE_API_KEY,
-    });
-    if (pageToken) params.set("pageToken", pageToken);
-    playlistUrl.search = params.toString();
-    const playlist = await youtubeApiRequest(playlistUrl, PlaylistResponseSchema, revalidateSeconds);
-    videos.push(...(playlist.items ?? []).map((item) => {
-      const videoId = item.snippet.resourceId.videoId;
-      return {
-        videoId,
-        title: item.snippet.title.slice(0, 200),
-        youtubeUrl: `https://www.youtube.com/watch?v=${videoId}`,
-        thumbnailUrl: `https://i.ytimg.com/vi/${videoId}/mqdefault.jpg`,
-      };
-    }));
-    pageToken = playlist.nextPageToken;
-    if (!pageToken || videos.length >= limit) break;
-  }
+  const playlistUrl = new URL("https://www.googleapis.com/youtube/v3/playlistItems");
+  const params = new URLSearchParams({
+    part: "snippet",
+    playlistId: channelDetails.contentDetails.relatedPlaylists.uploads,
+    maxResults: "50",
+    key: env.YOUTUBE_API_KEY,
+  });
+  if (pageToken) params.set("pageToken", pageToken);
+  playlistUrl.search = params.toString();
+  const playlist = await youtubeApiRequest(playlistUrl, PlaylistResponseSchema, revalidateSeconds);
+  const videos = (playlist.items ?? []).map((item) => {
+    const videoId = item.snippet.resourceId.videoId;
+    return {
+      videoId,
+      title: item.snippet.title.slice(0, 200),
+      youtubeUrl: `https://www.youtube.com/watch?v=${videoId}`,
+      thumbnailUrl: `https://i.ytimg.com/vi/${videoId}/mqdefault.jpg`,
+    };
+  });
 
-  return { channelTitle: channelDetails.snippet.title, videos: videos.slice(0, limit) };
+  return {
+    channelTitle: channelDetails.snippet.title,
+    videos,
+    ...(playlist.nextPageToken ? { nextPageToken: playlist.nextPageToken } : {}),
+  };
 }
