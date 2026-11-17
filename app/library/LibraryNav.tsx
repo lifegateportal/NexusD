@@ -3,6 +3,7 @@ import Link from "next/link";
 const links = [
   { href: "/library", label: "Books", icon: "▤" },
   { href: "/library/ask", label: "Ask the library", icon: "✳" },
+  { href: "/library/faqs", label: "FAQs", icon: "?" },
   { href: "/library/videos", label: "Videos", icon: "▷" },
   { href: "/library/shorts", label: "Shorts", icon: "▸" },
 ];
@@ -34,13 +35,13 @@ export default function LibraryNav() {
 
       <nav
         aria-label="Library"
-        className="fixed inset-x-0 bottom-0 z-30 flex min-h-16 items-stretch justify-around border-t border-slate-800/80 bg-slate-950/95 px-2 pb-[max(env(safe-area-inset-bottom),_0.25rem)] backdrop-blur-xl lg:hidden"
+        className="fixed inset-x-0 bottom-0 z-30 flex min-h-16 items-stretch justify-start overflow-x-auto border-t border-slate-800/80 bg-slate-950/95 px-2 pb-[max(env(safe-area-inset-bottom),_0.25rem)] backdrop-blur-xl [scrollbar-width:none] [&::-webkit-scrollbar]:hidden lg:hidden"
       >
         {links.map((link) => (
           <Link
             key={link.href}
             href={link.href}
-            className="flex min-h-12 min-w-20 flex-1 flex-col items-center justify-center gap-0.5 px-2 text-[10px] font-semibold text-slate-400"
+            className="flex min-h-12 min-w-20 flex-none flex-col items-center justify-center gap-0.5 px-2 text-[10px] font-semibold text-slate-400"
           >
             <span aria-hidden className="text-lg leading-5 text-amber-400">{link.icon}</span>
             <span>{link.label}</span>

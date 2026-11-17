@@ -1072,9 +1072,134 @@ function SelectionPopup({
 
 // ── Main reader component ─────────────────────────────────────────────────────
 
-type Props = { manifest: EbookManifest; slug: string; initialChapter?: number };
+function normalizeFindText(value: string): string {
+  return value
+    .replace(/[`*_~#]/g, "")
+    .replace(/(^|\n)\s*(?:[-+*]|\d+[.)])\s+/g, "$1")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+}
 
-export function ReaderClient({ manifest, slug, initialChapter }: Props) {
+function readerSectionBodies(manifest: EbookManifest): string[] {
+  const sections = [""];
+  if (manifest.frontMatter.preface?.trim()) sections.push(manifest.frontMatter.preface);
+  if (manifest.frontMatter.introduction?.trim()) sections.push(manifest.frontMatter.introduction);
+  for (const section of manifest.frontMatter.additionalSections ?? []) sections.push(section.content);
+  for (const chapter of manifest.chapters) {
+    sections.push([
+      chapter.intro,
+      chapter.epigraph,
+      ...chapter.sections.map((section) => [section.heading, section.body].filter(Boolean).join("\n\n")),
+      ...chapter.keyTakeaways,
+      ...chapter.reflectionQuestions,
+      chapter.forwardQuestion,
+    ].filter(Boolean).join("\n\n"));
+  }
+  if (manifest.frontMatter.conclusion?.trim()) sections.push(manifest.frontMatter.conclusion);
+  if (manifest.frontMatter.aboutAuthor?.trim()) sections.push(manifest.frontMatter.aboutAuthor);
+  if (manifest.backMatter?.glossary?.length) {
+    sections.push(manifest.backMatter.glossary.map((entry) => `${entry.term} ${entry.definition}`).join("\n"));
+  }
+  if (manifest.backMatter?.readingGroupGuide?.length) {
+    sections.push(manifest.backMatter.readingGroupGuide.map((entry) => entry.questions.join("\n")).join("\n"));
+  }
+  if (manifest.backMatter?.recommendedResources?.length) {
+    sections.push(manifest.backMatter.recommendedResources.join("\n"));
+  }
+  if (manifest.backMatter?.scriptureIndex?.length) {
+    sections.push(manifest.backMatter.scriptureIndex.join("\n"));
+  }
+  for (const section of manifest.backMatter?.additionalSections ?? []) sections.push(section.content);
+  return sections;
+}
+
+function initialReaderSectionIndex(
+  manifest: EbookManifest,
+  chapterIndex: number | undefined,
+  find: string | undefined,
+): number {
+  const sections = readerSectionBodies(manifest);
+  let nextSection = 1;
+  if (manifest.frontMatter.preface?.trim()) nextSection += 1;
+  if (manifest.frontMatter.introduction?.trim()) nextSection += 1;
+  nextSection += manifest.frontMatter.additionalSections?.length ?? 0;
+  const chapterStart = nextSection;
+
+  if (
+    chapterIndex !== undefined
+    && Number.isInteger(chapterIndex)
+    && chapterIndex >= 0
+    && chapterIndex < manifest.chapters.length
+  ) {
+    return chapterStart + chapterIndex;
+  }
+  if (find) {
+    const query = normalizeFindText(find);
+    for (const length of [query.length, 140, 100, 70, 45]) {
+      if (length < 20 || length > query.length) continue;
+      const needle = query.slice(0, length);
+      const match = sections.findIndex((section) => normalizeFindText(section).includes(needle));
+      if (match >= 0) return match;
+    }
+  }
+  return 0;
+}
+
+function findInitialPage(track: HTMLDivElement, quote: string, pageWidth: number): number | null {
+  const normalizedQuote = normalizeFindText(quote);
+  const positions: Array<{ node: Text; offset: number }> = [];
+  let normalizedText = "";
+  const walker = document.createTreeWalker(track, NodeFilter.SHOW_TEXT);
+  let current = walker.nextNode();
+  while (current) {
+    const node = current as Text;
+    for (let offset = 0; offset < node.data.length; offset += 1) {
+      const character = node.data[offset];
+      if (/\s/.test(character)) {
+        if (normalizedText && !normalizedText.endsWith(" ")) {
+          normalizedText += " ";
+          positions.push({ node, offset });
+        }
+      } else {
+        normalizedText += character.toLowerCase();
+        positions.push({ node, offset });
+      }
+    }
+    current = walker.nextNode();
+  }
+  if (normalizedText.endsWith(" ")) {
+    normalizedText = normalizedText.slice(0, -1);
+    positions.pop();
+  }
+
+  const searchLengths = [...new Set([normalizedQuote.length, 140, 100, 70, 45])]
+    .filter((length) => length >= 20 && length <= normalizedQuote.length);
+  let matchIndex = -1;
+  let matchLength = 0;
+  for (const length of searchLengths) {
+    matchIndex = normalizedText.indexOf(normalizedQuote.slice(0, length));
+    if (matchIndex >= 0) {
+      matchLength = length;
+      break;
+    }
+  }
+  if (matchIndex < 0 || !positions[matchIndex] || !positions[matchIndex + matchLength - 1]) return null;
+
+  const range = document.createRange();
+  range.setStart(positions[matchIndex].node, positions[matchIndex].offset);
+  const end = positions[matchIndex + matchLength - 1];
+  range.setEnd(end.node, end.offset + 1);
+  const rect = range.getClientRects().item(0);
+  const trackLeft = track.getBoundingClientRect().left;
+  if (!rect || pageWidth <= 0) return null;
+  return Math.max(0, Math.floor((rect.left - trackLeft) / pageWidth));
+}
+
+type Props = { manifest: EbookManifest; slug: string; initialChapter?: number; initialFind?: string };
+
+export function ReaderClient({ manifest, slug, initialChapter, initialFind }: Props) {
+  const initialSectionIndex = initialReaderSectionIndex(manifest, initialChapter, initialFind);
   const [settings, setSettings] = useState<ReaderSettings>({
     theme: "paper", fontSize: 3, lineHeight: 2, fontFamily: "serif",
   });
@@ -1082,7 +1207,7 @@ export function ReaderClient({ manifest, slug, initialChapter }: Props) {
   const fontSize   = FONT_SIZES[settings.fontSize - 1];
   const lineHeight = LINE_HEIGHTS[settings.lineHeight - 1];
   const fontFamily = FONT_FAMILIES[settings.fontFamily];
-  const [chapterIndex, setChapterIndex] = useState(initialChapter ?? 0);
+  const [chapterIndex, setChapterIndex] = useState(initialSectionIndex);
   const [showChrome,   setShowChrome]   = useState(true);
   const [tocOpen,      setTocOpen]      = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -1093,6 +1218,7 @@ export function ReaderClient({ manifest, slug, initialChapter }: Props) {
   const [containerW,    setContainerW]    = useState(0);
   const [containerH,    setContainerH]    = useState(0);
   const [isFlipping,    setIsFlipping]    = useState(false);
+  const [pageCountRevision, setPageCountRevision] = useState(0);
 
   // ── Annotation + audio state ────────────────────────────────────────────────────
   const [annotationMode, setAnnotationMode] = useState(false);
@@ -1141,6 +1267,8 @@ export function ReaderClient({ manifest, slug, initialChapter }: Props) {
   const goToLastPageRef    = useRef(false);
   // True while the highlight popup is visible — blocks selectionchange from closing it
   const selectionLockRef   = useRef(false);
+  const pageCountMeasuredRef = useRef(false);
+  const lastLocatedPageRevisionRef = useRef(-1);
 
   // Touch / swipe tracking
   const touchStartX     = useRef(0);
@@ -1213,6 +1341,8 @@ export function ReaderClient({ manifest, slug, initialChapter }: Props) {
       const trackLeft    = track.getBoundingClientRect().left;
       const sentinelLeft = sentinel.getBoundingClientRect().left;
       const pages = Math.max(1, Math.ceil((sentinelLeft - trackLeft) / containerW));
+      pageCountMeasuredRef.current = true;
+      setPageCountRevision((revision) => revision + 1);
       setTotalPages(pages);
       if (goToLastPageRef.current) {
         goToLastPageRef.current = false;
@@ -1224,6 +1354,23 @@ export function ReaderClient({ manifest, slug, initialChapter }: Props) {
     raf1 = requestAnimationFrame(() => { raf2 = requestAnimationFrame(measure); });
     return () => { cancelAnimationFrame(raf1); cancelAnimationFrame(raf2); };
   }, [chapterIndex, containerW, containerH, settings]);
+
+  useEffect(() => {
+    if (
+      !initialFind
+      || chapterIndex !== initialSectionIndex
+      || !pageCountMeasuredRef.current
+      || !containerW
+      || lastLocatedPageRevisionRef.current === pageCountRevision
+    ) return;
+    const track = columnTrackRef.current;
+    if (!track) return;
+    const page = findInitialPage(track, initialFind, containerW);
+    if (page !== null) {
+      setPageIndex(Math.min(page, totalPages - 1));
+      lastLocatedPageRevisionRef.current = pageCountRevision;
+    }
+  }, [chapterIndex, containerW, initialFind, initialSectionIndex, pageCountRevision, totalPages]);
 
   // ── Build virtual section list (copyright → preface → intro → chapters → conclusion → about → backmatter) ──
   type VirtualSection =
@@ -1557,11 +1704,11 @@ export function ReaderClient({ manifest, slug, initialChapter }: Props) {
   useEffect(() => {
     const saved = getReaderSettings();
     setSettings(saved);
-    if (initialChapter === undefined) {
+    if (initialChapter === undefined && !initialFind) {
       const pos = getReadingPosition(slug);
       if (pos) setChapterIndex(Math.min(pos.chapterIndex, totalSections - 1));
     }
-  }, [slug, totalSections, initialChapter]);
+  }, [slug, totalSections, initialChapter, initialFind]);
 
   // Persist position whenever chapter or page changes
   useEffect(() => {

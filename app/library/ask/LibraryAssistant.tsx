@@ -9,7 +9,6 @@ import {
   type LibraryChapterOption,
 } from "@/lib/schemas/library-assistant";
 import {
-  LibraryFaqCatalogSchema,
   LibraryFaqSourceSchema,
 } from "@/lib/schemas/library-faq";
 import { LibraryVideoCatalogSchema } from "@/lib/schemas/library-video";
@@ -67,7 +66,12 @@ function formatTime(seconds: number): string {
     : `${minutes}:${String(remaining).padStart(2, "0")}`;
 }
 
-function renderInlineMarkdown(text: string, keyPrefix: string, sourcePrefix: string): ReactNode[] {
+function renderInlineMarkdown(
+  text: string,
+  keyPrefix: string,
+  sourcePrefix: string,
+  sources: Source[] = [],
+): ReactNode[] {
   const pattern = /\*\*([^*]+)\*\*|\*([^*]+)\*|`([^`]+)`|\[(S\d+)\]|\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g;
   const nodes: ReactNode[] = [];
   let cursor = 0;
@@ -81,14 +85,19 @@ function renderInlineMarkdown(text: string, keyPrefix: string, sourcePrefix: str
     else if (match[2]) nodes.push(<em key={key}>{match[2]}</em>);
     else if (match[3]) nodes.push(<code key={key} className="rounded bg-slate-800 px-1.5 py-0.5 font-mono text-[0.9em] text-amber-200">{match[3]}</code>);
     else if (match[4]) {
+      const sourceRef = match[4];
+      const source = sources.find((item) => item.ref === sourceRef);
+      const directBookLink = source?.kind === "book" ? source.href : undefined;
       nodes.push(
         <a
           key={key}
-          href={`#source-${sourcePrefix}-${match[4]}`}
+          href={directBookLink ?? `#source-${sourcePrefix}-${sourceRef}`}
+          target={directBookLink?.startsWith("https://") ? "_blank" : undefined}
+          rel={directBookLink?.startsWith("https://") ? "noreferrer" : undefined}
           className="whitespace-nowrap font-semibold text-amber-300 underline decoration-amber-500/40 underline-offset-2"
-          aria-label={`Jump to source ${match[4]}`}
+          aria-label={directBookLink ? `Open book source ${sourceRef}` : `Jump to source ${sourceRef}`}
         >
-          [{match[4]}]
+          [{sourceRef}]
         </a>,
       );
     } else if (match[5] && match[6]) {
@@ -104,7 +113,15 @@ function renderInlineMarkdown(text: string, keyPrefix: string, sourcePrefix: str
   return nodes;
 }
 
-function MarkdownMessage({ content, sourcePrefix }: { content: string; sourcePrefix: string }) {
+function MarkdownMessage({
+  content,
+  sourcePrefix,
+  sources = [],
+}: {
+  content: string;
+  sourcePrefix: string;
+  sources?: Source[];
+}) {
   const lines = content.replace(/\r\n?/g, "\n").split("\n");
   const blocks: ReactNode[] = [];
   let index = 0;
@@ -122,7 +139,7 @@ function MarkdownMessage({ content, sourcePrefix }: { content: string; sourcePre
       const text = heading[2] ?? heading[1];
       blocks.push(
         <h3 key={`heading-${index}`} className="mb-2 mt-5 text-sm font-bold tracking-wide text-white first:mt-0">
-          {renderInlineMarkdown(text, `heading-${index}`, sourcePrefix)}
+          {renderInlineMarkdown(text, `heading-${index}`, sourcePrefix, sources)}
         </h3>,
       );
       index += 1;
@@ -135,7 +152,7 @@ function MarkdownMessage({ content, sourcePrefix }: { content: string; sourcePre
         const item = lines[index].trim().replace(/^[-*]\s+/, "");
         items.push(
           <li key={`list-${index}`} className="pl-1">
-            {renderInlineMarkdown(item, `list-${index}`, sourcePrefix)}
+            {renderInlineMarkdown(item, `list-${index}`, sourcePrefix, sources)}
           </li>,
         );
         index += 1;
@@ -155,7 +172,7 @@ function MarkdownMessage({ content, sourcePrefix }: { content: string; sourcePre
         const item = lines[index].trim().replace(/^\d+[.)]\s+/, "");
         items.push(
           <li key={`ordered-${index}`} className="pl-1">
-            {renderInlineMarkdown(item, `ordered-${index}`, sourcePrefix)}
+            {renderInlineMarkdown(item, `ordered-${index}`, sourcePrefix, sources)}
           </li>,
         );
         index += 1;
@@ -182,7 +199,7 @@ function MarkdownMessage({ content, sourcePrefix }: { content: string; sourcePre
     }
     blocks.push(
       <p key={`paragraph-${index}`} className="my-2 first:mt-0 last:mb-0">
-        {renderInlineMarkdown(paragraph.join(" "), `paragraph-${index}`, sourcePrefix)}
+        {renderInlineMarkdown(paragraph.join(" "), `paragraph-${index}`, sourcePrefix, sources)}
       </p>,
     );
   }
@@ -271,10 +288,6 @@ export default function LibraryAssistant() {
   const [videoCatalogLoaded, setVideoCatalogLoaded] = useState(false);
   const [videoPreview, setVideoPreview] = useState<{ videoId: string; title: string; startSeconds: number; key: number } | null>(null);
   const [mobileToolsOpen, setMobileToolsOpen] = useState(false);
-  const [faqOpen, setFaqOpen] = useState(false);
-  const [publishedFaqs, setPublishedFaqs] = useState<z.infer<typeof LibraryFaqCatalogSchema>["faqs"]>([]);
-  const [faqCatalogLoading, setFaqCatalogLoading] = useState(false);
-  const [faqCatalogLoaded, setFaqCatalogLoaded] = useState(false);
 
   const activeConversation = useMemo(
     () => conversations.find((conversation) => conversation.id === activeId) ?? null,
@@ -450,51 +463,6 @@ export default function LibraryAssistant() {
     } finally {
       setVideoCatalogLoading(false);
     }
-  }
-
-  async function loadPublishedFaqs() {
-    if (faqCatalogLoaded || faqCatalogLoading) return;
-    setFaqCatalogLoading(true);
-    try {
-      const response = await fetch("/api/library/faqs", { cache: "no-store" });
-      const body: unknown = await response.json();
-      if (!response.ok) {
-        const parsed = z.object({ error: z.string() }).safeParse(body);
-        throw new Error(parsed.success ? parsed.data.error : "Published FAQs could not be loaded.");
-      }
-      const parsed = LibraryFaqCatalogSchema.safeParse(body);
-      if (!parsed.success) throw new Error("The published FAQ list has an invalid format.");
-      setPublishedFaqs(parsed.data.faqs);
-      setFaqCatalogLoaded(true);
-    } catch (loadError) {
-      setError(loadError instanceof Error ? loadError.message : "Published FAQs could not be loaded.");
-    } finally {
-      setFaqCatalogLoading(false);
-    }
-  }
-
-  function showFaqInChat(faq: (typeof publishedFaqs)[number]) {
-    if (!storageReady || busy) return;
-    const conversation = activeConversation ?? makeConversation();
-    if (!activeConversation) {
-      setConversations((current) => [conversation, ...current].slice(0, 100));
-      setActiveId(conversation.id);
-    }
-    updateConversation(conversation.id, (current) => ({
-      ...current,
-      title: current.messages.length === 0 ? faq.question.slice(0, 72) : current.title,
-      updatedAt: new Date().toISOString(),
-      messages: [
-        ...current.messages,
-        { role: "user", content: faq.question },
-        { role: "assistant", content: faq.answer, sources: faq.sources },
-      ],
-    }));
-    setScope("all");
-    setFaqOpen(false);
-    setMobileToolsOpen(false);
-    setHistoryOpen(false);
-    setError("");
   }
 
   function playVideoSource(source: Source) {
@@ -680,7 +648,7 @@ export default function LibraryAssistant() {
   return (
     <>
       <div className="shrink-0 border-b border-slate-800/70 py-2 lg:py-3">
-        <div className="grid grid-cols-4 gap-2 lg:hidden">
+        <div className="grid grid-cols-3 gap-2 lg:hidden">
           <button
             type="button"
             onClick={createNewChat}
@@ -691,23 +659,7 @@ export default function LibraryAssistant() {
           </button>
           <button
             type="button"
-            onClick={() => {
-              const nextOpen = !faqOpen;
-              setFaqOpen(nextOpen);
-              setMobileToolsOpen(false);
-              if (nextOpen) void loadPublishedFaqs();
-            }}
-            aria-expanded={faqOpen}
-            className="min-h-12 rounded-xl border border-emerald-800 px-2 text-xs font-semibold text-emerald-200"
-          >
-            Popular FAQs
-          </button>
-          <button
-            type="button"
-            onClick={() => {
-              setMobileToolsOpen((open) => !open);
-              setFaqOpen(false);
-            }}
+            onClick={() => setMobileToolsOpen((open) => !open)}
             aria-expanded={mobileToolsOpen}
             className="min-h-12 rounded-xl border border-slate-700 px-2 text-xs font-semibold text-slate-200"
           >
@@ -750,18 +702,6 @@ export default function LibraryAssistant() {
             aria-expanded={outlinePickerOpen}
           >
             {outlinePickerOpen ? "Close outline setup" : "Choose chapter"}
-          </button>
-          <button
-            type="button"
-            onClick={() => {
-              const nextOpen = !faqOpen;
-              setFaqOpen(nextOpen);
-              if (nextOpen) void loadPublishedFaqs();
-            }}
-            aria-expanded={faqOpen}
-            className="min-h-12 min-w-fit rounded-xl border border-emerald-800 px-4 text-sm font-semibold text-emerald-200"
-          >
-            Popular FAQs
           </button>
           <span className="ml-auto text-xs text-emerald-400" role="status">
             {storageReady && !storageError ? "Saved locally" : storageReady ? "Not saved" : "Loading chats…"}
@@ -833,31 +773,6 @@ export default function LibraryAssistant() {
                 Video transcript & outline
               </button>
             </div>
-          </div>
-        )}
-        {faqOpen && (
-          <div className="mt-2 max-h-[34dvh] overflow-y-auto rounded-xl border border-slate-800 bg-slate-900/70 p-2">
-            {faqCatalogLoading ? (
-              <p className="p-3 text-sm text-slate-400">Loading published FAQs…</p>
-            ) : publishedFaqs.length === 0 ? (
-              <p className="p-3 text-sm text-slate-400">No FAQs have been published yet.</p>
-            ) : (
-              <ul className="space-y-1">
-                {publishedFaqs.map((faq) => (
-                  <li key={faq.id}>
-                    <button
-                      type="button"
-                      onClick={() => showFaqInChat(faq)}
-                      disabled={!storageReady || busy}
-                      className="min-h-12 w-full rounded-lg px-3 py-2 text-left disabled:opacity-50"
-                    >
-                      <span className="block text-[10px] font-bold uppercase tracking-wider text-cyan-300">{faq.category}</span>
-                      <span className="block text-sm text-slate-100">{faq.question}</span>
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            )}
           </div>
         )}
         {videoToolsOpen && (
@@ -1045,7 +960,7 @@ export default function LibraryAssistant() {
                 : "border border-slate-800 bg-slate-900/70 text-slate-200"
             }`}>
               {message.role === "assistant"
-                ? <MarkdownMessage content={message.content} sourcePrefix={String(index)} />
+                ? <MarkdownMessage content={message.content} sourcePrefix={String(index)} sources={message.sources ?? []} />
                 : <p className="whitespace-pre-wrap">{message.content}</p>}
             </div>
             {message.role === "assistant" && message.outline && message.artifactTitle && (

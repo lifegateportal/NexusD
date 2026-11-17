@@ -14,13 +14,64 @@ const RequestSchema = z.object({
 
 const SuggestionSchema = z.object({
   suggestions: z.array(z.object({
-    startIndex: z.number().int().min(0),
-    endIndex: z.number().int().min(0),
+    candidateId: z.number().int().min(1).max(36),
     title: z.string().trim().min(1).max(100),
     hook: z.string().trim().min(1).max(240),
     reason: z.string().trim().min(1).max(400),
   }).strict()).min(1).max(6),
 }).strict();
+
+type ClipCandidate = {
+  id: number;
+  startSeconds: number;
+  endSeconds: number;
+  excerpt: string;
+};
+
+function buildClipCandidates(segments: z.infer<typeof LibraryVideoSegmentSchema>[]): ClipCandidate[] {
+  const targets = [20, 35, 50, 70];
+  const candidates = new Map<string, Omit<ClipCandidate, "id">>();
+
+  for (let startIndex = 0; startIndex < segments.length; startIndex += 1) {
+    const startSeconds = segments[startIndex].startSeconds;
+    for (const target of targets) {
+      let endIndex = startIndex;
+      while (
+        endIndex < segments.length
+        && segments[endIndex].endSeconds - startSeconds < target
+      ) {
+        endIndex += 1;
+      }
+      if (endIndex >= segments.length) continue;
+
+      const endSeconds = segments[endIndex].endSeconds;
+      const duration = endSeconds - startSeconds;
+      if (duration < 15 || duration > 90) continue;
+
+      const key = `${startIndex}:${endIndex}`;
+      if (!candidates.has(key)) {
+        candidates.set(key, {
+          startSeconds,
+          endSeconds,
+          excerpt: segments
+            .slice(startIndex, endIndex + 1)
+            .map((segment) => segment.text)
+            .join(" ")
+            .slice(0, 400),
+        });
+      }
+    }
+  }
+
+  const allCandidates = [...candidates.values()];
+  const limit = 36;
+  const selected = allCandidates.length <= limit
+    ? allCandidates
+    : Array.from({ length: limit }, (_, index) =>
+      allCandidates[Math.floor(index * (allCandidates.length - 1) / (limit - 1))],
+    );
+  return selected.map((candidate, index) => ({ id: index + 1, ...candidate }));
+}
 
 export async function POST(request: NextRequest) {
   if (!process.env.AUTH_PASSWORD || !process.env.AUTH_COOKIE_SECRET) {
@@ -36,8 +87,18 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  const transcript = input.segments
-    .map((segment, index) => `${index}: ${segment.startSeconds.toFixed(2)}-${segment.endSeconds.toFixed(2)} ${segment.text}`)
+  const candidates = buildClipCandidates(input.segments);
+  if (candidates.length === 0) {
+    return NextResponse.json(
+      { error: "No continuous 15–90 second clip range could be found in this transcript." },
+      { status: 422 },
+    );
+  }
+
+  const transcript = candidates
+    .map((candidate) =>
+      `CANDIDATE ${candidate.id} (${candidate.startSeconds.toFixed(2)}–${candidate.endSeconds.toFixed(2)}): ${candidate.excerpt}`,
+    )
     .join("\n");
   if (transcript.length > 30000) {
     return NextResponse.json({ error: "Select a shorter transcript range before asking AI for short ideas." }, { status: 413 });
@@ -47,27 +108,25 @@ export async function POST(request: NextRequest) {
     const result = await generateObject({
       model: deepSeekModel,
       schema: SuggestionSchema,
-      maxTokens: 1400,
+      maxTokens: 1100,
       temperature: 0.3,
-      system: "You are a video editor. Suggest concise, self-contained short-form clips using only the supplied timestamped transcript. Return segment indexes exactly as given; do not invent timestamps. Each clip should be 15 to 90 seconds, have a strong spoken hook, and end at a natural thought boundary.",
-      prompt: `VIDEO TITLE: ${input.title || "Untitled video"}\n\nTRANSCRIPT SEGMENTS (index: start-end text):\n${transcript}`,
+      system: "You are a video editor. Rank the supplied valid 15–90 second transcript clip candidates. Return only candidate IDs that appear in the list, with an accurate short title, a hook based only on the spoken words, and a concise reason. Never invent or modify candidate IDs, text, or timings. Prefer a self-contained moment with a natural opening and ending; avoid music-only or unintelligible segments.",
+      prompt: `VIDEO TITLE: ${input.title || "Untitled video"}\n\nVALID CLIP CANDIDATES:\n${transcript}`,
     });
+    const candidateById = new Map(candidates.map((candidate) => [candidate.id, candidate]));
     const suggestions = result.object.suggestions.flatMap((suggestion) => {
-      const start = input.segments[suggestion.startIndex];
-      const end = input.segments[suggestion.endIndex];
-      if (!start || !end || suggestion.endIndex < suggestion.startIndex) return [];
-      const duration = end.endSeconds - start.startSeconds;
-      if (duration < 15 || duration > 90) return [];
+      const candidate = candidateById.get(suggestion.candidateId);
+      if (!candidate) return [];
       return [{
-        startSeconds: start.startSeconds,
-        endSeconds: end.endSeconds,
+        startSeconds: candidate.startSeconds,
+        endSeconds: candidate.endSeconds,
         title: suggestion.title,
         hook: suggestion.hook,
         reason: suggestion.reason,
       }];
     });
     if (suggestions.length === 0) {
-      return NextResponse.json({ error: "AI did not return valid 15–90 second transcript-based clips. Try another transcript section." }, { status: 502 });
+      return NextResponse.json({ error: "AI did not select one of the valid transcript clip options. Try again." }, { status: 502 });
     }
     return NextResponse.json({ suggestions });
   } catch (error) {

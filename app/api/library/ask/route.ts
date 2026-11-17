@@ -98,6 +98,13 @@ function splitIntoChunks(text: string, limit = 1300): string[] {
   return chunks;
 }
 
+function bookSourceHref(slug: string, chapterIndex: number | undefined, excerpt: string): string {
+  const query = new URLSearchParams();
+  if (chapterIndex !== undefined) query.set("chapter", String(chapterIndex));
+  query.set("find", excerpt.slice(0, 180));
+  return `/library/${encodeURIComponent(slug)}/read?${query.toString()}`;
+}
+
 function normalizeTerm(value: string): string {
   const term = value.toLowerCase().replace(/[^a-z0-9']/g, "");
   if (term.length > 5 && term.endsWith("ies")) return `${term.slice(0, -3)}y`;
@@ -648,7 +655,11 @@ ${answer}`,
           kind: "book",
           title: sourceTitle,
           excerpt: chapter.content.slice(0, 1_200),
-          href: `/library/${encodeURIComponent(input.chapter.slug)}/read?chapter=${chapter.chapterIndex}`,
+          href: bookSourceHref(
+            input.chapter.slug,
+            chapter.chapterIndex,
+            chapter.content.replace(/^# Chapter \d+:[^\n]*\n+/, ""),
+          ),
         }],
       });
     }
@@ -698,7 +709,7 @@ ${answer}`,
         title,
         excerpt,
         ...(videoId ? { videoId } : {}),
-        ...(slug ? { href: `/library/${encodeURIComponent(slug)}${chapterIndex !== undefined ? `/read?chapter=${chapterIndex}` : ""}` } : {}),
+        ...(slug ? { href: bookSourceHref(slug, chapterIndex, excerpt) } : {}),
         ...(videoUrl && startSeconds !== undefined ? {
           href: `${videoUrl}&t=${Math.floor(startSeconds)}s`,
           startSeconds,

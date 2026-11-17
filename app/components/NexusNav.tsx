@@ -41,9 +41,8 @@ function IconEbook() {
 function IconLibrary() {
   return (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} className="h-5 w-5">
-      <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20" strokeLinecap="round" strokeLinejoin="round" />
-      <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z" strokeLinecap="round" strokeLinejoin="round" />
-      <path d="M9 7h7M9 11h5" strokeLinecap="round" />
+      <path d="M3 19.5h18M5 5.5h4v11H5zM10 3.5h4v13h-4zM15 7.5h4v9h-4z" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M6.5 8.5h1M11.5 6.5h1M16.5 10.5h1" strokeLinecap="round" />
     </svg>
   );
 }

@@ -255,6 +255,9 @@ export default async function LibraryPage() {
           <Link href="/library/videos" className="flex min-h-12 items-center rounded-xl border border-slate-700 px-5 text-sm font-semibold text-slate-200">
             Browse videos
           </Link>
+          <Link href="/library/faqs" className="flex min-h-12 items-center rounded-xl border border-slate-700 px-5 text-sm font-semibold text-slate-200">
+            Browse FAQs
+          </Link>
         </div>
       </section>
 

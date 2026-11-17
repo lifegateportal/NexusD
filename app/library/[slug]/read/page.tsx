@@ -23,16 +23,17 @@ export default async function ReadPage({
   searchParams,
 }: {
   params:       Promise<{ slug: string }>;
-  searchParams: Promise<{ chapter?: string }>;
+  searchParams: Promise<{ chapter?: string; find?: string }>;
 }) {
   const { slug } = await params;
-  const sp       = await searchParams;
-  const initial  = sp.chapter !== undefined
-    ? Math.max(0, parseInt(sp.chapter, 10))
+  const search = await searchParams;
+  const initial = search.chapter && /^\d+$/.test(search.chapter)
+    ? Number(search.chapter)
     : undefined;
+  const find = search.find?.trim().slice(0, 300) || undefined;
 
   const manifest = await fetchManifest(slug);
   if (!manifest) notFound();
 
-  return <ReaderClient manifest={manifest} slug={slug} initialChapter={initial} />;
+  return <ReaderClient manifest={manifest} slug={slug} initialChapter={initial} initialFind={find} />;
 }
