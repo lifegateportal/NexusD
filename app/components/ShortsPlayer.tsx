@@ -777,6 +777,48 @@ export default function ShortsPlayer({
           YouTube crop is best-effort: framing scales and shifts the embedded player. Use an authorized upload for clean, reliable reframing.
         </p>
       )}
+      {(project.brollClips.some((clip) => clip.provider === "pexels")
+        || project.musicTracks.some((track) => track.provider === "jamendo")) && (
+        <div className="mt-2 border-t border-slate-800 pt-2 text-xs leading-relaxed text-slate-400">
+          <p className="font-semibold text-slate-300">Media credits</p>
+          {project.brollClips.filter((clip) => clip.provider === "pexels").map((clip) => (
+            <p key={`credit-${clip.id}`}>
+              Video by{" "}
+              <a href={clip.creatorUrl} target="_blank" rel="noreferrer" className="inline-flex min-h-12 items-center underline underline-offset-2">
+                {clip.creatorName}
+              </a>
+              {" · "}
+              <a href={clip.providerPageUrl} target="_blank" rel="noreferrer" className="inline-flex min-h-12 items-center underline underline-offset-2">
+                Pexels source
+              </a>
+              {" · "}
+              <a href={clip.licenseUrl} target="_blank" rel="noreferrer" className="inline-flex min-h-12 items-center underline underline-offset-2">
+                {clip.licenseName}
+              </a>
+            </p>
+          ))}
+          {project.musicTracks.filter((track) => track.provider === "jamendo").map((track) => (
+            <p key={`credit-${track.id}`}>
+              Music by{" "}
+              <a href={track.creatorUrl} target="_blank" rel="noreferrer" className="inline-flex min-h-12 items-center underline underline-offset-2">
+                {track.creatorName}
+              </a>
+              {" · "}
+              <a href={track.providerPageUrl} target="_blank" rel="noreferrer" className="inline-flex min-h-12 items-center underline underline-offset-2">
+                Jamendo track
+              </a>
+              {" · "}
+              <a href={track.licenseUrl} target="_blank" rel="noreferrer" className="inline-flex min-h-12 items-center underline underline-offset-2">
+                {track.licenseName}
+              </a>
+              {" · "}
+              <a href="https://www.jamendo.com" target="_blank" rel="noreferrer" className="inline-flex min-h-12 items-center underline underline-offset-2">
+                Jamendo
+              </a>
+            </p>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

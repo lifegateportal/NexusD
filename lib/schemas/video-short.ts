@@ -84,7 +84,21 @@ export const ShortBrollClipSchema = z.object({
   startSeconds: z.number().finite().min(0),
   endSeconds: z.number().finite().min(0),
   fit: z.enum(["cover", "contain"]).default("cover"),
-}).strict().refine((clip) => clip.endSeconds > clip.startSeconds, {
+  provider: z.enum(["upload", "pexels"]).default("upload"),
+  providerPageUrl: z.string().url().optional(),
+  creatorName: z.string().trim().min(1).max(200).optional(),
+  creatorUrl: z.string().url().optional(),
+  licenseName: z.string().trim().min(1).max(120).optional(),
+  licenseUrl: z.string().url().optional(),
+}).strict().superRefine((clip, context) => {
+  if (clip.provider === "pexels") {
+    for (const field of ["providerPageUrl", "creatorName", "creatorUrl", "licenseName", "licenseUrl"] as const) {
+      if (!clip[field]) {
+        context.addIssue({ code: z.ZodIssueCode.custom, path: [field], message: "Pexels B-roll needs creator and license attribution." });
+      }
+    }
+  }
+}).refine((clip) => clip.endSeconds > clip.startSeconds, {
   message: "B-roll clip end must be after its start.",
   path: ["endSeconds"],
 }).refine((clip) => clip.endSeconds - clip.startSeconds <= clip.sourceDurationSeconds, {
@@ -102,7 +116,22 @@ export const ShortMusicTrackSchema = z.object({
   volume: z.number().finite().min(0).max(1).default(0.25),
   fadeInSeconds: z.number().finite().min(0).max(30).default(1),
   fadeOutSeconds: z.number().finite().min(0).max(30).default(2),
-}).strict().refine((track) => track.endSeconds > track.startSeconds, {
+  provider: z.enum(["upload", "jamendo"]).default("upload"),
+  providerPageUrl: z.string().url().optional(),
+  creatorName: z.string().trim().min(1).max(200).optional(),
+  creatorUrl: z.string().url().optional(),
+  licenseName: z.string().trim().min(1).max(120).optional(),
+  licenseUrl: z.string().url().optional(),
+  commercialLicenseConfirmed: z.boolean().default(false),
+}).strict().superRefine((track, context) => {
+  if (track.provider === "jamendo") {
+    for (const field of ["providerPageUrl", "creatorName", "creatorUrl", "licenseName", "licenseUrl"] as const) {
+      if (!track[field]) {
+        context.addIssue({ code: z.ZodIssueCode.custom, path: [field], message: "Jamendo music needs creator and license attribution." });
+      }
+    }
+  }
+}).refine((track) => track.endSeconds > track.startSeconds, {
   message: "Music track end must be after its start.",
   path: ["endSeconds"],
 }).refine((track) => track.endSeconds - track.startSeconds <= track.sourceDurationSeconds, {
@@ -203,6 +232,15 @@ export const PublishedShortProjectSchema = ShortProjectSchema.superRefine((proje
       message: "Uploaded shorts need a published source URL.",
     });
   }
+  project.musicTracks.forEach((track, index) => {
+    if (track.provider === "jamendo" && !track.commercialLicenseConfirmed) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["musicTracks", index, "commercialLicenseConfirmed"],
+        message: "Confirm the Jamendo Pro commercial license for each track before publishing.",
+      });
+    }
+  });
 });
 
 export const ShortSummarySchema = z.object({

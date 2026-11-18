@@ -22,6 +22,12 @@ import {
   type ShortSummary,
 } from "@/lib/schemas/video-short";
 import { DirectorVideoCatalogSchema } from "@/lib/schemas/library-video";
+import {
+  ShortBrollSuggestionsResponseSchema,
+  ShortMusicSuggestionsResponseSchema,
+  type ShortBrollSuggestion,
+  type ShortMusicSuggestion,
+} from "@/lib/schemas/short-media";
 
 const ErrorSchema = z.object({ error: z.string() });
 const SuggestionResponseSchema = z.object({
@@ -261,6 +267,10 @@ export default function ShortsStudio() {
   const [suggestions, setSuggestions] = useState<Suggestion[]>([]);
   const [suggestionsVideoId, setSuggestionsVideoId] = useState("");
   const [suggestedBoundaries, setSuggestedBoundaries] = useState<SuggestedBoundaries | null>(null);
+  const [webBrollSuggestions, setWebBrollSuggestions] = useState<ShortBrollSuggestion[]>([]);
+  const [webMusicSuggestions, setWebMusicSuggestions] = useState<ShortMusicSuggestion[]>([]);
+  const [mediaSuggestionsProjectSlug, setMediaSuggestionsProjectSlug] = useState("");
+  const [mediaSearchKind, setMediaSearchKind] = useState<"broll" | "music" | null>(null);
   const [agentInstructions, setAgentInstructions] = useState("");
   const [overlayPresets, setOverlayPresets] = useState<ShortOverlayPreset[]>([]);
   const [overlayBrief, setOverlayBrief] = useState("");
@@ -654,6 +664,7 @@ export default function ShortsStudio() {
         startSeconds: project.startSeconds,
         endSeconds: project.startSeconds + clipDuration,
         fit: "cover",
+        provider: "upload",
       };
       setProject((current) => current && current.slug === project.slug
         ? { ...current, brollClips: [...current.brollClips, clip] }
@@ -695,6 +706,8 @@ export default function ShortsStudio() {
         volume: 0.25,
         fadeInSeconds: Math.min(1, trackDuration / 2),
         fadeOutSeconds: Math.min(2, trackDuration / 2),
+        provider: "upload",
+        commercialLicenseConfirmed: false,
       };
       setProject((current) => current && current.slug === project.slug
         ? { ...current, musicTracks: [...current.musicTracks, track] }
@@ -705,6 +718,131 @@ export default function ShortsStudio() {
     } finally {
       setBusy(false);
     }
+  }
+
+  async function findWebMedia(kind: "broll" | "music") {
+    if (!project) {
+      setError("Open a short draft before searching for web media.");
+      return;
+    }
+    if (project.captions.length === 0) {
+      setError("AI media search needs timestamped transcript captions for this short.");
+      return;
+    }
+    setMediaSearchKind(kind);
+    setMediaSuggestionsProjectSlug(project.slug);
+    setWebBrollSuggestions([]);
+    setWebMusicSuggestions([]);
+    setError("");
+    setNotice("");
+    try {
+      const body = await requestJson("/api/ebook/shorts/media-suggestions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          kind,
+          title: project.title,
+          startSeconds: project.startSeconds,
+          endSeconds: project.endSeconds,
+          frameSlots: project.frameSlots.map(({ startSeconds, endSeconds, aspectRatio }) => ({
+            startSeconds,
+            endSeconds,
+            aspectRatio,
+          })),
+          captions: project.captions,
+          instructions: agentInstructions,
+        }),
+      });
+      if (kind === "broll") {
+        const parsed = ShortBrollSuggestionsResponseSchema.safeParse(body);
+        if (!parsed.success || parsed.data.suggestions.length === 0) {
+          throw new Error("AI returned invalid web B-roll suggestions.");
+        }
+        setWebBrollSuggestions(parsed.data.suggestions);
+        setNotice("AI matched Pexels footage to transcript moments. Preview a clip, then add it to the editable timeline.");
+      } else {
+        const parsed = ShortMusicSuggestionsResponseSchema.safeParse(body);
+        if (!parsed.success || parsed.data.suggestions.length === 0) {
+          throw new Error("AI returned invalid web music suggestions.");
+        }
+        setWebMusicSuggestions(parsed.data.suggestions);
+        setNotice("AI matched instrumental tracks to this message. Preview a track, then add it to the editable timeline.");
+      }
+    } catch (searchError) {
+      setError(searchError instanceof Error ? searchError.message : "Could not find web media for this short.");
+    } finally {
+      setMediaSearchKind(null);
+    }
+  }
+
+  function addWebBroll(suggestion: ShortBrollSuggestion) {
+    if (!project) return;
+    if (project.brollClips.length >= 10) {
+      setError("A short can have up to 10 B-roll clips.");
+      return;
+    }
+    const startSeconds = Math.max(project.startSeconds, suggestion.startSeconds);
+    const endSeconds = Math.min(
+      project.endSeconds,
+      suggestion.endSeconds,
+      startSeconds + suggestion.durationSeconds,
+    );
+    if (endSeconds - startSeconds < 2) {
+      setError("This B-roll suggestion no longer fits the short. Search again after changing the clip range.");
+      return;
+    }
+    const clip: ShortBrollClip = {
+      id: crypto.randomUUID(),
+      fileName: suggestion.title,
+      videoUrl: suggestion.videoUrl,
+      sourceDurationSeconds: suggestion.durationSeconds,
+      startSeconds,
+      endSeconds,
+      fit: "cover",
+      provider: "pexels",
+      providerPageUrl: suggestion.providerPageUrl,
+      creatorName: suggestion.creatorName,
+      creatorUrl: suggestion.creatorUrl,
+      licenseName: suggestion.licenseName,
+      licenseUrl: suggestion.licenseUrl,
+    };
+    updateProject({ brollClips: [...project.brollClips, clip] });
+    setNotice("Pexels B-roll added at the AI-suggested timestamp. Preview and adjust its timeline range before publishing.");
+    setError("");
+  }
+
+  function addWebMusic(suggestion: ShortMusicSuggestion) {
+    if (!project) return;
+    if (project.musicTracks.length >= 5) {
+      setError("A short can have up to 5 instrumental tracks.");
+      return;
+    }
+    const trackDuration = Math.min(suggestion.durationSeconds, project.endSeconds - project.startSeconds);
+    if (trackDuration < 0.1) {
+      setError("This instrumental track is too short for the current video range.");
+      return;
+    }
+    const track: ShortMusicTrack = {
+      id: crypto.randomUUID(),
+      fileName: suggestion.title,
+      audioUrl: suggestion.audioUrl,
+      sourceDurationSeconds: suggestion.durationSeconds,
+      startSeconds: project.startSeconds,
+      endSeconds: project.startSeconds + trackDuration,
+      volume: 0.25,
+      fadeInSeconds: Math.min(1, trackDuration / 2),
+      fadeOutSeconds: Math.min(2, trackDuration / 2),
+      provider: "jamendo",
+      providerPageUrl: suggestion.providerPageUrl,
+      creatorName: suggestion.artistName,
+      creatorUrl: suggestion.creatorUrl,
+      licenseName: suggestion.licenseName,
+      licenseUrl: suggestion.licenseUrl,
+      commercialLicenseConfirmed: false,
+    };
+    updateProject({ musicTracks: [...project.musicTracks, track] });
+    setNotice("Jamendo instrumental added. Obtain and confirm its commercial license before publishing.");
+    setError("");
   }
 
   function changeBrollRange(id: string, field: "startSeconds" | "endSeconds", value: string) {
@@ -939,6 +1077,9 @@ export default function ShortsStudio() {
       brollClips,
       musicTracks,
     });
+    setWebBrollSuggestions([]);
+    setWebMusicSuggestions([]);
+    setMediaSuggestionsProjectSlug("");
     setCurrentTime(startSeconds);
     if (
       overlays.length !== project.overlays.length
@@ -1720,25 +1861,83 @@ export default function ShortsStudio() {
                       <div>
                         <h4 className="text-sm font-semibold text-white">B-roll cutaways</h4>
                         <p className="mt-1 text-xs leading-relaxed text-slate-400">
-                          Add up to 10 authorized MP4/WebM clips. They cover the YouTube picture during their timeline range while the sermon audio continues.
+                          AI searches Pexels using this short&apos;s transcript and suggests when each cutaway fits. Selected web clips play over the YouTube picture while sermon audio continues.
                         </p>
                       </div>
-                      <label className="flex min-h-12 cursor-pointer items-center rounded-lg border border-cyan-800 px-3 text-xs font-semibold text-cyan-100">
-                        Add B-roll video
-                        <input
-                          type="file"
-                          accept="video/mp4,video/webm,.mp4,.webm"
-                          disabled={busy || project.brollClips.length >= 10}
-                          onChange={(event) => {
-                            void addBrollClip(event.target.files?.[0]);
-                            event.target.value = "";
-                          }}
-                          className="sr-only"
-                        />
-                      </label>
+                      <div className="flex flex-wrap gap-2">
+                        <button
+                          type="button"
+                          onClick={() => void findWebMedia("broll")}
+                          disabled={busy || mediaSearchKind !== null || project.captions.length === 0 || project.brollClips.length >= 10}
+                          className="min-h-12 rounded-lg bg-cyan-500 px-4 text-xs font-bold text-slate-950 disabled:opacity-50"
+                        >
+                          {mediaSearchKind === "broll" ? "Finding web B-roll…" : "Find web B-roll with AI"}
+                        </button>
+                        <label className="flex min-h-12 cursor-pointer items-center rounded-lg border border-cyan-800 px-3 text-xs font-semibold text-cyan-100">
+                          Upload my own
+                          <input
+                            type="file"
+                            accept="video/mp4,video/webm,.mp4,.webm"
+                            disabled={busy || project.brollClips.length >= 10}
+                            onChange={(event) => {
+                              void addBrollClip(event.target.files?.[0]);
+                              event.target.value = "";
+                            }}
+                            className="sr-only"
+                          />
+                        </label>
+                      </div>
                     </div>
+                    {mediaSuggestionsProjectSlug === project.slug && webBrollSuggestions.length > 0 && (
+                      <ul className="grid gap-3 sm:grid-cols-2">
+                        {webBrollSuggestions.map((suggestion) => (
+                          <li key={suggestion.id} className="min-w-0 space-y-3 rounded-lg border border-cyan-900/70 bg-slate-900 p-3">
+                            <video
+                              src={suggestion.videoUrl}
+                              poster={suggestion.previewUrl}
+                              muted
+                              playsInline
+                              controls
+                              preload="none"
+                              aria-label={`Preview ${suggestion.title}`}
+                              className="aspect-video w-full rounded-lg bg-black object-cover"
+                            />
+                            <div>
+                              <p className="text-sm font-semibold text-white">{suggestion.title}</p>
+                              <p className="mt-1 text-xs text-cyan-200">
+                                Suggested {formatTime(suggestion.startSeconds)}–{formatTime(suggestion.endSeconds)}
+                              </p>
+                              <p className="mt-1 text-xs leading-relaxed text-slate-300">{suggestion.reason}</p>
+                              <p className="mt-1 text-xs text-slate-400">Search: {suggestion.query}</p>
+                            </div>
+                            <p className="text-xs leading-relaxed text-slate-400">
+                              Video by{" "}
+                              <a href={suggestion.creatorUrl} target="_blank" rel="noreferrer" className="underline underline-offset-2">
+                                {suggestion.creatorName}
+                              </a>
+                              {" · "}
+                              <a href={suggestion.providerPageUrl} target="_blank" rel="noreferrer" className="underline underline-offset-2">
+                                Pexels source
+                              </a>
+                              {" · "}
+                              <a href={suggestion.licenseUrl} target="_blank" rel="noreferrer" className="underline underline-offset-2">
+                                license
+                              </a>
+                            </p>
+                            <button
+                              type="button"
+                              onClick={() => addWebBroll(suggestion)}
+                              disabled={project.brollClips.length >= 10}
+                              className="min-h-12 w-full rounded-lg border border-cyan-700 px-3 text-sm font-semibold text-cyan-100 disabled:opacity-50"
+                            >
+                              Add to timeline
+                            </button>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
                     {project.brollClips.length === 0 ? (
-                      <p className="text-xs text-slate-500">No B-roll clips yet.</p>
+                      <p className="text-xs text-slate-500">No B-roll clips on the timeline yet. Web results are added only when you choose them.</p>
                     ) : (
                       <ul className="space-y-3">
                         {project.brollClips.map((clip, index) => (
@@ -1747,6 +1946,11 @@ export default function ShortsStudio() {
                               <div className="min-w-0">
                                 <p className="truncate text-sm font-semibold text-white">B-roll {index + 1}</p>
                                 <p className="truncate text-xs text-slate-400">{clip.fileName} · {formatTime(clip.sourceDurationSeconds)}</p>
+                                {clip.creatorName && clip.providerPageUrl && (
+                                  <a href={clip.providerPageUrl} target="_blank" rel="noreferrer" className="text-xs text-cyan-300 underline underline-offset-2">
+                                    {clip.creatorName} · {clip.provider === "pexels" ? "Pexels" : "Uploaded"}
+                                  </a>
+                                )}
                               </div>
                               <button
                                 type="button"
@@ -1810,25 +2014,78 @@ export default function ShortsStudio() {
                       <div>
                         <h4 className="text-sm font-semibold text-white">Instrumental bed</h4>
                         <p className="mt-1 text-xs leading-relaxed text-slate-400">
-                          Upload music you own or are licensed to use. It plays under the original audio with adjustable volume and fades.
+                          AI searches Jamendo&apos;s commercial single-track catalog for transcript-matched instrumental music. Preview a result and add it to the editable timeline.
                         </p>
                       </div>
-                      <label className="flex min-h-12 cursor-pointer items-center rounded-lg border border-violet-800 px-3 text-xs font-semibold text-violet-100">
-                        Add instrumental
-                        <input
-                          type="file"
-                          accept="audio/mpeg,audio/mp4,audio/aac,audio/wav,audio/x-wav,.mp3,.m4a,.aac,.wav"
-                          disabled={busy || project.musicTracks.length >= 5}
-                          onChange={(event) => {
-                            void addMusicTrack(event.target.files?.[0]);
-                            event.target.value = "";
-                          }}
-                          className="sr-only"
-                        />
-                      </label>
+                      <div className="flex flex-wrap gap-2">
+                        <button
+                          type="button"
+                          onClick={() => void findWebMedia("music")}
+                          disabled={busy || mediaSearchKind !== null || project.captions.length === 0 || project.musicTracks.length >= 5}
+                          className="min-h-12 rounded-lg bg-violet-400 px-4 text-xs font-bold text-slate-950 disabled:opacity-50"
+                        >
+                          {mediaSearchKind === "music" ? "Finding instrumental…" : "Find music with AI"}
+                        </button>
+                        <label className="flex min-h-12 cursor-pointer items-center rounded-lg border border-violet-800 px-3 text-xs font-semibold text-violet-100">
+                          Upload my own
+                          <input
+                            type="file"
+                            accept="audio/mpeg,audio/mp4,audio/aac,audio/wav,audio/x-wav,.mp3,.m4a,.aac,.wav"
+                            disabled={busy || project.musicTracks.length >= 5}
+                            onChange={(event) => {
+                              void addMusicTrack(event.target.files?.[0]);
+                              event.target.value = "";
+                            }}
+                            className="sr-only"
+                          />
+                        </label>
+                      </div>
                     </div>
+                    {mediaSuggestionsProjectSlug === project.slug && webMusicSuggestions.length > 0 && (
+                      <ul className="grid gap-3 sm:grid-cols-2">
+                        {webMusicSuggestions.map((suggestion) => (
+                          <li key={suggestion.id} className="min-w-0 space-y-3 rounded-lg border border-violet-900/70 bg-slate-900 p-3">
+                            <div>
+                              <p className="text-sm font-semibold text-white">{suggestion.title}</p>
+                              <p className="text-xs text-violet-200">{suggestion.artistName} · {formatTime(suggestion.durationSeconds)}</p>
+                              <p className="mt-1 text-xs leading-relaxed text-slate-300">{suggestion.reason}</p>
+                              <p className="mt-1 text-xs text-slate-400">Search: {suggestion.query}</p>
+                            </div>
+                            <audio
+                              src={suggestion.audioUrl}
+                              controls
+                              preload="none"
+                              aria-label={`Preview ${suggestion.title} by ${suggestion.artistName}`}
+                              className="w-full"
+                            />
+                            <p className="text-xs leading-relaxed text-slate-400">
+                              By{" "}
+                              <a href={suggestion.creatorUrl} target="_blank" rel="noreferrer" className="underline underline-offset-2">
+                                {suggestion.artistName}
+                              </a>
+                              {" · "}
+                              <a href={suggestion.providerPageUrl} target="_blank" rel="noreferrer" className="underline underline-offset-2">
+                                Jamendo track
+                              </a>
+                              {" · "}
+                              <a href={suggestion.licenseUrl} target="_blank" rel="noreferrer" className="underline underline-offset-2">
+                                commercial license
+                              </a>
+                            </p>
+                            <button
+                              type="button"
+                              onClick={() => addWebMusic(suggestion)}
+                              disabled={project.musicTracks.length >= 5}
+                              className="min-h-12 w-full rounded-lg border border-violet-700 px-3 text-sm font-semibold text-violet-100 disabled:opacity-50"
+                            >
+                              Add to timeline
+                            </button>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
                     {project.musicTracks.length === 0 ? (
-                      <p className="text-xs text-slate-500">No instrumental tracks yet.</p>
+                      <p className="text-xs text-slate-500">No instrumental tracks on the timeline yet.</p>
                     ) : (
                       <ul className="space-y-3">
                         {project.musicTracks.map((track, index) => (
@@ -1837,6 +2094,11 @@ export default function ShortsStudio() {
                               <div className="min-w-0">
                                 <p className="truncate text-sm font-semibold text-white">Instrumental {index + 1}</p>
                                 <p className="truncate text-xs text-slate-400">{track.fileName} · {formatTime(track.sourceDurationSeconds)}</p>
+                                {track.creatorName && track.providerPageUrl && (
+                                  <a href={track.providerPageUrl} target="_blank" rel="noreferrer" className="text-xs text-violet-300 underline underline-offset-2">
+                                    {track.creatorName} · {track.provider === "jamendo" ? "Jamendo" : "Uploaded"}
+                                  </a>
+                                )}
                               </div>
                               <button
                                 type="button"
@@ -1848,6 +2110,19 @@ export default function ShortsStudio() {
                                 Remove
                               </button>
                             </div>
+                            {track.provider === "jamendo" && (
+                              <label className="flex min-h-12 items-center gap-3 rounded-lg border border-amber-900/70 bg-amber-950/20 px-3 text-xs leading-relaxed text-amber-100">
+                                <input
+                                  type="checkbox"
+                                  checked={track.commercialLicenseConfirmed}
+                                  onChange={(event) => updateMusicTrack(track.id, {
+                                    commercialLicenseConfirmed: event.target.checked,
+                                  })}
+                                  className="min-h-12 min-w-12 accent-amber-400"
+                                />
+                                I have obtained the Jamendo commercial license for public use of this track.
+                              </label>
+                            )}
                             <div className="grid gap-3 sm:grid-cols-2">
                               <label className="block text-xs text-slate-400">
                                 Start at
@@ -1918,7 +2193,7 @@ export default function ShortsStudio() {
                     )}
                   </section>
                   <p className="text-xs leading-relaxed text-amber-200">
-                    B-roll and music are separate hosted tracks over the embedded YouTube player. They preview and publish on this page; a downloadable, merged video still requires an authorized source upload.
+                    Web B-roll and music stream from their providers rather than being copied into storage. Jamendo requires commercial/API approval and a confirmed license for every track. A downloadable, merged video still requires an authorized source upload.
                   </p>
                 </div>
               </details>

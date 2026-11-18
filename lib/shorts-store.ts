@@ -15,6 +15,17 @@ const PRIVATE_CATALOG_KEY = "director/shorts/index.json";
 const PUBLIC_CATALOG_KEY = "published/shorts/index.json";
 const AGENT_SETTINGS_KEY = "director/shorts/agent-settings.json";
 
+function belongsToHttpsDomain(value: string | undefined, domain: string): boolean {
+  if (!value) return false;
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:"
+      && (url.hostname === domain || url.hostname.endsWith(`.${domain}`));
+  } catch {
+    return false;
+  }
+}
+
 function assertStorageConfigured(): void {
   if (!env.R2_ACCOUNT_ID || !env.R2_ACCESS_KEY_ID || !env.R2_SECRET_ACCESS_KEY || !env.R2_BUCKET_NAME) {
     throw new Error("Configure Cloudflare R2 credentials and bucket to manage video shorts.");
@@ -138,17 +149,50 @@ export async function publishShort(projectInput: unknown): Promise<ShortProject>
   const expectedAssetPrefix = env.R2_PUBLIC_URL
     ? `${env.R2_PUBLIC_URL.replace(/\/$/, "")}/published/shorts/assets/`
     : "";
-  if ((project.brollClips.length > 0 || project.musicTracks.length > 0) && !expectedAssetPrefix) {
+  if (
+    (project.brollClips.some((clip) => clip.provider === "upload")
+      || project.musicTracks.some((track) => track.provider === "upload"))
+    && !expectedAssetPrefix
+  ) {
     throw new Error("Configure R2_PUBLIC_URL before publishing B-roll or music tracks.");
   }
   for (const clip of project.brollClips) {
-    if (!clip.videoUrl.startsWith(expectedAssetPrefix)) {
-      throw new Error("B-roll must use an asset uploaded through the Shorts Studio.");
+    if (clip.provider === "upload" && !clip.videoUrl.startsWith(expectedAssetPrefix)) {
+      throw new Error("Uploaded B-roll must use an asset uploaded through the Shorts Studio.");
+    }
+    if (clip.provider === "pexels" && !belongsToHttpsDomain(clip.videoUrl, "videos.pexels.com")) {
+      throw new Error("Pexels B-roll must use a secure Pexels video URL.");
+    }
+    if (clip.provider === "pexels" && !belongsToHttpsDomain(clip.providerPageUrl, "pexels.com")) {
+      throw new Error("Pexels B-roll needs a valid Pexels source link.");
+    }
+    if (
+      clip.provider === "pexels"
+      && (!belongsToHttpsDomain(clip.creatorUrl, "pexels.com")
+        || !belongsToHttpsDomain(clip.licenseUrl, "pexels.com"))
+    ) {
+      throw new Error("Pexels B-roll needs valid creator and license links.");
     }
   }
   for (const track of project.musicTracks) {
-    if (!track.audioUrl.startsWith(expectedAssetPrefix)) {
-      throw new Error("Music must use an asset uploaded through the Shorts Studio.");
+    if (track.provider === "upload" && !track.audioUrl.startsWith(expectedAssetPrefix)) {
+      throw new Error("Uploaded music must use an asset uploaded through the Shorts Studio.");
+    }
+    if (track.provider === "jamendo" && !belongsToHttpsDomain(track.audioUrl, "jamendo.com")) {
+      throw new Error("Jamendo music must use a secure Jamendo audio URL.");
+    }
+    if (track.provider === "jamendo" && !belongsToHttpsDomain(track.providerPageUrl, "jamendo.com")) {
+      throw new Error("Jamendo music needs a valid Jamendo track link.");
+    }
+    if (
+      track.provider === "jamendo"
+      && (!belongsToHttpsDomain(track.creatorUrl, "jamendo.com")
+        || !belongsToHttpsDomain(track.licenseUrl, "jamendo.com"))
+    ) {
+      throw new Error("Jamendo music needs valid artist and license links.");
+    }
+    if (track.provider === "jamendo" && !env.JAMENDO_COMMERCIAL_USE_APPROVED) {
+      throw new Error("Confirm Jamendo commercial/API licensing before publishing Jamendo music.");
     }
   }
 
