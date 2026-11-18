@@ -39,8 +39,9 @@ type Props = {
   project: ShortProject;
   localVideoUrl?: string | null;
   editable?: boolean;
+  compactPreview?: boolean;
   onTimeChange?: (seconds: number) => void;
-  onCropChange?: (timeSeconds: number, x: number, y: number, zoom: number) => void;
+  onCropChange?: (timeSeconds: number, x: number, y: number, zoom: number, fit: ShortCropKeyframe["fit"]) => void;
 };
 
 let youtubeApiPromise: Promise<void> | null = null;
@@ -77,22 +78,24 @@ function loadYouTubeApi(): Promise<void> {
 
 function framePosition(slot: ShortFrameSlot, timeSeconds: number): ShortCropKeyframe {
   const frames = [...slot.keyframes].sort((a, b) => a.timeSeconds - b.timeSeconds);
-  if (frames.length === 0) return { timeSeconds, x: 50, y: 50, zoom: 1 };
-  if (timeSeconds <= frames[0].timeSeconds) return frames[0];
+  if (frames.length === 0) return { timeSeconds, x: 50, y: 50, zoom: 1, fit: slot.fit };
+  if (timeSeconds <= frames[0].timeSeconds) return { ...frames[0], fit: frames[0].fit ?? slot.fit };
   for (let index = 1; index < frames.length; index += 1) {
     const previous = frames[index - 1];
     const next = frames[index];
-    if (timeSeconds <= next.timeSeconds) {
+    if (timeSeconds < next.timeSeconds) {
       const progress = (timeSeconds - previous.timeSeconds) / Math.max(0.001, next.timeSeconds - previous.timeSeconds);
       return {
         timeSeconds,
         x: previous.x + (next.x - previous.x) * progress,
         y: previous.y + (next.y - previous.y) * progress,
         zoom: previous.zoom + (next.zoom - previous.zoom) * progress,
+        fit: previous.fit ?? slot.fit,
       };
     }
   }
-  return frames[frames.length - 1];
+  const last = frames[frames.length - 1];
+  return { ...last, fit: last.fit ?? slot.fit };
 }
 
 function aspectValue(value: ShortFrameSlot["aspectRatio"]): number {
@@ -104,6 +107,7 @@ export default function ShortsPlayer({
   project,
   localVideoUrl,
   editable = false,
+  compactPreview = false,
   onTimeChange,
   onCropChange,
 }: Props) {
@@ -358,14 +362,14 @@ export default function ShortsPlayer({
     if (!drag || !onCropChange) return;
     const x = Math.max(0, Math.min(100, drag.x - ((event.clientX - drag.clientX) / drag.width) * 100));
     const y = Math.max(0, Math.min(100, drag.y - ((event.clientY - drag.clientY) / drag.height) * 100));
-    onCropChange(currentTime, x, y, position.zoom);
+    onCropChange(currentTime, x, y, position.zoom, position.fit);
   }
 
   const sourceAspectRatio = 16 / 9;
-  const widthAtFit = (activeSlot.fit === "cover"
+  const widthAtFit = (position.fit === "cover"
     ? Math.max(100, (sourceAspectRatio / ratio) * 100)
     : Math.min(100, (sourceAspectRatio / ratio) * 100));
-  const heightAtFit = (activeSlot.fit === "cover"
+  const heightAtFit = (position.fit === "cover"
     ? Math.max(100, (ratio / sourceAspectRatio) * 100)
     : Math.min(100, (ratio / sourceAspectRatio) * 100));
   const playerWidthPercent = widthAtFit * position.zoom;
@@ -387,12 +391,14 @@ export default function ShortsPlayer({
     <div className="w-full">
       <div
         ref={fullscreenContainerRef}
-        className={`relative w-full touch-none overflow-hidden bg-black ${
+        className={`relative touch-none overflow-hidden bg-black ${
           isFullscreen ? "flex h-dvh w-screen items-center justify-center rounded-none" : "rounded-xl"
-        } ${editable ? "cursor-move" : ""}`}
+        } ${compactPreview ? "inline-block h-[33dvh] w-auto max-w-full lg:h-[52dvh]" : "w-full"} ${editable ? "cursor-move" : ""}`}
         style={isFullscreen
           ? { width: "100vw", height: "100dvh", aspectRatio: "auto", borderRadius: 0 }
-          : { aspectRatio: activeSlot.aspectRatio.replace(":", "/") }}
+          : {
+            aspectRatio: activeSlot.aspectRatio.replace(":", "/"),
+          }}
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
         onPointerUp={() => { dragRef.current = null; }}
@@ -428,7 +434,7 @@ export default function ShortsPlayer({
               src={videoUrl}
               className="block h-full w-full"
               style={{
-                objectFit: activeSlot.fit,
+                objectFit: position.fit,
                 objectPosition: `${position.x}% ${position.y}%`,
                 transform: `scale(${position.zoom})`,
                 transformOrigin: "center center",
@@ -577,7 +583,7 @@ export default function ShortsPlayer({
         />
         <span className="min-w-16 text-right text-xs tabular-nums text-slate-400">{formatTime(currentTime)}</span>
       </div>
-      {project.status === "published" && (
+      {project.status === "published" && !compactPreview && (
         <div className="mt-2">
           <button
             type="button"
@@ -590,7 +596,7 @@ export default function ShortsPlayer({
           {shareError && <p role="alert" className="mt-2 text-xs text-rose-300">{shareError}</p>}
         </div>
       )}
-      {project.source.type === "youtube" && (
+      {project.source.type === "youtube" && !compactPreview && (
         <a
           href={`https://www.youtube.com/watch?v=${project.source.videoId}`}
           target="_blank"
@@ -600,7 +606,7 @@ export default function ShortsPlayer({
           Watch original on YouTube
         </a>
       )}
-      {editable && project.source.type === "youtube" && (
+      {editable && project.source.type === "youtube" && !compactPreview && (
         <p className="mt-1 text-xs leading-relaxed text-amber-200">
           YouTube crop is best-effort: framing scales and shifts the embedded player. Use an authorized upload for clean, reliable reframing.
         </p>

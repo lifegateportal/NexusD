@@ -68,22 +68,24 @@ function slugify(value: string): string {
 
 function getFramePosition(slot: ShortFrameSlot, timeSeconds: number): ShortCropKeyframe {
   const frames = [...slot.keyframes].sort((a, b) => a.timeSeconds - b.timeSeconds);
-  if (frames.length === 0) return { timeSeconds, x: 50, y: 50, zoom: 1 };
-  if (timeSeconds <= frames[0].timeSeconds) return frames[0];
+  if (frames.length === 0) return { timeSeconds, x: 50, y: 50, zoom: 1, fit: slot.fit };
+  if (timeSeconds <= frames[0].timeSeconds) return { ...frames[0], fit: frames[0].fit ?? slot.fit };
   for (let index = 1; index < frames.length; index += 1) {
     const previous = frames[index - 1];
     const next = frames[index];
-    if (timeSeconds <= next.timeSeconds) {
+    if (timeSeconds < next.timeSeconds) {
       const progress = (timeSeconds - previous.timeSeconds) / Math.max(0.001, next.timeSeconds - previous.timeSeconds);
       return {
         timeSeconds,
         x: previous.x + (next.x - previous.x) * progress,
         y: previous.y + (next.y - previous.y) * progress,
         zoom: previous.zoom + (next.zoom - previous.zoom) * progress,
+        fit: previous.fit ?? slot.fit,
       };
     }
   }
-  return frames[frames.length - 1];
+  const last = frames[frames.length - 1];
+  return { ...last, fit: last.fit ?? slot.fit };
 }
 
 function filterCaptions(video: Video | undefined, startSeconds: number, endSeconds: number) {
@@ -570,7 +572,7 @@ export default function ShortsStudio() {
         endSeconds,
         aspectRatio: "9:16",
         fit: "cover",
-        keyframes: [{ timeSeconds: startSeconds, x: 50, y: 50, zoom: 1 }],
+        keyframes: [{ timeSeconds: startSeconds, x: 50, y: 50, zoom: 1, fit: "cover" }],
       }],
       captions: filterCaptions(video, startSeconds, endSeconds),
       overlays: [],
@@ -689,17 +691,29 @@ export default function ShortsStudio() {
     setError("");
   }
 
-  function setKeyframe(timeSeconds: number, x: number, y: number, zoom: number) {
+  function setKeyframe(
+    timeSeconds: number,
+    x: number,
+    y: number,
+    zoom: number,
+    fit?: ShortCropKeyframe["fit"],
+  ) {
     if (!project) return;
     const index = project.frameSlots.findIndex((slot) =>
       timeSeconds >= slot.startSeconds && timeSeconds <= slot.endSeconds,
     );
     if (index < 0) return;
-    const frame = { timeSeconds, x, y, zoom };
+    const frame = {
+      timeSeconds,
+      x,
+      y,
+      zoom,
+      fit: fit ?? getFramePosition(project.frameSlots[index], timeSeconds).fit,
+    };
     const frameSlots = project.frameSlots.map((slot, slotIndex) => {
       if (slotIndex !== index) return slot;
       const keyframes = [
-        ...slot.keyframes.filter((item) => Math.abs(item.timeSeconds - timeSeconds) > 0.1),
+        ...slot.keyframes.filter((item) => item.timeSeconds < timeSeconds - 0.1),
         frame,
       ].sort((a, b) => a.timeSeconds - b.timeSeconds);
       return { ...slot, keyframes };
@@ -716,13 +730,16 @@ export default function ShortsStudio() {
     const left = {
       ...activeSlot,
       endSeconds: currentTime,
-      keyframes: activeSlot.keyframes.filter((frame) => frame.timeSeconds < currentTime),
+      keyframes: [
+        ...activeSlot.keyframes.filter((frame) => frame.timeSeconds < currentTime),
+        { timeSeconds: currentTime, x: framePosition.x, y: framePosition.y, zoom: framePosition.zoom, fit: framePosition.fit },
+      ],
     };
     const right = {
       ...activeSlot,
       startSeconds: currentTime,
       keyframes: [
-        { timeSeconds: currentTime, x: framePosition.x, y: framePosition.y, zoom: framePosition.zoom },
+        { timeSeconds: currentTime, x: framePosition.x, y: framePosition.y, zoom: framePosition.zoom, fit: framePosition.fit },
         ...activeSlot.keyframes.filter((frame) => frame.timeSeconds > currentTime),
       ],
     };
@@ -1131,13 +1148,23 @@ export default function ShortsStudio() {
             Choose a transcribed video to start editing, or open a saved short.
           </section>
         ) : (
-          <section ref={editorRef} className="scroll-mt-4 space-y-5 rounded-2xl border border-slate-800 bg-slate-900/30 p-4 sm:p-6">
-            <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+          <section
+            ref={editorRef}
+            className="fixed inset-0 z-[70] flex h-dvh flex-col gap-3 overflow-hidden bg-slate-950 p-3 pb-20 lg:pb-3"
+          >
+            <div className="flex shrink-0 flex-col gap-3 border-b border-slate-800 pb-3 sm:flex-row sm:items-center sm:justify-between">
               <div>
-                <h3 className="text-xl font-bold text-white">Edit short</h3>
-                <p className="mt-1 text-xs text-slate-400">/{project.slug} · {project.status}</p>
+                <h3 className="text-lg font-bold text-white">Editing: {project.title}</h3>
+                <p className="mt-1 text-xs text-slate-400">{project.status} · {formatTime(currentTime)} · frame {activeSlot?.aspectRatio ?? "9:16"}</p>
               </div>
               <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={() => setProject(null)}
+                  className="min-h-12 rounded-xl border border-slate-700 px-4 text-sm font-semibold text-slate-200"
+                >
+                  Close editor
+                </button>
                 <button type="button" onClick={saveDraft} disabled={busy} className="min-h-12 rounded-xl border border-slate-700 px-4 text-sm font-semibold text-white disabled:opacity-50">
                   Save draft
                 </button>
@@ -1152,21 +1179,23 @@ export default function ShortsStudio() {
               </div>
             </div>
 
-            {project.status === "published" && (
-              <a href={`/library/shorts/${project.slug}`} target="_blank" rel="noreferrer" className="inline-flex min-h-12 items-center text-sm font-semibold text-cyan-300">
-                Open public short
-              </a>
-            )}
-
-            <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_minmax(17rem,0.8fr)]">
-              <div className="space-y-4">
+            <div className="grid min-h-0 flex-1 grid-cols-1 grid-rows-[minmax(0,42dvh)_minmax(0,1fr)] gap-3 overflow-hidden lg:grid-cols-[minmax(0,1fr)_minmax(20rem,0.82fr)] lg:grid-rows-1">
+              <div className="flex min-h-0 items-center justify-center overflow-hidden rounded-2xl border border-slate-800 bg-slate-900/60 p-2">
                 <ShortsPlayer
                   project={project}
                   localVideoUrl={localVideoUrl}
                   editable
+                  compactPreview
                   onTimeChange={setCurrentTime}
                   onCropChange={setKeyframe}
                 />
+              </div>
+
+              <div className="min-h-0 space-y-3 overflow-y-auto overscroll-contain rounded-2xl border border-slate-800 bg-slate-900/60 p-3 sm:p-4">
+                <details open className="space-y-3 rounded-xl border border-slate-700 bg-slate-950/70 p-3">
+                  <summary className="flex min-h-12 cursor-pointer items-center text-sm font-bold text-cyan-100">
+                    Clip timing and framing
+                  </summary>
                 <div className="grid gap-3 sm:grid-cols-2">
                   <label className="block text-sm font-medium text-slate-300">
                     Start (seconds)
@@ -1232,23 +1261,27 @@ export default function ShortsStudio() {
                   Clip length: {formatTime(project.endSeconds - project.startSeconds)} · maximum 3:00
                 </p>
                 <div className="flex flex-wrap items-center gap-2">
-                  <button type="button" onClick={splitFrameSlot} disabled={busy || project.frameSlots.length >= 100} className="min-h-12 rounded-lg border border-cyan-800 px-4 text-sm font-semibold text-cyan-200 disabled:opacity-50">
-                    Split framing slot at {formatTime(currentTime)}
-                  </button>
                   <button
                     type="button"
-                    onClick={() => framePosition && setKeyframe(currentTime, framePosition.x, framePosition.y, framePosition.zoom)}
+                    onClick={() => framePosition && setKeyframe(currentTime, framePosition.x, framePosition.y, framePosition.zoom, framePosition.fit)}
                     className="min-h-12 rounded-lg border border-slate-700 px-4 text-sm font-semibold text-slate-200"
                   >
-                    Add crop keyframe
+                    Save position here
+                  </button>
+                  <button type="button" onClick={splitFrameSlot} disabled={busy || project.frameSlots.length >= 100} className="min-h-12 rounded-lg border border-cyan-800 px-4 text-sm font-semibold text-cyan-200 disabled:opacity-50">
+                    Split framing slot
                   </button>
                 </div>
                 <p className="text-xs leading-relaxed text-slate-400">
-                  Drag the preview to reposition the crop, then add keyframes as the face moves. This works best with authorized uploads; YouTube embed cropping remains best-effort.
+                  Dragging saves a position at this time and holds it until you make another crop change. Use the playhead to add a later position.
                 </p>
-              </div>
+                </details>
 
-              <div className="space-y-4">
+              <details className="rounded-xl border border-slate-700 bg-slate-950/70 p-3">
+                <summary className="flex min-h-12 cursor-pointer items-center text-sm font-bold text-cyan-100">
+                  Short details and source
+                </summary>
+                <div className="mt-3 space-y-3">
                 <label className="block text-sm font-medium text-slate-300">
                   Short title
                   <input
@@ -1369,6 +1402,12 @@ export default function ShortsStudio() {
                     </p>
                   </div>
                 )}
+                </div>
+              </details>
+              <details open className="rounded-xl border border-slate-700 bg-slate-950/70 p-3">
+                <summary className="flex min-h-12 cursor-pointer items-center text-sm font-bold text-cyan-100">
+                  Framing and crop
+                </summary>
                 {activeSlot && framePosition && (
                   <div className="space-y-3 rounded-xl border border-slate-800 bg-slate-950/60 p-3">
                     <h4 className="text-sm font-semibold text-white">Current framing slot</h4>
@@ -1393,24 +1432,45 @@ export default function ShortsStudio() {
                           <option value="16:9">16:9 landscape</option>
                         </select>
                       </label>
-                      <label className="block text-sm text-slate-300">
-                        Fit
-                        <select
-                          value={activeSlot.fit}
-                          onChange={(event) => {
-                            const frameSlots = project.frameSlots.map((slot, index) =>
-                              index === activeSlotIndex
-                                ? { ...slot, fit: event.target.value as ShortFrameSlot["fit"] }
-                                : slot,
-                            );
-                            updateProject({ frameSlots });
-                          }}
-                          className="mt-2 min-h-12 w-full rounded-lg border border-slate-700 bg-slate-900 px-3 text-base text-white"
+                    </div>
+                    <div className="space-y-2">
+                      <p className="text-sm text-slate-300">Video fit inside this frame</p>
+                      <div className="flex flex-wrap gap-2">
+                        <button
+                          type="button"
+                          aria-pressed={framePosition.fit === "contain"}
+                          onClick={() => setKeyframe(currentTime, framePosition.x, framePosition.y, framePosition.zoom, "contain")}
+                          className={`min-h-12 rounded-lg border px-3 text-sm font-semibold ${
+                            framePosition.fit === "contain"
+                              ? "border-cyan-400 bg-cyan-950 text-cyan-100"
+                              : "border-slate-700 text-slate-300"
+                          }`}
                         >
-                          <option value="cover">Fill frame (crop edges)</option>
-                          <option value="contain">Fit whole video</option>
-                        </select>
-                      </label>
+                          Show full 16:9
+                        </button>
+                        <button
+                          type="button"
+                          aria-pressed={framePosition.fit === "cover"}
+                          onClick={() => setKeyframe(currentTime, framePosition.x, framePosition.y, framePosition.zoom, "cover")}
+                          className={`min-h-12 rounded-lg border px-3 text-sm font-semibold ${
+                            framePosition.fit === "cover"
+                              ? "border-cyan-400 bg-cyan-950 text-cyan-100"
+                              : "border-slate-700 text-slate-300"
+                          }`}
+                        >
+                          Fill 9:16
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setKeyframe(currentTime, 50, 50, 1, framePosition.fit)}
+                          className="min-h-12 rounded-lg border border-slate-700 px-3 text-sm font-semibold text-slate-300"
+                        >
+                          Reset position
+                        </button>
+                      </div>
+                      <p className="text-xs text-slate-500">
+                        Fit changes are saved at the playhead and remain until another framing change.
+                      </p>
                     </div>
                     {(["x", "y", "zoom"] as const).map((axis) => (
                       <label key={axis} className="block text-sm text-slate-300">
@@ -1436,6 +1496,12 @@ export default function ShortsStudio() {
                     </p>
                   </div>
                 )}
+              </details>
+              <details className="rounded-xl border border-slate-700 bg-slate-950/70 p-3">
+                <summary className="flex min-h-12 cursor-pointer items-center text-sm font-bold text-cyan-100">
+                  Captions
+                </summary>
+                <div className="mt-3">
                 <div className="space-y-3 rounded-xl border border-slate-800 bg-slate-950/60 p-3">
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <h4 className="text-sm font-semibold text-white">Subtitles</h4>
@@ -1482,6 +1548,13 @@ export default function ShortsStudio() {
                     </div>
                   )}
                 </div>
+                </div>
+              </details>
+              <details className="rounded-xl border border-slate-700 bg-slate-950/70 p-3">
+                <summary className="flex min-h-12 cursor-pointer items-center text-sm font-bold text-cyan-100">
+                  Frames and overlays
+                </summary>
+                <div className="mt-3">
                 <div className="space-y-3 rounded-xl border border-fuchsia-900/70 bg-fuchsia-950/10 p-3">
                   <div>
                     <h4 className="text-sm font-semibold text-white">Frames and overlay layers</h4>
@@ -1738,23 +1811,24 @@ export default function ShortsStudio() {
                     </ul>
                   )}
                 </div>
+                </div>
+              </details>
+              <div className="flex flex-wrap gap-2 border-t border-slate-800 pt-4">
+                {project.status === "draft" && (
+                  <button type="button" onClick={deleteProject} disabled={busy} className="min-h-12 rounded-xl border border-rose-900 px-4 text-sm font-semibold text-rose-300 disabled:opacity-50">
+                    Delete draft
+                  </button>
+                )}
+                <button type="button" onClick={addAiSuggestions} disabled={busy || !selectedVideo?.segments.length} className="min-h-12 rounded-xl border border-violet-800 px-4 text-sm font-semibold text-violet-200 disabled:opacity-50">
+                  {busy ? "Working…" : "Suggest moments with AI"}
+                </button>
+                {project.status === "published" && (
+                  <a href={`/library/shorts/${project.slug}`} target="_blank" rel="noreferrer" className="flex min-h-12 items-center rounded-xl border border-slate-700 px-4 text-sm font-semibold text-slate-200">
+                    View public page
+                  </a>
+                )}
               </div>
             </div>
-
-            <div className="flex flex-wrap gap-2 border-t border-slate-800 pt-4">
-              {project.status === "draft" && (
-                <button type="button" onClick={deleteProject} disabled={busy} className="min-h-12 rounded-xl border border-rose-900 px-4 text-sm font-semibold text-rose-300 disabled:opacity-50">
-                  Delete draft
-                </button>
-              )}
-              <button type="button" onClick={addAiSuggestions} disabled={busy || !selectedVideo?.segments.length} className="min-h-12 rounded-xl border border-violet-800 px-4 text-sm font-semibold text-violet-200 disabled:opacity-50">
-                {busy ? "Working…" : "Suggest moments with AI"}
-              </button>
-              {project.status === "published" && (
-                <a href={`/library/shorts/${project.slug}`} target="_blank" rel="noreferrer" className="flex min-h-12 items-center rounded-xl border border-slate-700 px-4 text-sm font-semibold text-slate-200">
-                  View public page
-                </a>
-              )}
             </div>
           </section>
         )}

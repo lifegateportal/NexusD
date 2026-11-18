@@ -17,6 +17,7 @@ export const ShortCropKeyframeSchema = z.object({
   x: z.number().finite().min(0).max(100),
   y: z.number().finite().min(0).max(100),
   zoom: z.number().finite().min(1).max(3),
+  fit: z.enum(["cover", "contain"]).optional(),
 }).strict();
 
 export const ShortFrameSlotSchema = z.object({
