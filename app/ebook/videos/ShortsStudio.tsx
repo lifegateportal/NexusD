@@ -5,11 +5,13 @@ import { z } from "zod";
 import ShortsPlayer from "@/app/components/ShortsPlayer";
 import { deleteShortSource, getShortSource, saveShortSource } from "@/lib/short-video-store";
 import {
+  ShortAgentSettingsSchema,
   ShortCatalogSchema,
   MAX_SHORT_DURATION_SECONDS,
   ShortProjectSchema,
   type ShortCropKeyframe,
   type ShortFrameSlot,
+  type ShortOverlay,
   type ShortProject,
   type ShortSummary,
 } from "@/lib/schemas/video-short";
@@ -17,6 +19,10 @@ import { DirectorVideoCatalogSchema } from "@/lib/schemas/library-video";
 
 const ErrorSchema = z.object({ error: z.string() });
 const SuggestionResponseSchema = z.object({
+  videoStartSeconds: z.number().finite().min(0),
+  videoEndSeconds: z.number().finite().min(0),
+  sermonStartSeconds: z.number().finite().min(0).nullable(),
+  sermonEndSeconds: z.number().finite().min(0).nullable(),
   suggestions: z.array(z.object({
     startSeconds: z.number().finite().min(0),
     endSeconds: z.number().finite().min(0),
@@ -28,11 +34,15 @@ const SuggestionResponseSchema = z.object({
 const UploadResponseSchema = z.object({
   presignedUrl: z.string().url(),
   sourceUrl: z.string().url(),
-  contentType: z.enum(["video/mp4", "video/webm"]),
+  contentType: z.enum(["video/mp4", "video/webm", "image/png", "image/jpeg", "image/webp"]),
 });
 
 type Video = z.infer<typeof DirectorVideoCatalogSchema>["videos"][number];
 type Suggestion = z.infer<typeof SuggestionResponseSchema>["suggestions"][number];
+type SuggestedBoundaries = Pick<
+  z.infer<typeof SuggestionResponseSchema>,
+  "videoStartSeconds" | "videoEndSeconds" | "sermonStartSeconds" | "sermonEndSeconds"
+>;
 
 async function requestJson(url: string, init?: RequestInit): Promise<unknown> {
   const response = await fetch(url, init);
@@ -78,6 +88,40 @@ function filterCaptions(video: Video | undefined, startSeconds: number, endSecon
   );
 }
 
+function resizeFrameSlots(
+  slots: ShortFrameSlot[],
+  startSeconds: number,
+  endSeconds: number,
+): ShortFrameSlot[] {
+  const sorted = [...slots].sort((a, b) => a.startSeconds - b.startSeconds);
+  const boundaries = [
+    startSeconds,
+    ...sorted.flatMap((slot) => [slot.startSeconds, slot.endSeconds])
+      .filter((time) => time > startSeconds && time < endSeconds),
+    endSeconds,
+  ].sort((a, b) => a - b).filter((time, index, values) =>
+    index === 0 || time - values[index - 1] > 0.001,
+  );
+  return boundaries.slice(0, -1).flatMap((slotStart, index) => {
+    const slotEnd = boundaries[index + 1];
+    if (slotEnd <= slotStart) return [];
+    const midpoint = (slotStart + slotEnd) / 2;
+    const source = sorted.find((slot) => midpoint >= slot.startSeconds && midpoint <= slot.endSeconds)
+      ?? (midpoint < sorted[0].startSeconds ? sorted[0] : sorted[sorted.length - 1]);
+    const samplePosition = (timeSeconds: number) =>
+      getFramePosition(source, Math.max(source.startSeconds, Math.min(source.endSeconds, timeSeconds)));
+    const keyframes = [
+      { ...samplePosition(slotStart), timeSeconds: slotStart },
+      ...source.keyframes.filter((frame) => frame.timeSeconds > slotStart && frame.timeSeconds < slotEnd),
+      { ...samplePosition(slotEnd), timeSeconds: slotEnd },
+    ].sort((a, b) => a.timeSeconds - b.timeSeconds)
+      .filter((frame, frameIndex, frames) =>
+        frameIndex === 0 || frame.timeSeconds - frames[frameIndex - 1].timeSeconds > 0.001,
+      );
+    return [{ ...source, startSeconds: slotStart, endSeconds: slotEnd, keyframes }];
+  });
+}
+
 function formatTime(seconds: number): string {
   const total = Math.max(0, Math.floor(seconds));
   const hours = Math.floor(total / 3600);
@@ -96,6 +140,9 @@ export default function ShortsStudio() {
   const [localVideoUrl, setLocalVideoUrl] = useState<string | null>(null);
   const [currentTime, setCurrentTime] = useState(0);
   const [suggestions, setSuggestions] = useState<Suggestion[]>([]);
+  const [suggestedBoundaries, setSuggestedBoundaries] = useState<SuggestedBoundaries | null>(null);
+  const [agentInstructions, setAgentInstructions] = useState("");
+  const [sermonBoundaryDrafts, setSermonBoundaryDrafts] = useState<Record<string, { start: string; end: string }>>({});
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -106,6 +153,18 @@ export default function ShortsStudio() {
     () => videos.find((video) => video.videoId === (project?.sourceVideoId ?? selectedVideoId)),
     [project?.sourceVideoId, selectedVideoId, videos],
   );
+  const sourceVideoBounds = selectedVideo?.segments.length
+    ? {
+      start: selectedVideo.segments[0].startSeconds,
+      end: selectedVideo.segments[selectedVideo.segments.length - 1].endSeconds,
+    }
+    : null;
+  const sermonBoundaryDraft = selectedVideo
+    ? sermonBoundaryDrafts[selectedVideo.videoId] ?? {
+      start: selectedVideo.sermonStartSeconds?.toString() ?? "",
+      end: selectedVideo.sermonEndSeconds?.toString() ?? "",
+    }
+    : null;
   const activeSlotIndex = project
     ? Math.max(0, project.frameSlots.findIndex((slot) =>
       currentTime >= slot.startSeconds && currentTime <= slot.endSeconds,
@@ -119,15 +178,18 @@ export default function ShortsStudio() {
     Promise.all([
       requestJson("/api/ebook/videos", { cache: "no-store" }),
       requestJson("/api/ebook/shorts", { cache: "no-store" }),
-    ]).then(([videoBody, shortBody]) => {
+      requestJson("/api/ebook/shorts/settings", { cache: "no-store" }),
+    ]).then(([videoBody, shortBody, settingsBody]) => {
       const videoCatalog = DirectorVideoCatalogSchema.safeParse(videoBody);
       const shortCatalog = ShortCatalogSchema.safeParse(shortBody);
-      if (!videoCatalog.success || !shortCatalog.success) {
+      const settings = ShortAgentSettingsSchema.safeParse(settingsBody);
+      if (!videoCatalog.success || !shortCatalog.success || !settings.success) {
         throw new Error("Nexus Director returned an invalid video or Shorts catalog.");
       }
       if (active) {
         setVideos(videoCatalog.data.videos);
         setShorts(shortCatalog.data.shorts);
+        setAgentInstructions(settings.data.instructions);
       }
     }).catch((loadError: unknown) => {
       if (active) setError(loadError instanceof Error ? loadError.message : "Could not load Shorts Studio.");
@@ -148,16 +210,197 @@ export default function ShortsStudio() {
     setShorts(parsed.data.shorts);
   }
 
+  async function saveAgentInstructions() {
+    setBusy(true);
+    setError("");
+    setNotice("");
+    try {
+      const body = await requestJson("/api/ebook/shorts/settings", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ instructions: agentInstructions }),
+      });
+      const parsed = ShortAgentSettingsSchema.safeParse(body);
+      if (!parsed.success) throw new Error("The Shorts agent settings response is invalid.");
+      setAgentInstructions(parsed.data.instructions);
+      setNotice("Reusable Shorts agent instructions saved.");
+    } catch (settingsError) {
+      setError(settingsError instanceof Error ? settingsError.message : "Could not save Shorts agent instructions.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function saveSermonBoundaries(
+    video: Video,
+    startSeconds: number | null,
+    endSeconds: number | null,
+  ) {
+    const first = video.segments[0]?.startSeconds;
+    const last = video.segments[video.segments.length - 1]?.endSeconds;
+    if (
+      (startSeconds !== null && (first === undefined || startSeconds < first || startSeconds > (last ?? first)))
+      || (endSeconds !== null && (first === undefined || endSeconds < first || endSeconds > (last ?? first)))
+      || (startSeconds !== null && endSeconds !== null && endSeconds <= startSeconds)
+    ) {
+      setError("Sermon boundaries must be within the transcript and the end must follow the start.");
+      return;
+    }
+    setBusy(true);
+    setError("");
+    setNotice("");
+    try {
+      const body = await requestJson("/api/ebook/videos", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "save-details",
+          videoId: video.videoId,
+          playlists: video.playlists,
+          sermonStartSeconds: startSeconds,
+          sermonEndSeconds: endSeconds,
+        }),
+      });
+      const parsed = z.object({ catalog: DirectorVideoCatalogSchema }).safeParse(body);
+      if (!parsed.success) throw new Error("The sermon boundary save response is invalid.");
+      setVideos(parsed.data.catalog.videos);
+      setSermonBoundaryDrafts((current) => ({
+        ...current,
+        [video.videoId]: {
+          start: startSeconds?.toString() ?? "",
+          end: endSeconds?.toString() ?? "",
+        },
+      }));
+      setNotice("Sermon start and end times saved with the source video.");
+    } catch (saveError) {
+      setError(saveError instanceof Error ? saveError.message : "Could not save sermon boundaries.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function addTextOverlay() {
+    if (!project || project.overlays.length >= 20) {
+      setError("A short can have up to 20 overlay layers.");
+      return;
+    }
+    const overlay: ShortOverlay = {
+      id: crypto.randomUUID(),
+      type: "text",
+      startSeconds: project.startSeconds,
+      endSeconds: project.endSeconds,
+      left: 10,
+      top: 10,
+      width: 80,
+      height: 20,
+      opacity: 1,
+      fontSize: 32,
+      textColor: "#ffffff",
+      backgroundColor: "transparent",
+      text: "Your text",
+    };
+    updateProject({ overlays: [...project.overlays, overlay] });
+    setError("");
+  }
+
+  async function uploadOverlay(file: File | undefined, type: "image" | "frame") {
+    if (!file || !project) return;
+    if (project.overlays.length >= 20) {
+      setError("A short can have up to 20 overlay layers.");
+      return;
+    }
+    if (!["image/png", "image/jpeg", "image/webp"].includes(file.type) || file.size > 10 * 1024 * 1024) {
+      setError("Choose a PNG, JPEG, or WebP image up to 10 MB.");
+      return;
+    }
+    setBusy(true);
+    setError("");
+    setNotice("");
+    try {
+      const body = await requestJson("/api/ebook/shorts/source", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ filename: file.name, contentType: file.type, size: file.size }),
+      });
+      const upload = UploadResponseSchema.safeParse(body);
+      if (!upload.success || upload.data.contentType !== file.type) {
+        throw new Error("The overlay upload service returned invalid image details.");
+      }
+      const response = await fetch(upload.data.presignedUrl, {
+        method: "PUT",
+        headers: { "Content-Type": file.type },
+        body: file,
+      });
+      if (!response.ok) throw new Error(`Image upload failed (HTTP ${response.status}).`);
+      const isFrame = type === "frame";
+      const overlay: ShortOverlay = {
+        id: crypto.randomUUID(),
+        type,
+        startSeconds: project.startSeconds,
+        endSeconds: project.endSeconds,
+        left: isFrame ? 0 : 35,
+        top: isFrame ? 0 : 35,
+        width: isFrame ? 100 : 30,
+        height: isFrame ? 100 : 30,
+        opacity: 1,
+        fontSize: 32,
+        textColor: "#ffffff",
+        backgroundColor: "transparent",
+        imageUrl: upload.data.sourceUrl,
+      };
+      setProject((current) => current
+        ? { ...current, overlays: [...current.overlays, overlay] }
+        : current);
+      setNotice(isFrame
+        ? "Transparent frame overlay uploaded and added to the short."
+        : "Image overlay uploaded and added to the short.");
+    } catch (uploadError) {
+      setError(uploadError instanceof Error ? uploadError.message : "Could not upload this overlay image.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function updateOverlay(id: string, patch: Partial<ShortOverlay>) {
+    if (!project) return;
+    updateProject({
+      overlays: project.overlays.map((overlay) =>
+        overlay.id === id ? { ...overlay, ...patch } : overlay,
+      ),
+    });
+  }
+
+  function changeOverlayNumber(id: string, field: "startSeconds" | "endSeconds" | "left" | "top" | "width" | "height", value: string) {
+    const overlay = project?.overlays.find((item) => item.id === id);
+    const next = Number(value);
+    if (!overlay || !Number.isFinite(next)) return;
+    if (field === "startSeconds" && next >= overlay.endSeconds) {
+      setError("An overlay must end after it starts.");
+      return;
+    }
+    if (field === "endSeconds" && next <= overlay.startSeconds) {
+      setError("An overlay must end after it starts.");
+      return;
+    }
+    if (field === "left") updateOverlay(id, { left: Math.min(next, 100 - overlay.width) });
+    else if (field === "top") updateOverlay(id, { top: Math.min(next, 100 - overlay.height) });
+    else if (field === "width") updateOverlay(id, { width: Math.min(next, 100 - overlay.left) });
+    else if (field === "height") updateOverlay(id, { height: Math.min(next, 100 - overlay.top) });
+    else updateOverlay(id, { [field]: next });
+    setError("");
+  }
+
   function createProject() {
     const video = videos.find((item) => item.videoId === selectedVideoId);
     if (!video || video.segments.length === 0) {
       setError("Choose a video with a saved timestamped transcript first.");
       return;
     }
-    const startSeconds = video.segments[0].startSeconds;
+    const startSeconds = video.sermonStartSeconds ?? video.segments[0].startSeconds;
     const endSeconds = Math.min(
       video.segments[video.segments.length - 1].endSeconds,
       startSeconds + 60,
+      video.sermonEndSeconds ?? Number.POSITIVE_INFINITY,
     );
     if (endSeconds <= startSeconds) {
       setError("This transcript does not contain a usable clip range.");
@@ -181,6 +424,7 @@ export default function ShortsStudio() {
         keyframes: [{ timeSeconds: startSeconds, x: 50, y: 50, zoom: 1 }],
       }],
       captions: filterCaptions(video, startSeconds, endSeconds),
+      overlays: [],
       captionsEnabled: true,
       captionPosition: "bottom",
       captionSize: "medium",
@@ -191,6 +435,7 @@ export default function ShortsStudio() {
     localFileRef.current = null;
     setCurrentTime(startSeconds);
     setSuggestions([]);
+    setSuggestedBoundaries(null);
     setError("");
     setNotice("");
   }
@@ -204,8 +449,10 @@ export default function ShortsStudio() {
       const parsed = ShortProjectSchema.safeParse(body);
       if (!parsed.success) throw new Error("The saved short has an invalid format.");
       setProject(parsed.data);
+      if (parsed.data.sourceVideoId) setSelectedVideoId(parsed.data.sourceVideoId);
       setCurrentTime(parsed.data.startSeconds);
       setSuggestions([]);
+      setSuggestedBoundaries(null);
       setLocalVideoUrl(null);
       localFileRef.current = null;
       if (parsed.data.source.type === "upload" && !parsed.data.source.sourceUrl) {
@@ -228,30 +475,47 @@ export default function ShortsStudio() {
   }
 
   function updateRange(field: "startSeconds" | "endSeconds", value: string) {
-    if (!project || !activeSlot || project.frameSlots.length !== 1 || value.trim() === "") return;
+    if (!project || value.trim() === "") return;
     const nextValue = Number(value);
     const startSeconds = field === "startSeconds" ? nextValue : project.startSeconds;
     const endSeconds = field === "endSeconds" ? nextValue : project.endSeconds;
-    if (!Number.isFinite(nextValue) || startSeconds < 0 || endSeconds <= startSeconds) return;
+    if (!Number.isFinite(nextValue) || startSeconds < 0 || endSeconds <= startSeconds) {
+      setError("Enter a valid start and end time; the end must be after the start.");
+      return;
+    }
     if (endSeconds - startSeconds > MAX_SHORT_DURATION_SECONDS) {
       setError("Shorts can be up to 3 minutes long.");
       return;
     }
-    const frameSlots = [{
-      ...activeSlot,
-      startSeconds,
-      endSeconds,
-      keyframes: activeSlot.keyframes.map((frame) => ({
-        ...frame,
-        timeSeconds: Math.max(startSeconds, Math.min(endSeconds, frame.timeSeconds)),
-      })),
-    }];
+    if (sourceVideoBounds && (
+      startSeconds < sourceVideoBounds.start
+      || endSeconds > sourceVideoBounds.end
+    )) {
+      setError("Keep the short inside the available transcript/video time range.");
+      return;
+    }
+    const frameSlots = resizeFrameSlots(project.frameSlots, startSeconds, endSeconds);
+    if (frameSlots.length === 0 || frameSlots.length > 100) {
+      setError("The clip range could not be applied to its framing slots.");
+      return;
+    }
+    const overlays = project.overlays.flatMap((overlay) => {
+      const overlayStart = Math.max(startSeconds, overlay.startSeconds);
+      const overlayEnd = Math.min(endSeconds, overlay.endSeconds);
+      return overlayEnd > overlayStart
+        ? [{ ...overlay, startSeconds: overlayStart, endSeconds: overlayEnd }]
+        : [];
+    });
     updateProject({
       [field]: nextValue,
       frameSlots,
       captions: filterCaptions(selectedVideo, startSeconds, endSeconds),
+      overlays,
     });
-    if (field === "startSeconds") setCurrentTime(nextValue);
+    setCurrentTime(startSeconds);
+    if (overlays.length !== project.overlays.length) {
+      setNotice("Overlays outside the new clip range were removed.");
+    }
     setError("");
   }
 
@@ -307,23 +571,25 @@ export default function ShortsStudio() {
     setError("");
     setNotice("");
     try {
-      const segments: typeof selectedVideo.segments = [];
-      let totalText = 0;
-      for (const segment of selectedVideo.segments) {
-        const size = segment.text.length + 32;
-        if (totalText + size > 29000) break;
-        segments.push(segment);
-        totalText += size;
-      }
       const body = await requestJson("/api/ebook/shorts/suggest", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ title: selectedVideo.title, segments }),
+        body: JSON.stringify({
+          title: selectedVideo.title,
+          segments: selectedVideo.segments,
+          instructions: agentInstructions,
+        }),
       });
       const parsed = SuggestionResponseSchema.safeParse(body);
       if (!parsed.success) throw new Error("AI returned invalid short suggestions.");
       setSuggestions(parsed.data.suggestions);
-      setNotice("AI suggestions are transcript-based. Preview and approve the timing before publishing.");
+      setSuggestedBoundaries({
+        videoStartSeconds: parsed.data.videoStartSeconds,
+        videoEndSeconds: parsed.data.videoEndSeconds,
+        sermonStartSeconds: parsed.data.sermonStartSeconds,
+        sermonEndSeconds: parsed.data.sermonEndSeconds,
+      });
+      setNotice("AI reviewed transcript moments across the full video. Check the detected sermon boundaries and preview each clip.");
     } catch (suggestionError) {
       setError(suggestionError instanceof Error ? suggestionError.message : "Could not suggest short clips.");
     } finally {
@@ -334,6 +600,13 @@ export default function ShortsStudio() {
   function useSuggestion(suggestion: Suggestion) {
     if (!project) return;
     const video = selectedVideo;
+    const overlays = project.overlays.flatMap((overlay) => {
+      const startSeconds = Math.max(suggestion.startSeconds, overlay.startSeconds);
+      const endSeconds = Math.min(suggestion.endSeconds, overlay.endSeconds);
+      return endSeconds > startSeconds
+        ? [{ ...overlay, startSeconds, endSeconds }]
+        : [];
+    });
     const frameSlots: ShortFrameSlot[] = [{
       startSeconds: suggestion.startSeconds,
       endSeconds: suggestion.endSeconds,
@@ -347,6 +620,7 @@ export default function ShortsStudio() {
       endSeconds: suggestion.endSeconds,
       frameSlots,
       captions: filterCaptions(video, suggestion.startSeconds, suggestion.endSeconds),
+      overlays,
     });
     setCurrentTime(suggestion.startSeconds);
     setError("");
@@ -551,9 +825,64 @@ export default function ShortsStudio() {
         </button>
       </section>
 
+      <section className="space-y-3 rounded-2xl border border-violet-900/70 bg-violet-950/20 p-4 sm:p-6">
+        <div>
+          <h3 className="text-base font-semibold text-white">Reusable AI editor instructions</h3>
+          <p className="mt-1 text-sm text-slate-400">
+            These preferences are saved for every video and guide clip style without changing transcript evidence or timestamps.
+          </p>
+        </div>
+        <textarea
+          rows={3}
+          maxLength={4000}
+          value={agentInstructions}
+          onChange={(event) => setAgentInstructions(event.target.value)}
+          placeholder="For example: favor complete teaching points, keep the opening direct, and avoid clips that end during a prayer."
+          className="min-h-24 w-full rounded-xl border border-slate-700 bg-slate-950 p-3 text-base text-white placeholder:text-slate-500"
+        />
+        <button
+          type="button"
+          onClick={() => void saveAgentInstructions()}
+          disabled={busy}
+          className="min-h-12 rounded-lg border border-violet-700 px-4 text-sm font-semibold text-violet-100 disabled:opacity-50"
+        >
+          Save reusable instructions
+        </button>
+      </section>
+
       {suggestions.length > 0 && (
         <section className="space-y-3">
           <h3 className="text-lg font-semibold text-white">AI clip ideas</h3>
+          {suggestedBoundaries && (
+            <div className="grid gap-3 rounded-xl border border-amber-900/70 bg-amber-950/20 p-4 sm:grid-cols-2">
+              <p className="text-sm text-slate-200">
+                Main video transcript: {formatTime(suggestedBoundaries.videoStartSeconds)}–{formatTime(suggestedBoundaries.videoEndSeconds)}
+              </p>
+              <div className="space-y-2">
+                <p className="text-sm text-amber-100">
+                  AI sermon estimate: {suggestedBoundaries.sermonStartSeconds === null || suggestedBoundaries.sermonEndSeconds === null
+                    ? "Could not confidently detect both boundaries."
+                    : `${formatTime(suggestedBoundaries.sermonStartSeconds)}–${formatTime(suggestedBoundaries.sermonEndSeconds)}`}
+                </p>
+                {suggestedBoundaries.sermonStartSeconds !== null
+                  && suggestedBoundaries.sermonEndSeconds !== null
+                  && selectedVideo && (
+                    <button
+                      type="button"
+                      onClick={() => void saveSermonBoundaries(
+                        selectedVideo,
+                        suggestedBoundaries.sermonStartSeconds,
+                        suggestedBoundaries.sermonEndSeconds,
+                      )}
+                      disabled={busy}
+                      className="min-h-12 rounded-lg border border-amber-800 px-3 text-xs font-semibold text-amber-100 disabled:opacity-50"
+                    >
+                      Save AI sermon boundaries to source video
+                    </button>
+                  )}
+              </div>
+            </div>
+          )}
           <ul className="grid gap-3 lg:grid-cols-2">
             {suggestions.map((suggestion, index) => (
               <li key={`${suggestion.startSeconds}-${index}`} className="rounded-xl border border-cyan-900/70 bg-cyan-950/20 p-4">
@@ -659,11 +988,10 @@ export default function ShortsStudio() {
                     Start (seconds)
                     <input
                       type="number"
-                      min="0"
-                      max={Math.max(0, project.endSeconds - 0.1)}
+                      min={sourceVideoBounds?.start ?? 0}
+                      max={Math.max(sourceVideoBounds?.start ?? 0, project.endSeconds - 0.1)}
                       step="0.1"
                       value={project.startSeconds}
-                      disabled={project.frameSlots.length > 1}
                       onChange={(event) => updateRange("startSeconds", event.target.value)}
                       className="mt-2 min-h-12 w-full rounded-xl border border-slate-700 bg-slate-950 px-4 text-base text-white disabled:opacity-50"
                     />
@@ -673,12 +1001,46 @@ export default function ShortsStudio() {
                     <input
                       type="number"
                       min={project.startSeconds + 0.1}
-                      max={project.startSeconds + MAX_SHORT_DURATION_SECONDS}
+                      max={Math.min(
+                        sourceVideoBounds?.end ?? project.startSeconds + MAX_SHORT_DURATION_SECONDS,
+                        project.startSeconds + MAX_SHORT_DURATION_SECONDS,
+                      )}
                       step="0.1"
                       value={project.endSeconds}
-                      disabled={project.frameSlots.length > 1}
                       onChange={(event) => updateRange("endSeconds", event.target.value)}
                       className="mt-2 min-h-12 w-full rounded-xl border border-slate-700 bg-slate-950 px-4 text-base text-white disabled:opacity-50"
+                    />
+                  </label>
+                </div>
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <label className="block text-xs text-slate-400">
+                    Trim start · {formatTime(project.startSeconds)}
+                    <input
+                      type="range"
+                      min={sourceVideoBounds?.start ?? 0}
+                      max={Math.max(sourceVideoBounds?.start ?? 0, project.endSeconds - 0.1)}
+                      step="0.1"
+                      value={project.startSeconds}
+                      onChange={(event) => updateRange("startSeconds", event.target.value)}
+                      className="min-h-12 w-full accent-cyan-400"
+                    />
+                  </label>
+                  <label className="block text-xs text-slate-400">
+                    Trim end · {formatTime(project.endSeconds)}
+                    <input
+                      type="range"
+                      min={project.startSeconds + 0.1}
+                      max={Math.max(
+                        project.startSeconds + 0.1,
+                        Math.min(
+                          sourceVideoBounds?.end ?? project.startSeconds + MAX_SHORT_DURATION_SECONDS,
+                          project.startSeconds + MAX_SHORT_DURATION_SECONDS,
+                        ),
+                      )}
+                      step="0.1"
+                      value={project.endSeconds}
+                      onChange={(event) => updateRange("endSeconds", event.target.value)}
+                      className="min-h-12 w-full accent-cyan-400"
                     />
                   </label>
                 </div>
@@ -698,7 +1060,7 @@ export default function ShortsStudio() {
                   </button>
                 </div>
                 <p className="text-xs leading-relaxed text-slate-400">
-                  For uploaded footage, drag the preview to reposition the crop, then add keyframes as the face moves. Positions interpolate between keyframes.
+                  Drag the preview to reposition the crop, then add keyframes as the face moves. This works best with authorized uploads; YouTube embed cropping remains best-effort.
                 </p>
               </div>
 
@@ -723,6 +1085,69 @@ export default function ShortsStudio() {
                     className="mt-2 min-h-24 w-full rounded-xl border border-slate-700 bg-slate-950 p-3 text-base text-white"
                   />
                 </label>
+                {selectedVideo && sermonBoundaryDraft && (
+                  <div className="space-y-3 rounded-xl border border-amber-900/70 bg-amber-950/15 p-3">
+                    <div>
+                      <h4 className="text-sm font-semibold text-white">Source video and sermon boundaries</h4>
+                      {sourceVideoBounds && (
+                        <p className="mt-1 text-xs text-slate-400">
+                          Transcript bounds: {formatTime(sourceVideoBounds.start)}–{formatTime(sourceVideoBounds.end)}
+                        </p>
+                      )}
+                    </div>
+                    <div className="grid gap-3 sm:grid-cols-2">
+                      <label className="block text-sm text-slate-300">
+                        Sermon starts (seconds)
+                        <input
+                          type="number"
+                          min={sourceVideoBounds?.start ?? 0}
+                          max={sourceVideoBounds?.end}
+                          step="0.1"
+                          value={sermonBoundaryDraft.start}
+                          onChange={(event) => setSermonBoundaryDrafts((current) => ({
+                            ...current,
+                            [selectedVideo.videoId]: { ...sermonBoundaryDraft, start: event.target.value },
+                          }))}
+                          className="mt-2 min-h-12 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 text-base text-white"
+                        />
+                      </label>
+                      <label className="block text-sm text-slate-300">
+                        Sermon ends (seconds)
+                        <input
+                          type="number"
+                          min={sourceVideoBounds?.start ?? 0}
+                          max={sourceVideoBounds?.end}
+                          step="0.1"
+                          value={sermonBoundaryDraft.end}
+                          onChange={(event) => setSermonBoundaryDrafts((current) => ({
+                            ...current,
+                            [selectedVideo.videoId]: { ...sermonBoundaryDraft, end: event.target.value },
+                          }))}
+                          className="mt-2 min-h-12 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 text-base text-white"
+                        />
+                      </label>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const start = sermonBoundaryDraft.start.trim() ? Number(sermonBoundaryDraft.start) : null;
+                        const end = sermonBoundaryDraft.end.trim() ? Number(sermonBoundaryDraft.end) : null;
+                        if (
+                          (start !== null && !Number.isFinite(start))
+                          || (end !== null && !Number.isFinite(end))
+                        ) {
+                          setError("Enter valid numeric sermon times.");
+                          return;
+                        }
+                        void saveSermonBoundaries(selectedVideo, start, end);
+                      }}
+                      disabled={busy}
+                      className="min-h-12 rounded-lg border border-amber-800 px-4 text-sm font-semibold text-amber-100 disabled:opacity-50"
+                    >
+                      Save sermon boundaries
+                    </button>
+                  </div>
+                )}
                 <label className="block text-sm font-medium text-slate-300">
                   Video source
                   <select
@@ -871,6 +1296,152 @@ export default function ShortsStudio() {
                         </label>
                       ))}
                     </div>
+                  )}
+                </div>
+                <div className="space-y-3 rounded-xl border border-fuchsia-900/70 bg-fuchsia-950/10 p-3">
+                  <div>
+                    <h4 className="text-sm font-semibold text-white">Frames and overlay layers</h4>
+                    <p className="mt-1 text-xs leading-relaxed text-slate-400">
+                      Add text, an image/logo, or a transparent PNG frame. Set each layer’s timing and position in the short.
+                    </p>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      onClick={addTextOverlay}
+                      disabled={busy || project.overlays.length >= 20}
+                      className="min-h-12 rounded-lg border border-fuchsia-800 px-3 text-xs font-semibold text-fuchsia-100 disabled:opacity-50"
+                    >
+                      Add text overlay
+                    </button>
+                    <label className="flex min-h-12 cursor-pointer items-center rounded-lg border border-slate-700 px-3 text-xs font-semibold text-slate-200">
+                      Add image/logo
+                      <input
+                        type="file"
+                        accept="image/png,image/jpeg,image/webp"
+                        disabled={busy || project.overlays.length >= 20}
+                        onChange={(event) => {
+                          void uploadOverlay(event.target.files?.[0], "image");
+                          event.target.value = "";
+                        }}
+                        className="sr-only"
+                      />
+                    </label>
+                    <label className="flex min-h-12 cursor-pointer items-center rounded-lg border border-slate-700 px-3 text-xs font-semibold text-slate-200">
+                      Add transparent frame
+                      <input
+                        type="file"
+                        accept="image/png,image/jpeg,image/webp"
+                        disabled={busy || project.overlays.length >= 20}
+                        onChange={(event) => {
+                          void uploadOverlay(event.target.files?.[0], "frame");
+                          event.target.value = "";
+                        }}
+                        className="sr-only"
+                      />
+                    </label>
+                  </div>
+                  {project.overlays.length === 0 ? (
+                    <p className="text-xs text-slate-500">No overlays added yet. Image uploads are stored for use in published shorts.</p>
+                  ) : (
+                    <ul className="space-y-3">
+                      {project.overlays.map((overlay, index) => (
+                        <li key={overlay.id} className="space-y-3 rounded-lg border border-slate-800 bg-slate-950/70 p-3">
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="text-xs font-semibold uppercase text-slate-200">
+                              {overlay.type === "frame" ? "Frame" : overlay.type === "image" ? "Image / logo" : "Text"} {index + 1}
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => updateProject({
+                                overlays: project.overlays.filter((item) => item.id !== overlay.id),
+                              })}
+                              className="min-h-12 min-w-12 rounded-lg border border-rose-900 px-3 text-xs font-semibold text-rose-200"
+                            >
+                              Remove
+                            </button>
+                          </div>
+                          {overlay.type === "text" && (
+                            <>
+                              <textarea
+                                rows={2}
+                                maxLength={300}
+                                value={overlay.text ?? ""}
+                                onChange={(event) => updateOverlay(overlay.id, { text: event.target.value })}
+                                aria-label={`Overlay ${index + 1} text`}
+                                className="min-h-12 w-full rounded-lg border border-slate-700 bg-slate-900 p-2 text-base text-white"
+                              />
+                              <div className="grid gap-3 sm:grid-cols-3">
+                                <label className="text-xs text-slate-400">
+                                  Text color
+                                  <input
+                                    type="color"
+                                    value={overlay.textColor}
+                                    onChange={(event) => updateOverlay(overlay.id, { textColor: event.target.value })}
+                                    className="mt-1 h-12 w-full rounded-lg border border-slate-700 bg-slate-900 p-1"
+                                  />
+                                </label>
+                                <label className="text-xs text-slate-400">
+                                  Background
+                                  <input
+                                    type="color"
+                                    value={overlay.backgroundColor === "transparent" ? "#000000" : overlay.backgroundColor}
+                                    onChange={(event) => updateOverlay(overlay.id, { backgroundColor: event.target.value })}
+                                    className="mt-1 h-12 w-full rounded-lg border border-slate-700 bg-slate-900 p-1"
+                                  />
+                                </label>
+                                <label className="text-xs text-slate-400">
+                                  Font size
+                                  <input
+                                    type="number"
+                                    min="8"
+                                    max="96"
+                                    value={overlay.fontSize}
+                                    onChange={(event) => updateOverlay(overlay.id, { fontSize: Number(event.target.value) })}
+                                    className="mt-1 min-h-12 w-full rounded-lg border border-slate-700 bg-slate-900 px-3 text-base text-white"
+                                  />
+                                </label>
+                              </div>
+                            </>
+                          )}
+                          <div className="grid gap-2 sm:grid-cols-2">
+                            {([
+                              ["startSeconds", "Show from (seconds)", project.startSeconds, project.endSeconds],
+                              ["endSeconds", "Show until (seconds)", project.startSeconds, project.endSeconds],
+                              ["left", "Left (%)", 0, 100],
+                              ["top", "Top (%)", 0, 100],
+                              ["width", "Width (%)", 1, 100],
+                              ["height", "Height (%)", 1, 100],
+                            ] as const).map(([field, label, min, max]) => (
+                              <label key={field} className="text-xs text-slate-400">
+                                {label}
+                                <input
+                                  type="number"
+                                  min={min}
+                                  max={max}
+                                  step="0.1"
+                                  value={overlay[field]}
+                                  onChange={(event) => changeOverlayNumber(overlay.id, field, event.target.value)}
+                                  className="mt-1 min-h-12 w-full rounded-lg border border-slate-700 bg-slate-900 px-3 text-base text-white"
+                                />
+                              </label>
+                            ))}
+                          </div>
+                          <label className="block text-xs text-slate-400">
+                            Opacity · {Math.round(overlay.opacity * 100)}%
+                            <input
+                              type="range"
+                              min="0"
+                              max="1"
+                              step="0.05"
+                              value={overlay.opacity}
+                              onChange={(event) => updateOverlay(overlay.id, { opacity: Number(event.target.value) })}
+                              className="min-h-12 w-full accent-fuchsia-400"
+                            />
+                          </label>
+                        </li>
+                      ))}
+                    </ul>
                   )}
                 </div>
               </div>

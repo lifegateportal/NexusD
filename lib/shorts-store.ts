@@ -4,6 +4,7 @@ import { makeR2Client } from "@/lib/r2-storage";
 import {
   PublicShortCatalogSchema,
   PublishedShortProjectSchema,
+  ShortAgentSettingsSchema,
   ShortCatalogSchema,
   ShortProjectSchema,
   type ShortProject,
@@ -11,6 +12,7 @@ import {
 
 const PRIVATE_CATALOG_KEY = "director/shorts/index.json";
 const PUBLIC_CATALOG_KEY = "published/shorts/index.json";
+const AGENT_SETTINGS_KEY = "director/shorts/agent-settings.json";
 
 function assertStorageConfigured(): void {
   if (!env.R2_ACCOUNT_ID || !env.R2_ACCESS_KEY_ID || !env.R2_SECRET_ACCESS_KEY || !env.R2_BUCKET_NAME) {
@@ -66,6 +68,17 @@ export async function listPrivateShorts() {
   return raw
     ? ShortCatalogSchema.parse(raw)
     : { updatedAt: new Date().toISOString(), shorts: [] };
+}
+
+export async function readShortAgentSettings() {
+  const raw = await readJsonObject(AGENT_SETTINGS_KEY);
+  return ShortAgentSettingsSchema.parse(raw ?? {});
+}
+
+export async function saveShortAgentSettings(input: unknown) {
+  const settings = ShortAgentSettingsSchema.parse(input);
+  await writeJsonObject(AGENT_SETTINGS_KEY, settings);
+  return settings;
 }
 
 export async function readPrivateShort(slug: string): Promise<ShortProject | null> {

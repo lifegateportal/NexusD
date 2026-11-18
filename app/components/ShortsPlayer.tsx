@@ -133,6 +133,9 @@ export default function ShortsPlayer({
   const activeCaption = project.captions.find((caption) =>
     currentTime >= caption.startSeconds && currentTime < caption.endSeconds,
   );
+  const activeOverlays = project.overlays.filter((overlay) =>
+    currentTime >= overlay.startSeconds && currentTime < overlay.endSeconds,
+  );
 
   useEffect(() => {
     setCurrentTime(project.startSeconds);
@@ -186,8 +189,7 @@ export default function ShortsPlayer({
         },
         events: {
           onReady: () => {
-            const player = youtubePlayerRef.current;
-            player?.unloadModule("captions");
+            youtubePlayerRef.current?.unloadModule("captions");
             youtubePlayerRef.current?.seekTo(startSeconds, true);
             timer = window.setInterval(() => {
               const player = youtubePlayerRef.current;
@@ -204,6 +206,8 @@ export default function ShortsPlayer({
               }
             }, 200);
           },
+          onApiChange: () => youtubePlayerRef.current?.unloadModule("captions"),
+          onStateChange: () => youtubePlayerRef.current?.unloadModule("captions"),
           onError: () => setPlayerError("YouTube could not play this video in an embedded player."),
         },
       });
@@ -325,7 +329,7 @@ export default function ShortsPlayer({
   }
 
   function onPointerDown(event: PointerEvent<HTMLDivElement>) {
-    if (!editable || project.source.type !== "upload" || !onCropChange) return;
+    if (!editable || !onCropChange) return;
     const bounds = event.currentTarget.getBoundingClientRect();
     dragRef.current = {
       x: position.x,
@@ -373,7 +377,7 @@ export default function ShortsPlayer({
         ref={fullscreenContainerRef}
         className={`relative w-full touch-none overflow-hidden bg-black ${
           isFullscreen ? "flex h-dvh w-screen items-center justify-center rounded-none" : "rounded-xl"
-        } ${editable && project.source.type === "upload" ? "cursor-move" : ""}`}
+        } ${editable ? "cursor-move" : ""}`}
         style={isFullscreen
           ? { width: "100vw", height: "100dvh", aspectRatio: "auto", borderRadius: 0 }
           : { aspectRatio: activeSlot.aspectRatio.replace(":", "/") }}
@@ -401,6 +405,7 @@ export default function ShortsPlayer({
                 top: `${playerTopPercent}%`,
                 transform: `scale(${position.zoom})`,
                 transformOrigin: `${position.x}% ${position.y}%`,
+                pointerEvents: editable ? "none" : "auto",
               }}
             />
           ) : videoUrl ? (
@@ -412,6 +417,7 @@ export default function ShortsPlayer({
                 objectFit: activeSlot.fit,
                 objectPosition: `${position.x}% ${position.y}%`,
                 transform: `scale(${position.zoom})`,
+                pointerEvents: editable ? "none" : "auto",
               }}
               playsInline
               preload="metadata"
@@ -430,6 +436,35 @@ export default function ShortsPlayer({
               <span className="rounded-md bg-black/70 px-2 py-1">{activeCaption.text}</span>
             </div>
           )}
+          {activeOverlays.map((overlay) => (
+            <div
+              key={overlay.id}
+              className="pointer-events-none absolute z-10 flex items-center justify-center overflow-hidden text-center font-bold leading-tight"
+              style={{
+                left: `${overlay.left}%`,
+                top: `${overlay.top}%`,
+                width: `${overlay.width}%`,
+                height: `${overlay.height}%`,
+                opacity: overlay.opacity,
+                color: overlay.textColor,
+                backgroundColor: overlay.type === "text" ? overlay.backgroundColor : "transparent",
+                fontSize: `${overlay.fontSize}px`,
+                padding: overlay.type === "text" ? "0.25rem" : undefined,
+              }}
+            >
+              {overlay.type === "text" ? (
+                overlay.text
+              ) : (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img
+                  src={overlay.imageUrl}
+                  alt=""
+                  className="h-full w-full"
+                  style={{ objectFit: overlay.type === "frame" ? "fill" : "contain" }}
+                />
+              )}
+            </div>
+          ))}
           <button
             type="button"
             onPointerDown={(event) => event.stopPropagation()}

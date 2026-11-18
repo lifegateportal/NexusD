@@ -15,6 +15,7 @@ export const LibraryVideoSchema = z.object({
   addedAt: z.string().datetime(),
   playlists: VideoPlaylistsSchema,
   sermonStartSeconds: z.number().finite().min(0).optional(),
+  sermonEndSeconds: z.number().finite().min(0).optional(),
 }).strip();
 
 export const LibraryVideoCatalogSchema = z.object({
@@ -42,9 +43,15 @@ export const DirectorVideoSchema = z.object({
   updatedAt: z.string().datetime(),
   playlists: VideoPlaylistsSchema,
   sermonStartSeconds: z.number().finite().min(0).optional(),
+  sermonEndSeconds: z.number().finite().min(0).optional(),
   segments: z.array(LibraryVideoSegmentSchema).max(20000).default([]),
   error: z.string().max(1000).optional(),
-}).strict();
+}).strict().refine(
+  (video) => video.sermonStartSeconds === undefined
+    || video.sermonEndSeconds === undefined
+    || video.sermonEndSeconds > video.sermonStartSeconds,
+  { message: "Sermon end must be after its start.", path: ["sermonEndSeconds"] },
+);
 
 export const DirectorVideoCatalogSchema = z.object({
   updatedAt: z.string().datetime(),

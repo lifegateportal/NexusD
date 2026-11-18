@@ -8,9 +8,12 @@ export const runtime = "nodejs";
 
 const RequestSchema = z.object({
   filename: z.string().trim().min(1).max(255),
-  contentType: z.enum(["video/mp4", "video/webm"]),
+  contentType: z.enum(["video/mp4", "video/webm", "image/png", "image/jpeg", "image/webp"]),
   size: z.number().int().min(1).max(500 * 1024 * 1024),
-}).strict();
+}).strict().refine(
+  (input) => !input.contentType.startsWith("image/") || input.size <= 10 * 1024 * 1024,
+  { message: "Overlay images must be 10 MB or smaller.", path: ["size"] },
+);
 
 export async function POST(request: NextRequest) {
   if (!process.env.AUTH_PASSWORD || !process.env.AUTH_COOKIE_SECRET) {
@@ -34,7 +37,14 @@ export async function POST(request: NextRequest) {
   }
 
   try {
-    const extension = input.contentType === "video/webm" ? "webm" : "mp4";
+    const extensionByType = {
+      "video/mp4": "mp4",
+      "video/webm": "webm",
+      "image/png": "png",
+      "image/jpeg": "jpg",
+      "image/webp": "webp",
+    } as const;
+    const extension = extensionByType[input.contentType];
     const key = `published/shorts/assets/${crypto.randomUUID()}.${extension}`;
     const client = new S3Client({
       region: "auto",

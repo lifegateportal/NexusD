@@ -28,6 +28,7 @@ const ActionSchema = z.discriminatedUnion("action", [
     transcript: z.string().max(1_000_000).optional(),
     playlists: PlaylistNamesSchema.optional(),
     sermonStartSeconds: z.number().finite().min(0).optional(),
+    sermonEndSeconds: z.number().finite().min(0).optional(),
   }).strict(),
   z.object({
     action: z.literal("save-transcript"),
@@ -39,6 +40,7 @@ const ActionSchema = z.discriminatedUnion("action", [
     videoId: VideoIdSchema,
     playlists: PlaylistNamesSchema,
     sermonStartSeconds: z.number().finite().min(0).nullable(),
+    sermonEndSeconds: z.number().finite().min(0).nullable(),
   }).strict(),
   z.object({ action: z.literal("approve"), videoId: VideoIdSchema }).strict(),
   z.object({ action: z.literal("unpublish"), videoId: VideoIdSchema }).strict(),
@@ -303,6 +305,7 @@ export async function POST(request: NextRequest) {
         youtubeUrl: `https://www.youtube.com/watch?v=${videoId}`,
         playlists: action.playlists ?? [],
         ...(action.sermonStartSeconds !== undefined ? { sermonStartSeconds: action.sermonStartSeconds } : {}),
+        ...(action.sermonEndSeconds !== undefined ? { sermonEndSeconds: action.sermonEndSeconds } : {}),
         status: segments.length ? "ready" : "discovered",
         updatedAt: new Date().toISOString(),
         segments,
@@ -319,6 +322,7 @@ export async function POST(request: NextRequest) {
         ...video,
         playlists: [...new Set(action.playlists.map((name) => name.trim()).filter(Boolean))],
         sermonStartSeconds: action.sermonStartSeconds ?? undefined,
+        sermonEndSeconds: action.sermonEndSeconds ?? undefined,
         updatedAt: new Date().toISOString(),
       });
       if (video.status === "published") {
@@ -329,6 +333,7 @@ export async function POST(request: NextRequest) {
           ...publishedRecord,
           playlists: updatedVideo.playlists,
           sermonStartSeconds: updatedVideo.sermonStartSeconds,
+          sermonEndSeconds: updatedVideo.sermonEndSeconds,
         });
         await writeJsonObject(`published/videos/${video.videoId}.json`, updatedRecord, true);
         const publishedCatalog = await readPublishedCatalog();
@@ -346,6 +351,9 @@ export async function POST(request: NextRequest) {
               playlists: updatedRecord.playlists,
               ...(updatedRecord.sermonStartSeconds !== undefined
                 ? { sermonStartSeconds: updatedRecord.sermonStartSeconds }
+                : {}),
+              ...(updatedRecord.sermonEndSeconds !== undefined
+                ? { sermonEndSeconds: updatedRecord.sermonEndSeconds }
                 : {}),
             }
             : item),
@@ -396,6 +404,7 @@ export async function POST(request: NextRequest) {
         addedAt: new Date().toISOString(),
         playlists: video.playlists,
         ...(video.sermonStartSeconds !== undefined ? { sermonStartSeconds: video.sermonStartSeconds } : {}),
+        ...(video.sermonEndSeconds !== undefined ? { sermonEndSeconds: video.sermonEndSeconds } : {}),
         segments: video.segments,
       });
       const publishedCatalog = await readPublishedCatalog();
@@ -416,6 +425,9 @@ export async function POST(request: NextRequest) {
           playlists: publishedRecord.playlists,
           ...(publishedRecord.sermonStartSeconds !== undefined
             ? { sermonStartSeconds: publishedRecord.sermonStartSeconds }
+            : {}),
+          ...(publishedRecord.sermonEndSeconds !== undefined
+            ? { sermonEndSeconds: publishedRecord.sermonEndSeconds }
             : {}),
         }, ...publishedCatalog.videos.filter((item) => item.videoId !== video.videoId)],
       });

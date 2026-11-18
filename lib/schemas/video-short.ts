@@ -26,6 +26,36 @@ export const ShortFrameSlotSchema = z.object({
   { message: "Crop keyframes must be inside their framing slot.", path: ["keyframes"] },
 );
 
+export const ShortOverlaySchema = z.object({
+  id: z.string().uuid(),
+  type: z.enum(["text", "image", "frame"]),
+  startSeconds: z.number().finite().min(0),
+  endSeconds: z.number().finite().min(0),
+  left: z.number().finite().min(0).max(100),
+  top: z.number().finite().min(0).max(100),
+  width: z.number().finite().min(1).max(100),
+  height: z.number().finite().min(1).max(100),
+  opacity: z.number().finite().min(0).max(1).default(1),
+  fontSize: z.number().finite().min(8).max(96).default(32),
+  textColor: z.string().regex(/^#[0-9A-Fa-f]{6}$/).default("#ffffff"),
+  backgroundColor: z.string().regex(/^(#[0-9A-Fa-f]{6}|transparent)$/).default("transparent"),
+  text: z.string().trim().max(300).optional(),
+  imageUrl: z.string().url().optional(),
+}).strict().superRefine((overlay, context) => {
+  if (overlay.endSeconds <= overlay.startSeconds) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ["endSeconds"], message: "Overlay end must be after its start." });
+  }
+  if (overlay.type === "text" && !overlay.text?.trim()) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ["text"], message: "Text overlays need text." });
+  }
+  if (overlay.type !== "text" && !overlay.imageUrl) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ["imageUrl"], message: "Image overlays need an image." });
+  }
+  if (overlay.left + overlay.width > 100 || overlay.top + overlay.height > 100) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ["width"], message: "Overlays must fit inside the frame." });
+  }
+});
+
 const YouTubeShortSourceSchema = z.object({
   type: z.literal("youtube"),
   videoId: z.string().regex(/^[A-Za-z0-9_-]{11}$/),
@@ -53,6 +83,7 @@ export const ShortProjectSchema = z.object({
   endSeconds: z.number().finite().min(0),
   frameSlots: z.array(ShortFrameSlotSchema).min(1).max(100),
   captions: z.array(LibraryVideoSegmentSchema).max(5000),
+  overlays: z.array(ShortOverlaySchema).max(20).default([]),
   captionsEnabled: z.boolean().default(true),
   captionPosition: z.enum(["top", "middle", "bottom"]).default("bottom"),
   captionSize: z.enum(["small", "medium", "large"]).default("medium"),
@@ -69,6 +100,11 @@ export const ShortProjectSchema = z.object({
     (slot) => slot.startSeconds >= project.startSeconds && slot.endSeconds <= project.endSeconds,
   ),
   { message: "Frame slots must be inside the short's time range.", path: ["frameSlots"] },
+).refine(
+  (project) => project.overlays.every(
+    (overlay) => overlay.startSeconds >= project.startSeconds && overlay.endSeconds <= project.endSeconds,
+  ),
+  { message: "Overlays must be inside the short's time range.", path: ["overlays"] },
 ).refine((project) => {
   const slots = [...project.frameSlots].sort((a, b) => a.startSeconds - b.startSeconds);
   if (
@@ -115,7 +151,12 @@ export const PublicShortCatalogSchema = z.object({
   shorts: z.array(ShortSummarySchema.omit({ status: true })).max(500),
 }).strict();
 
+export const ShortAgentSettingsSchema = z.object({
+  instructions: z.string().trim().max(4000).default(""),
+}).strict();
+
 export type ShortProject = z.infer<typeof ShortProjectSchema>;
 export type ShortFrameSlot = z.infer<typeof ShortFrameSlotSchema>;
 export type ShortCropKeyframe = z.infer<typeof ShortCropKeyframeSchema>;
+export type ShortOverlay = z.infer<typeof ShortOverlaySchema>;
 export type ShortSummary = z.infer<typeof ShortSummarySchema>;

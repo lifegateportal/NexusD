@@ -31,6 +31,7 @@ export default function DirectorVideos() {
   const [transcriptDrafts, setTranscriptDrafts] = useState<Record<string, string>>({});
   const [playlistDrafts, setPlaylistDrafts] = useState<Record<string, string>>({});
   const [sermonStartDrafts, setSermonStartDrafts] = useState<Record<string, string>>({});
+  const [sermonEndDrafts, setSermonEndDrafts] = useState<Record<string, string>>({});
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
 
@@ -148,6 +149,9 @@ export default function DirectorVideos() {
             sermonStartSeconds: parseOptionalTimeInput(sermonStartDrafts[video.videoId] ?? (
               video.sermonStartSeconds === undefined ? "" : formatTime(video.sermonStartSeconds)
             )),
+            sermonEndSeconds: parseOptionalTimeInput(sermonEndDrafts[video.videoId] ?? (
+              video.sermonEndSeconds === undefined ? "" : formatTime(video.sermonEndSeconds)
+            )),
           } : {}),
         }),
       });
@@ -162,7 +166,7 @@ export default function DirectorVideos() {
       setNotice(action === "save-transcript"
         ? `Timestamped transcript saved privately for “${video.title}”.`
         : action === "save-details"
-          ? `Playlist and sermon start saved for “${video.title}”.`
+          ? `Playlist and sermon boundaries saved for “${video.title}”.`
         : action === "approve"
           ? `“${video.title}” is now playable and searchable in the public Library.`
           : action === "unpublish"
@@ -365,8 +369,12 @@ export default function DirectorVideos() {
                     {video.playlists.length > 0 && (
                       <p className="mt-2 text-xs text-cyan-200">Playlists: {video.playlists.join(", ")}</p>
                     )}
-                    {video.sermonStartSeconds !== undefined && (
-                      <p className="mt-1 text-xs text-amber-200">Sermon starts at {formatTime(video.sermonStartSeconds)}</p>
+                    {(video.sermonStartSeconds !== undefined || video.sermonEndSeconds !== undefined) && (
+                      <p className="mt-1 text-xs text-amber-200">
+                        Sermon: {video.sermonStartSeconds === undefined ? "not set" : formatTime(video.sermonStartSeconds)}
+                        {"–"}
+                        {video.sermonEndSeconds === undefined ? "not set" : formatTime(video.sermonEndSeconds)}
+                      </p>
                     )}
                     {video.error && <p className="mt-3 rounded-lg bg-rose-950/40 p-3 text-xs leading-relaxed text-rose-200">{video.error}</p>}
                     {video.segments.length > 0 && (
@@ -427,7 +435,7 @@ export default function DirectorVideos() {
                     </div>
                     <details className="mt-4">
                       <summary className="flex min-h-12 cursor-pointer items-center text-sm font-semibold text-cyan-300">
-                        Edit playlist and sermon start
+                        Edit playlist and sermon boundaries
                       </summary>
                       <div className="grid gap-3 sm:grid-cols-2">
                         <label className="block text-sm font-medium text-slate-300">
@@ -458,6 +466,21 @@ export default function DirectorVideos() {
                             className="mt-2 min-h-12 w-full rounded-xl border border-slate-700 bg-slate-950 px-4 text-base text-white placeholder:text-slate-500 focus:border-cyan-400 focus:outline-none"
                           />
                         </label>
+                        <label className="block text-sm font-medium text-slate-300">
+                          Sermon end
+                          <input
+                            type="text"
+                            value={sermonEndDrafts[video.videoId] ?? (
+                              video.sermonEndSeconds === undefined ? "" : formatTime(video.sermonEndSeconds)
+                            )}
+                            onChange={(event) => setSermonEndDrafts((current) => ({
+                              ...current,
+                              [video.videoId]: event.target.value,
+                            }))}
+                            placeholder="1:23:15 or 4995; blank if not applicable"
+                            className="mt-2 min-h-12 w-full rounded-xl border border-slate-700 bg-slate-950 px-4 text-base text-white placeholder:text-slate-500 focus:border-cyan-400 focus:outline-none"
+                          />
+                        </label>
                       </div>
                       <button
                         type="button"
@@ -465,7 +488,7 @@ export default function DirectorVideos() {
                         disabled={discovering || busyVideoId !== null}
                         className="mt-3 min-h-12 rounded-xl border border-cyan-800 px-4 text-sm font-semibold text-cyan-200 disabled:opacity-50"
                       >
-                        {busy ? "Saving details…" : "Save playlist and sermon start"}
+                        {busy ? "Saving details…" : "Save playlist and sermon boundaries"}
                       </button>
                     </details>
                     {video.status !== "published" && (
