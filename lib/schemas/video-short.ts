@@ -3,6 +3,14 @@ import { LibraryVideoSegmentSchema } from "@/lib/schemas/library-video";
 
 export const ShortAspectRatioSchema = z.enum(["9:16", "4:5", "1:1", "16:9"]);
 export const MAX_SHORT_DURATION_SECONDS = 3 * 60;
+export const ShortOverlayPresetStyleSchema = z.enum([
+  "headline",
+  "lower-third",
+  "pill-label",
+  "outline-frame",
+  "corner-frame",
+  "neon-frame",
+]);
 
 export const ShortCropKeyframeSchema = z.object({
   timeSeconds: z.number().finite().min(0),
@@ -39,6 +47,11 @@ export const ShortOverlaySchema = z.object({
   fontSize: z.number().finite().min(8).max(96).default(32),
   textColor: z.string().regex(/^#[0-9A-Fa-f]{6}$/).default("#ffffff"),
   backgroundColor: z.string().regex(/^(#[0-9A-Fa-f]{6}|transparent)$/).default("transparent"),
+  textStyle: z.enum(["plain", "headline", "lower-third", "pill"]).default("plain"),
+  frameStyle: z.enum(["outline", "corner-brackets", "neon"]).optional(),
+  borderColor: z.string().regex(/^#[0-9A-Fa-f]{6}$/).default("#22d3ee"),
+  borderWidth: z.number().finite().min(0).max(12).default(2),
+  borderRadius: z.number().finite().min(0).max(100).default(8),
   text: z.string().trim().max(300).optional(),
   imageUrl: z.string().url().optional(),
 }).strict().superRefine((overlay, context) => {
@@ -48,8 +61,11 @@ export const ShortOverlaySchema = z.object({
   if (overlay.type === "text" && !overlay.text?.trim()) {
     context.addIssue({ code: z.ZodIssueCode.custom, path: ["text"], message: "Text overlays need text." });
   }
-  if (overlay.type !== "text" && !overlay.imageUrl) {
+  if (overlay.type === "image" && !overlay.imageUrl) {
     context.addIssue({ code: z.ZodIssueCode.custom, path: ["imageUrl"], message: "Image overlays need an image." });
+  }
+  if (overlay.type === "frame" && !overlay.imageUrl && !overlay.frameStyle) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ["frameStyle"], message: "Frame overlays need an image or a frame style." });
   }
   if (overlay.left + overlay.width > 100 || overlay.top + overlay.height > 100) {
     context.addIssue({ code: z.ZodIssueCode.custom, path: ["width"], message: "Overlays must fit inside the frame." });
@@ -151,12 +167,35 @@ export const PublicShortCatalogSchema = z.object({
   shorts: z.array(ShortSummarySchema.omit({ status: true })).max(500),
 }).strict();
 
+export const ShortOverlayPresetLayerSchema = z.object({
+  style: ShortOverlayPresetStyleSchema,
+  text: z.string().trim().max(120).optional(),
+  accentColor: z.string().regex(/^#[0-9A-Fa-f]{6}$/).default("#22d3ee"),
+}).strict().superRefine((layer, context) => {
+  if (["headline", "lower-third", "pill-label"].includes(layer.style) && !layer.text?.trim()) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ["text"], message: "Text overlay presets need text." });
+  }
+});
+
+export const ShortOverlayPresetResponseSchema = z.object({
+  name: z.string().trim().min(1).max(80),
+  description: z.string().trim().min(1).max(300),
+  layers: z.array(ShortOverlayPresetLayerSchema).min(1).max(5),
+}).strict();
+
+export const ShortOverlayPresetSchema = ShortOverlayPresetResponseSchema.extend({
+  id: z.string().uuid(),
+});
+
 export const ShortAgentSettingsSchema = z.object({
   instructions: z.string().trim().max(4000).default(""),
+  overlayPresets: z.array(ShortOverlayPresetSchema).max(20).default([]),
 }).strict();
 
 export type ShortProject = z.infer<typeof ShortProjectSchema>;
 export type ShortFrameSlot = z.infer<typeof ShortFrameSlotSchema>;
 export type ShortCropKeyframe = z.infer<typeof ShortCropKeyframeSchema>;
 export type ShortOverlay = z.infer<typeof ShortOverlaySchema>;
+export type ShortOverlayPreset = z.infer<typeof ShortOverlayPresetSchema>;
+export type ShortOverlayPresetLayer = z.infer<typeof ShortOverlayPresetLayerSchema>;
 export type ShortSummary = z.infer<typeof ShortSummarySchema>;

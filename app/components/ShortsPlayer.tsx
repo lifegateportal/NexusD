@@ -451,35 +451,90 @@ export default function ShortsPlayer({
               <span className="rounded-md bg-black/70 px-2 py-1">{activeCaption.text}</span>
             </div>
           )}
-          {activeOverlays.map((overlay) => (
-            <div
-              key={overlay.id}
-              className="pointer-events-none absolute z-10 flex items-center justify-center overflow-hidden text-center font-bold leading-tight"
-              style={{
-                left: `${overlay.left}%`,
-                top: `${overlay.top}%`,
-                width: `${overlay.width}%`,
-                height: `${overlay.height}%`,
-                opacity: overlay.opacity,
-                color: overlay.textColor,
-                backgroundColor: overlay.type === "text" ? overlay.backgroundColor : "transparent",
-                fontSize: `${overlay.fontSize}px`,
-                padding: overlay.type === "text" ? "0.25rem" : undefined,
-              }}
-            >
-              {overlay.type === "text" ? (
-                overlay.text
-              ) : (
-                // eslint-disable-next-line @next/next/no-img-element
-                <img
-                  src={overlay.imageUrl}
-                  alt=""
-                  className="h-full w-full"
-                  style={{ objectFit: overlay.type === "frame" ? "fill" : "contain" }}
-                />
-              )}
-            </div>
-          ))}
+          {activeOverlays.map((overlay) => {
+            const positionStyle = {
+              left: `${overlay.left}%`,
+              top: `${overlay.top}%`,
+              width: `${overlay.width}%`,
+              height: `${overlay.height}%`,
+              opacity: overlay.opacity,
+            };
+            if (overlay.type === "text") {
+              return (
+                <div
+                  key={overlay.id}
+                  className="pointer-events-none absolute z-10 flex items-center justify-center overflow-hidden text-center leading-tight"
+                  style={{
+                    ...positionStyle,
+                    color: overlay.textColor,
+                    backgroundColor: overlay.backgroundColor,
+                    fontSize: `${overlay.fontSize}px`,
+                    fontWeight: overlay.textStyle === "plain" ? 700 : 800,
+                    textTransform: overlay.textStyle === "headline" || overlay.textStyle === "pill" ? "uppercase" : undefined,
+                    letterSpacing: overlay.textStyle === "pill" ? "0.12em" : undefined,
+                    padding: "0.25rem",
+                    borderRadius: `${overlay.borderRadius}px`,
+                    border: overlay.borderWidth > 0
+                      ? `${overlay.borderWidth}px solid ${overlay.borderColor}`
+                      : undefined,
+                    textShadow: overlay.backgroundColor === "transparent" ? "0 2px 8px #000" : undefined,
+                    boxShadow: overlay.textStyle === "plain" ? undefined : "0 8px 24px rgb(0 0 0 / 35%)",
+                  }}
+                >
+                  {overlay.text}
+                </div>
+              );
+            }
+            if (overlay.imageUrl) {
+              return (
+                <div
+                  key={overlay.id}
+                  className="pointer-events-none absolute z-10 overflow-hidden"
+                  style={positionStyle}
+                >
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img
+                    src={overlay.imageUrl}
+                    alt=""
+                    className="h-full w-full"
+                    style={{ objectFit: overlay.type === "frame" ? "fill" : "contain" }}
+                  />
+                </div>
+              );
+            }
+            const cornerStyle = {
+              borderColor: overlay.borderColor,
+              borderWidth: `${overlay.borderWidth}px`,
+              filter: overlay.frameStyle === "neon" ? `drop-shadow(0 0 8px ${overlay.borderColor})` : undefined,
+            };
+            return (
+              <div
+                key={overlay.id}
+                className="pointer-events-none absolute z-10 box-border"
+                style={{
+                  ...positionStyle,
+                  borderColor: overlay.borderColor,
+                  borderWidth: `${overlay.borderWidth}px`,
+                  borderStyle: overlay.frameStyle === "corner-brackets" ? "none" : "solid",
+                  borderRadius: overlay.frameStyle === "corner-brackets" ? 0 : `${overlay.borderRadius}px`,
+                  boxShadow: overlay.frameStyle === "neon"
+                    ? `inset 0 0 14px ${overlay.borderColor}, 0 0 12px ${overlay.borderColor}`
+                    : overlay.frameStyle === "outline"
+                      ? "inset 0 0 18px rgb(0 0 0 / 25%)"
+                      : undefined,
+                }}
+              >
+                {overlay.frameStyle === "corner-brackets" && (
+                  <>
+                    <span className="absolute left-0 top-0 h-1/4 w-1/4 border-l border-t" style={cornerStyle} />
+                    <span className="absolute right-0 top-0 h-1/4 w-1/4 border-r border-t" style={cornerStyle} />
+                    <span className="absolute bottom-0 left-0 h-1/4 w-1/4 border-b border-l" style={cornerStyle} />
+                    <span className="absolute bottom-0 right-0 h-1/4 w-1/4 border-b border-r" style={cornerStyle} />
+                  </>
+                )}
+              </div>
+            );
+          })}
           <button
             type="button"
             onPointerDown={(event) => event.stopPropagation()}

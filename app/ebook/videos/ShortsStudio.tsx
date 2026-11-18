@@ -8,10 +8,14 @@ import {
   ShortAgentSettingsSchema,
   ShortCatalogSchema,
   MAX_SHORT_DURATION_SECONDS,
+  ShortOverlayPresetResponseSchema,
+  ShortOverlaySchema,
   ShortProjectSchema,
   type ShortCropKeyframe,
   type ShortFrameSlot,
   type ShortOverlay,
+  type ShortOverlayPreset,
+  type ShortOverlayPresetLayer,
   type ShortProject,
   type ShortSummary,
 } from "@/lib/schemas/video-short";
@@ -132,6 +136,55 @@ function formatTime(seconds: number): string {
     : `${minutes}:${String(remainder).padStart(2, "0")}`;
 }
 
+function presetLayerToOverlay(
+  layer: ShortOverlayPresetLayer,
+  startSeconds: number,
+  endSeconds: number,
+): ShortOverlay {
+  const base = {
+    id: crypto.randomUUID(),
+    startSeconds,
+    endSeconds,
+    opacity: 1,
+    fontSize: 28,
+    textColor: "#ffffff",
+    backgroundColor: "transparent",
+    borderColor: layer.accentColor,
+    borderWidth: 2,
+    borderRadius: 8,
+    text: layer.text,
+  };
+  const style = {
+    headline: {
+      type: "text" as const, left: 7, top: 10, width: 86, height: 28,
+      fontSize: 42, textStyle: "headline" as const,
+    },
+    "lower-third": {
+      type: "text" as const, left: 5, top: 72, width: 90, height: 20,
+      fontSize: 24, textStyle: "lower-third" as const,
+      backgroundColor: "#101827", borderRadius: 10, opacity: 0.96,
+    },
+    "pill-label": {
+      type: "text" as const, left: 7, top: 8, width: 48, height: 12,
+      fontSize: 16, textStyle: "pill" as const,
+      backgroundColor: "#111827", borderWidth: 1, borderRadius: 100,
+    },
+    "outline-frame": {
+      type: "frame" as const, left: 3, top: 3, width: 94, height: 94,
+      frameStyle: "outline" as const, borderWidth: 2, borderRadius: 12,
+    },
+    "corner-frame": {
+      type: "frame" as const, left: 3, top: 3, width: 94, height: 94,
+      frameStyle: "corner-brackets" as const, borderWidth: 3, borderRadius: 8,
+    },
+    "neon-frame": {
+      type: "frame" as const, left: 3, top: 3, width: 94, height: 94,
+      frameStyle: "neon" as const, borderWidth: 2, borderRadius: 14, opacity: 0.9,
+    },
+  } satisfies Record<ShortOverlayPresetLayer["style"], Record<string, unknown>>;
+  return ShortOverlaySchema.parse({ ...base, ...style[layer.style] });
+}
+
 export default function ShortsStudio() {
   const [videos, setVideos] = useState<Video[]>([]);
   const [shorts, setShorts] = useState<ShortSummary[]>([]);
@@ -143,6 +196,8 @@ export default function ShortsStudio() {
   const [suggestionsVideoId, setSuggestionsVideoId] = useState("");
   const [suggestedBoundaries, setSuggestedBoundaries] = useState<SuggestedBoundaries | null>(null);
   const [agentInstructions, setAgentInstructions] = useState("");
+  const [overlayPresets, setOverlayPresets] = useState<ShortOverlayPreset[]>([]);
+  const [overlayBrief, setOverlayBrief] = useState("");
   const [sermonBoundaryDrafts, setSermonBoundaryDrafts] = useState<Record<string, { start: string; end: string }>>({});
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -193,6 +248,7 @@ export default function ShortsStudio() {
         setVideos(videoCatalog.data.videos);
         setShorts(shortCatalog.data.shorts);
         setAgentInstructions(settings.data.instructions);
+        setOverlayPresets(settings.data.overlayPresets);
       }
     }).catch((loadError: unknown) => {
       if (active) setError(loadError instanceof Error ? loadError.message : "Could not load Shorts Studio.");
@@ -227,14 +283,106 @@ export default function ShortsStudio() {
       const body = await requestJson("/api/ebook/shorts/settings", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ instructions: agentInstructions }),
+        body: JSON.stringify({ instructions: agentInstructions, overlayPresets }),
       });
       const parsed = ShortAgentSettingsSchema.safeParse(body);
       if (!parsed.success) throw new Error("The Shorts agent settings response is invalid.");
       setAgentInstructions(parsed.data.instructions);
+      setOverlayPresets(parsed.data.overlayPresets);
       setNotice("Reusable Shorts agent instructions saved.");
     } catch (settingsError) {
       setError(settingsError instanceof Error ? settingsError.message : "Could not save Shorts agent instructions.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function applyOverlayPreset(preset: ShortOverlayPreset) {
+    if (!project) return;
+    if (project.overlays.length + preset.layers.length > 20) {
+      setError("Remove an overlay layer before applying this preset. Shorts can have up to 20 layers.");
+      return;
+    }
+    const layers = preset.layers.map((layer) =>
+      presetLayerToOverlay(layer, project.startSeconds, project.endSeconds),
+    );
+    updateProject({ overlays: [...project.overlays, ...layers] });
+    setNotice(`${preset.name} applied. Customize its text, color, size, position, and timing below.`);
+    setError("");
+  }
+
+  async function generateOverlayPreset() {
+    if (!project || !overlayBrief.trim()) {
+      setError("Describe the overlay style you want the agent to create.");
+      return;
+    }
+    if (overlayPresets.length >= 20) {
+      setError("The reusable preset library is full. Remove a preset before generating another.");
+      return;
+    }
+    setBusy(true);
+    setError("");
+    setNotice("");
+    try {
+      const body = await requestJson("/api/ebook/shorts/overlays/generate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          brief: overlayBrief,
+          shortTitle: project.title,
+          instructions: agentInstructions,
+        }),
+      });
+      const generated = ShortOverlayPresetResponseSchema.safeParse(body);
+      if (!generated.success) throw new Error("The overlay agent returned an invalid preset.");
+      if (project.overlays.length + generated.data.layers.length > 20) {
+        throw new Error("Remove an overlay layer before applying the generated preset. Shorts can have up to 20 layers.");
+      }
+      const preset: ShortOverlayPreset = { ...generated.data, id: crypto.randomUUID() };
+      const updatedSettings = ShortAgentSettingsSchema.safeParse(await requestJson("/api/ebook/shorts/settings", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          instructions: agentInstructions,
+          overlayPresets: [...overlayPresets, preset],
+        }),
+      }));
+      if (!updatedSettings.success) throw new Error("The generated preset could not be saved in the preset library.");
+      setOverlayPresets(updatedSettings.data.overlayPresets);
+      setProject({
+        ...project,
+        overlays: [
+          ...project.overlays,
+          ...preset.layers.map((layer) =>
+            presetLayerToOverlay(layer, project.startSeconds, project.endSeconds),
+          ),
+        ],
+      });
+      setNotice(`${preset.name} generated, saved for reuse, and applied to this short.`);
+    } catch (presetError) {
+      setError(presetError instanceof Error ? presetError.message : "Could not generate an overlay preset.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function removeOverlayPreset(presetId: string) {
+    const remaining = overlayPresets.filter((preset) => preset.id !== presetId);
+    setBusy(true);
+    setError("");
+    setNotice("");
+    try {
+      const body = await requestJson("/api/ebook/shorts/settings", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ instructions: agentInstructions, overlayPresets: remaining }),
+      });
+      const parsed = ShortAgentSettingsSchema.safeParse(body);
+      if (!parsed.success) throw new Error("The preset library returned invalid settings.");
+      setOverlayPresets(parsed.data.overlayPresets);
+      setNotice("Overlay preset removed from the reusable library. Applied project layers are unchanged.");
+    } catch (presetError) {
+      setError(presetError instanceof Error ? presetError.message : "Could not remove this overlay preset.");
     } finally {
       setBusy(false);
     }
@@ -306,6 +454,10 @@ export default function ShortsStudio() {
       fontSize: 32,
       textColor: "#ffffff",
       backgroundColor: "transparent",
+      textStyle: "plain",
+      borderColor: "#22d3ee",
+      borderWidth: 0,
+      borderRadius: 8,
       text: "Your text",
     };
     updateProject({ overlays: [...project.overlays, overlay] });
@@ -355,6 +507,10 @@ export default function ShortsStudio() {
         fontSize: 32,
         textColor: "#ffffff",
         backgroundColor: "transparent",
+        textStyle: "plain",
+        borderColor: "#22d3ee",
+        borderWidth: 0,
+        borderRadius: 8,
         imageUrl: upload.data.sourceUrl,
       };
       setProject((current) => current
@@ -1369,6 +1525,56 @@ export default function ShortsStudio() {
                       />
                     </label>
                   </div>
+                  <label className="block text-xs text-slate-400">
+                    Describe a modern overlay preset
+                    <textarea
+                      rows={2}
+                      maxLength={1000}
+                      value={overlayBrief}
+                      onChange={(event) => setOverlayBrief(event.target.value)}
+                      placeholder="e.g. refined charcoal and gold sermon title, minimal lower-third, subtle corner frame"
+                      className="mt-1 min-h-12 w-full rounded-lg border border-slate-700 bg-slate-900 p-3 text-base text-white placeholder:text-slate-500"
+                    />
+                  </label>
+                  <button
+                    type="button"
+                    onClick={() => void generateOverlayPreset()}
+                    disabled={busy || !overlayBrief.trim() || overlayPresets.length >= 20}
+                    className="min-h-12 rounded-lg bg-fuchsia-500 px-4 text-sm font-bold text-white disabled:opacity-50"
+                  >
+                    {busy ? "Generating overlay preset…" : "Generate & apply AI preset"}
+                  </button>
+                  {overlayPresets.length > 0 && (
+                    <div className="space-y-2">
+                      <p className="text-xs font-semibold text-slate-300">Reusable presets · {overlayPresets.length}/20</p>
+                      <ul className="grid gap-2 sm:grid-cols-2">
+                        {overlayPresets.map((preset) => (
+                          <li key={preset.id} className="rounded-lg border border-slate-800 bg-slate-900 p-3">
+                            <h5 className="text-sm font-semibold text-white">{preset.name}</h5>
+                            <p className="mt-1 text-xs leading-relaxed text-slate-400">{preset.description}</p>
+                            <div className="mt-2 flex flex-wrap gap-2">
+                              <button
+                                type="button"
+                                onClick={() => applyOverlayPreset(preset)}
+                                disabled={busy || project.overlays.length + preset.layers.length > 20}
+                                className="min-h-12 rounded-lg border border-fuchsia-700 px-3 text-xs font-semibold text-fuchsia-100 disabled:opacity-50"
+                              >
+                                Apply preset
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => void removeOverlayPreset(preset.id)}
+                                disabled={busy}
+                                className="min-h-12 rounded-lg border border-slate-700 px-3 text-xs font-semibold text-slate-300 disabled:opacity-50"
+                              >
+                                Remove preset
+                              </button>
+                            </div>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
                   {project.overlays.length === 0 ? (
                     <p className="text-xs text-slate-500">No overlays added yet. Image uploads are stored for use in published shorts.</p>
                   ) : (
@@ -1425,13 +1631,73 @@ export default function ShortsStudio() {
                                     min="8"
                                     max="96"
                                     value={overlay.fontSize}
-                                    onChange={(event) => updateOverlay(overlay.id, { fontSize: Number(event.target.value) })}
+                                    onChange={(event) => {
+                                      const size = Number(event.target.value);
+                                      if (Number.isFinite(size)) updateOverlay(overlay.id, { fontSize: Math.max(8, Math.min(96, size)) });
+                                    }}
                                     className="mt-1 min-h-12 w-full rounded-lg border border-slate-700 bg-slate-900 px-3 text-base text-white"
                                   />
                                 </label>
                               </div>
                             </>
                           )}
+                          {overlay.type === "frame" && !overlay.imageUrl && (
+                            <label className="block text-xs text-slate-400">
+                              Frame style
+                              <select
+                                value={overlay.frameStyle ?? "outline"}
+                                onChange={(event) => updateOverlay(overlay.id, {
+                                  frameStyle: event.target.value as ShortOverlay["frameStyle"],
+                                })}
+                                className="mt-1 min-h-12 w-full rounded-lg border border-slate-700 bg-slate-900 px-3 text-base text-white"
+                              >
+                                <option value="outline">Fine outline</option>
+                                <option value="corner-brackets">Corner brackets</option>
+                                <option value="neon">Soft neon</option>
+                              </select>
+                            </label>
+                          )}
+                          <div className="grid gap-3 sm:grid-cols-3">
+                            <label className="text-xs text-slate-400">
+                              Accent / border color
+                              <input
+                                type="color"
+                                value={overlay.borderColor}
+                                onChange={(event) => updateOverlay(overlay.id, { borderColor: event.target.value })}
+                                className="mt-1 h-12 w-full rounded-lg border border-slate-700 bg-slate-900 p-1"
+                              />
+                            </label>
+                            <label className="text-xs text-slate-400">
+                              Border width
+                              <input
+                                type="number"
+                                min="0"
+                                max="12"
+                                step="1"
+                                value={overlay.borderWidth}
+                                onChange={(event) => {
+                                  const width = Number(event.target.value);
+                                  if (Number.isFinite(width)) updateOverlay(overlay.id, { borderWidth: Math.max(0, Math.min(12, width)) });
+                                }}
+                                className="mt-1 min-h-12 w-full rounded-lg border border-slate-700 bg-slate-900 px-3 text-base text-white"
+                              />
+                            </label>
+                            <label className="text-xs text-slate-400">
+                              Corner radius
+                              <input
+                                type="number"
+                                min="0"
+                                max="100"
+                                step="1"
+                                value={overlay.borderRadius}
+                                onChange={(event) => {
+                                  const radius = Number(event.target.value);
+                                  if (Number.isFinite(radius)) updateOverlay(overlay.id, { borderRadius: Math.max(0, Math.min(100, radius)) });
+                                }}
+                                className="mt-1 min-h-12 w-full rounded-lg border border-slate-700 bg-slate-900 px-3 text-base text-white"
+                              />
+                            </label>
+                          </div>
                           <div className="grid gap-2 sm:grid-cols-2">
                             {([
                               ["startSeconds", "Show from (seconds)", project.startSeconds, project.endSeconds],
