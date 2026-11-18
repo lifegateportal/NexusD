@@ -388,8 +388,8 @@ export default function ShortsPlayer({
     : {
       aspectRatio: activeSlot.aspectRatio.replace(":", "/"),
       ...(compactPreview ? {
-        "--preview-width-mobile": `${ratio * 52}dvh`,
-        "--preview-width-desktop": `${ratio * 66}dvh`,
+        "--preview-width-mobile": `${ratio * 34}dvh`,
+        "--preview-width-desktop": `${ratio * 60}dvh`,
       } : {}),
     };
 

@@ -1184,37 +1184,38 @@ export default function ShortsStudio() {
         ) : (
           <section
             ref={editorRef}
-            className="fixed inset-0 z-[70] flex h-dvh flex-col gap-3 overflow-hidden bg-slate-950 p-3 pb-20 lg:pb-3"
+            className="fixed inset-0 z-[70] flex h-dvh flex-col gap-2 overflow-hidden bg-slate-950 p-2 pt-[max(env(safe-area-inset-top),0.5rem)] pb-[max(env(safe-area-inset-bottom),0.5rem)] sm:gap-3 sm:p-3 lg:pb-3"
           >
-            <div className="flex shrink-0 flex-col gap-3 border-b border-slate-800 pb-3 sm:flex-row sm:items-center sm:justify-between">
-              <div>
-                <h3 className="text-lg font-bold text-white">Editing: {project.title}</h3>
-                <p className="mt-1 text-xs text-slate-400">{project.status} · {formatTime(currentTime)} · frame {activeSlot?.aspectRatio ?? "9:16"}</p>
+            <div className="flex shrink-0 flex-col gap-2 border-b border-slate-800 pb-2 sm:gap-3 sm:pb-3 lg:flex-row lg:items-center lg:justify-between">
+              <div className="min-w-0">
+                <h3 className="truncate text-base font-bold text-white sm:text-lg">Editing: {project.title}</h3>
+                <p className="mt-1 truncate text-xs text-slate-400">{project.status} · {formatTime(currentTime)} · frame {activeSlot?.aspectRatio ?? "9:16"}</p>
               </div>
-              <div className="flex flex-wrap gap-2">
+              <div className="flex w-full shrink-0 gap-2 overflow-x-auto lg:w-auto">
                 <button
                   type="button"
                   onClick={() => setProject(null)}
-                  className="min-h-12 rounded-xl border border-slate-700 px-4 text-sm font-semibold text-slate-200"
+                  className="flex min-h-12 min-w-0 flex-1 items-center justify-center whitespace-nowrap rounded-xl border border-slate-700 px-2 text-xs font-semibold text-slate-200 sm:px-4 sm:text-sm lg:flex-none"
                 >
-                  Close editor
+                  <span className="sm:hidden">Close</span><span className="hidden sm:inline">Close editor</span>
                 </button>
-                <button type="button" onClick={saveDraft} disabled={busy} className="min-h-12 rounded-xl border border-slate-700 px-4 text-sm font-semibold text-white disabled:opacity-50">
-                  Save draft
+                <button type="button" onClick={saveDraft} disabled={busy} className="flex min-h-12 min-w-0 flex-1 items-center justify-center whitespace-nowrap rounded-xl border border-slate-700 px-2 text-xs font-semibold text-white disabled:opacity-50 sm:px-4 sm:text-sm lg:flex-none">
+                  <span className="sm:hidden">Save</span><span className="hidden sm:inline">Save draft</span>
                 </button>
-                <button type="button" onClick={publishProject} disabled={busy} className="min-h-12 rounded-xl bg-emerald-400 px-4 text-sm font-bold text-slate-950 disabled:opacity-50">
-                  {busy ? "Publishing…" : project.status === "published" ? "Update published short" : "Publish to Library"}
+                <button type="button" onClick={publishProject} disabled={busy} className="flex min-h-12 min-w-0 flex-1 items-center justify-center whitespace-nowrap rounded-xl bg-emerald-400 px-2 text-xs font-bold text-slate-950 disabled:opacity-50 sm:px-4 sm:text-sm lg:flex-none">
+                  <span className="sm:hidden">{busy ? "…" : project.status === "published" ? "Update" : "Publish"}</span>
+                  <span className="hidden sm:inline">{busy ? "Publishing…" : project.status === "published" ? "Update published short" : "Publish to Library"}</span>
                 </button>
                 {project.status === "published" && (
-                  <button type="button" onClick={unpublishProject} disabled={busy} className="min-h-12 rounded-xl border border-amber-800 px-4 text-sm font-semibold text-amber-200 disabled:opacity-50">
+                  <button type="button" onClick={unpublishProject} disabled={busy} className="flex min-h-12 min-w-0 flex-1 items-center justify-center whitespace-nowrap rounded-xl border border-amber-800 px-2 text-xs font-semibold text-amber-200 disabled:opacity-50 sm:px-4 sm:text-sm lg:flex-none">
                     Unpublish
                   </button>
                 )}
               </div>
             </div>
 
-            <div className="grid min-h-0 flex-1 grid-cols-1 grid-rows-[minmax(0,62dvh)_minmax(0,1fr)] gap-3 overflow-hidden lg:grid-cols-[minmax(0,1fr)_minmax(20rem,0.82fr)] lg:grid-rows-1">
-              <div className="flex min-h-0 items-center justify-center overflow-hidden rounded-2xl border border-slate-800 bg-slate-900/60 p-2">
+            <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-hidden lg:grid lg:grid-cols-[minmax(0,1fr)_minmax(20rem,0.82fr)] lg:grid-rows-1 lg:gap-3">
+              <div className="flex h-[43dvh] shrink-0 items-center justify-center overflow-hidden rounded-2xl border border-slate-800 bg-slate-900/60 p-1.5 sm:h-[44dvh] sm:p-2 lg:h-auto lg:min-h-0 lg:shrink">
                 <ShortsPlayer
                   project={project}
                   localVideoUrl={localVideoUrl}
@@ -1225,7 +1226,7 @@ export default function ShortsStudio() {
                 />
               </div>
 
-              <div className="min-h-0 space-y-3 overflow-y-auto overscroll-contain rounded-2xl border border-slate-800 bg-slate-900/60 p-3 sm:p-4">
+              <div className="min-h-0 flex-1 space-y-3 overflow-x-hidden overflow-y-auto overscroll-contain rounded-2xl border border-slate-800 bg-slate-900/60 p-3 [touch-action:pan-y] sm:p-4 lg:flex-none" style={{ WebkitOverflowScrolling: "touch" }}>
                 <details open className="space-y-3 rounded-xl border border-slate-700 bg-slate-950/70 p-3">
                   <summary className="flex min-h-12 cursor-pointer items-center text-sm font-bold text-cyan-100">
                     Clip timing and framing
