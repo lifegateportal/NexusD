@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, PointerEvent } from "react";
-import type { ShortProject, ShortCropKeyframe, ShortFrameSlot } from "@/lib/schemas/video-short";
+import type { ShortProject, ShortCropKeyframe, ShortFrameSlot, ShortOverlay } from "@/lib/schemas/video-short";
 import { buildTimedCaptionCues } from "@/lib/short-caption-cues";
 
 type YouTubePlayerInstance = {
@@ -38,6 +38,8 @@ type Props = {
   compactPreview?: boolean;
   onTimeChange?: (seconds: number) => void;
   onCropChange?: (timeSeconds: number, x: number, y: number, zoom: number, fit: ShortCropKeyframe["fit"]) => void;
+  onOverlayChange?: (id: string, patch: Partial<ShortOverlay>) => void;
+  embedMode?: boolean;
 };
 
 type PreviewStyle = CSSProperties & {
@@ -119,20 +121,37 @@ export default function ShortsPlayer({
   compactPreview = false,
   onTimeChange,
   onCropChange,
+  onOverlayChange,
+  embedMode = false,
 }: Props) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const youtubeHostRef = useRef<HTMLDivElement>(null);
   const youtubePlayerRef = useRef<YouTubePlayerInstance | null>(null);
   const fullscreenContainerRef = useRef<HTMLDivElement>(null);
+  const stageRef = useRef<HTMLDivElement>(null);
   const brollVideoRefs = useRef(new Map<string, HTMLVideoElement>());
   const musicTrackRefs = useRef(new Map<string, HTMLAudioElement>());
   const musicTrackIdsRef = useRef(new Set(project.musicTracks.map((track) => track.id)));
   const requireUserPlayAfterMusicAddRef = useRef(false);
+  const overlayDragRef = useRef<{
+    id: string;
+    mode: "move" | "resize";
+    clientX: number;
+    clientY: number;
+    stageWidth: number;
+    stageHeight: number;
+    left: number;
+    top: number;
+    width: number;
+    height: number;
+  } | null>(null);
   const timeCallbackRef = useRef(onTimeChange);
   const dragRef = useRef<{ x: number; y: number; clientX: number; clientY: number; width: number; height: number } | null>(null);
   const [currentTime, setCurrentTime] = useState(project.startSeconds);
   const [duration, setDuration] = useState(project.endSeconds);
   const [playing, setPlaying] = useState(false);
+  const [hasStarted, setHasStarted] = useState(false);
+  const [youtubeReady, setYoutubeReady] = useState(false);
   const [playerError, setPlayerError] = useState("");
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [fullscreenControlsVisible, setFullscreenControlsVisible] = useState(true);
@@ -149,6 +168,9 @@ export default function ShortsPlayer({
   const videoUrl = project.source.type === "upload"
     ? localVideoUrl || project.source.sourceUrl || null
     : null;
+  const sourceIdentity = project.source.type === "youtube"
+    ? project.source.videoId
+    : project.source.sourceUrl ?? "";
   const timedCaptions = useMemo(() => buildTimedCaptionCues(project.captions), [project.captions]);
   const activeTimedCaption = timedCaptions.find((caption) =>
     currentTime >= caption.startSeconds && currentTime < caption.endSeconds,
@@ -161,6 +183,10 @@ export default function ShortsPlayer({
     setCurrentTime(project.startSeconds);
     setDuration(project.endSeconds);
   }, [project.startSeconds, project.endSeconds]);
+
+  useEffect(() => {
+    setHasStarted(false);
+  }, [project.slug, project.thumbnailUrl, sourceIdentity]);
 
   useEffect(() => {
     const updateFullscreen = () => {
@@ -184,6 +210,7 @@ export default function ShortsPlayer({
   }, [fullscreenControlsVisible, isFullscreen, playing]);
 
   useEffect(() => {
+    setYoutubeReady(false);
     if (project.source.type !== "youtube") return;
     let timer: number | undefined;
     let disposed = false;
@@ -210,6 +237,8 @@ export default function ShortsPlayer({
         },
         events: {
           onReady: () => {
+            if (disposed) return;
+            setYoutubeReady(true);
             const player = youtubePlayerRef.current;
             if (player) {
               const iframe = player.getIframe();
@@ -368,6 +397,7 @@ export default function ShortsPlayer({
   function togglePlayback() {
     setPlayerError("");
     const nextPlaying = !playing;
+    if (nextPlaying && project.source.type === "youtube" && !youtubeReady) return;
     if (nextPlaying) requireUserPlayAfterMusicAddRef.current = false;
     const playbackTime = !playing && currentTime >= project.endSeconds
       ? project.startSeconds
@@ -375,7 +405,10 @@ export default function ShortsPlayer({
     if (project.source.type === "youtube") {
       if (!playing && currentTime >= project.endSeconds) seek(project.startSeconds);
       if (playing) youtubePlayerRef.current?.pauseVideo();
-      else youtubePlayerRef.current?.playVideo();
+      else {
+        setHasStarted(true);
+        youtubePlayerRef.current?.playVideo();
+      }
       syncAuxiliaryMedia(playbackTime, nextPlaying);
       setPlaying(nextPlaying);
       return;
@@ -383,7 +416,10 @@ export default function ShortsPlayer({
     if (!videoRef.current) return;
     if (!playing && currentTime >= project.endSeconds) seek(project.startSeconds);
     if (playing) videoRef.current.pause();
-    else void videoRef.current.play();
+    else {
+      setHasStarted(true);
+      void videoRef.current.play();
+    }
     syncAuxiliaryMedia(playbackTime, nextPlaying);
     setPlaying(nextPlaying);
   }
@@ -443,6 +479,22 @@ export default function ShortsPlayer({
     }
   }
 
+  async function copyEmbedLink() {
+    const url = new URL(
+      `/library/shorts/${encodeURIComponent(project.slug)}/embed`,
+      window.location.origin,
+    ).toString();
+    setShareError("");
+    setShareStatus("");
+    try {
+      if (!navigator.clipboard?.writeText) throw new Error("Clipboard access is unavailable in this browser.");
+      await navigator.clipboard.writeText(url);
+      setShareStatus("Player link copied. Paste it where embedded players are supported.");
+    } catch (error) {
+      setShareError(error instanceof Error ? error.message : "Could not copy the player link.");
+    }
+  }
+
   function onPointerDown(event: PointerEvent<HTMLDivElement>) {
     if (!editable || !onCropChange) return;
     const bounds = event.currentTarget.getBoundingClientRect();
@@ -455,6 +507,50 @@ export default function ShortsPlayer({
       height: bounds.height,
     };
     event.currentTarget.setPointerCapture(event.pointerId);
+  }
+
+  function startOverlayDrag(
+    event: PointerEvent<HTMLDivElement | HTMLButtonElement>,
+    overlay: ShortOverlay,
+    mode: "move" | "resize",
+  ) {
+    if (!editable || isFullscreen || !onOverlayChange) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const stage = stageRef.current;
+    const bounds = stage?.getBoundingClientRect();
+    if (!stage || !bounds || bounds.width <= 0 || bounds.height <= 0) return;
+    overlayDragRef.current = {
+      id: overlay.id,
+      mode,
+      clientX: event.clientX,
+      clientY: event.clientY,
+      stageWidth: bounds.width,
+      stageHeight: bounds.height,
+      left: overlay.left,
+      top: overlay.top,
+      width: overlay.width,
+      height: overlay.height,
+    };
+    stage.setPointerCapture(event.pointerId);
+  }
+
+  function moveOverlayDrag(event: PointerEvent<HTMLDivElement>) {
+    const drag = overlayDragRef.current;
+    if (!drag || !onOverlayChange) return;
+    const deltaX = (event.clientX - drag.clientX) / drag.stageWidth * 100;
+    const deltaY = (event.clientY - drag.clientY) / drag.stageHeight * 100;
+    if (drag.mode === "move") {
+      onOverlayChange(drag.id, {
+        left: Math.max(0, Math.min(100 - drag.width, drag.left + deltaX)),
+        top: Math.max(0, Math.min(100 - drag.height, drag.top + deltaY)),
+      });
+      return;
+    }
+    onOverlayChange(drag.id, {
+      width: Math.max(1, Math.min(100 - drag.left, drag.width + deltaX)),
+      height: Math.max(1, Math.min(100 - drag.top, drag.height + deltaY)),
+    });
   }
 
   function onPointerMove(event: PointerEvent<HTMLDivElement>) {
@@ -534,14 +630,18 @@ export default function ShortsPlayer({
     }
     : {
       aspectRatio: activeSlot.aspectRatio.replace(":", "/"),
+      ...(embedMode ? {
+        width: `min(100vw, ${ratio * 80}dvh)`,
+      } : {}),
       ...(compactPreview ? {
         "--preview-width-mobile": `${ratio * 34}dvh`,
         "--preview-width-desktop": `${ratio * 60}dvh`,
       } : {}),
     };
+  const sourceReady = project.source.type === "youtube" ? youtubeReady : Boolean(videoUrl);
 
   return (
-    <div className={compactPreview ? "flex w-full flex-col items-center" : "w-full"}>
+    <div className={compactPreview || embedMode ? "flex w-full flex-col items-center" : "w-full"}>
       <div
         ref={fullscreenContainerRef}
         className={`relative touch-none overflow-hidden bg-black ${
@@ -555,6 +655,7 @@ export default function ShortsPlayer({
         aria-label={editable && !isFullscreen ? "Drag the video to adjust its crop" : undefined}
       >
         <div
+          ref={stageRef}
           className="relative h-full w-full overflow-hidden bg-black"
           style={{
             containerType: "inline-size",
@@ -563,6 +664,9 @@ export default function ShortsPlayer({
               height: `min(100dvh, ${100 / ratio}vw)`,
             } : {}),
           }}
+          onPointerMove={moveOverlayDrag}
+          onPointerUp={() => { overlayDragRef.current = null; }}
+          onPointerCancel={() => { overlayDragRef.current = null; }}
         >
           {project.source.type === "youtube" ? (
             <div
@@ -695,19 +799,38 @@ export default function ShortsPlayer({
               );
             }
             if (overlay.imageUrl) {
+              const canDragImage = editable && !isFullscreen && Boolean(onOverlayChange);
               return (
                 <div
                   key={overlay.id}
-                  className="pointer-events-none absolute z-10 overflow-hidden"
+                  className={`absolute z-10 overflow-hidden ${canDragImage ? "cursor-move touch-none" : "pointer-events-none"}`}
                   style={positionStyle}
+                  onPointerDown={canDragImage ? (event) => startOverlayDrag(event, overlay, "move") : undefined}
+                  role={canDragImage ? "group" : undefined}
+                  aria-label={canDragImage ? "Drag image overlay to reposition" : undefined}
                 >
                   {/* eslint-disable-next-line @next/next/no-img-element */}
                   <img
                     src={overlay.imageUrl}
                     alt=""
                     className="h-full w-full"
-                    style={{ objectFit: overlay.type === "frame" ? "fill" : "contain" }}
+                    draggable={false}
+                    style={{
+                      objectFit: overlay.type === "frame" ? "fill" : overlay.imageFit ?? "contain",
+                      pointerEvents: "none",
+                    }}
                   />
+                  {canDragImage && (
+                    <button
+                      type="button"
+                      onPointerDown={(event) => startOverlayDrag(event, overlay, "resize")}
+                      aria-label="Drag to resize image overlay"
+                      title="Drag to resize"
+                      className="absolute bottom-0 right-0 flex min-h-12 min-w-12 items-end justify-end rounded-tl-lg bg-black/70 p-2"
+                    >
+                      <span className="h-4 w-4 rounded-sm border-b-2 border-r-2 border-white" />
+                    </button>
+                  )}
                 </div>
               );
             }
@@ -744,6 +867,22 @@ export default function ShortsPlayer({
               </div>
             );
           })}
+          {!editable && !hasStarted && project.thumbnailUrl && (
+            <button
+              type="button"
+              onPointerDown={(event) => event.stopPropagation()}
+              onClick={togglePlayback}
+              disabled={!sourceReady}
+              aria-label={`Play ${project.title}`}
+              className="absolute inset-0 z-[80] flex items-center justify-center overflow-hidden bg-black disabled:cursor-not-allowed"
+            >
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img src={project.thumbnailUrl} alt="" className="absolute inset-0 h-full w-full object-cover" />
+              <span className="relative flex min-h-12 min-w-12 items-center justify-center rounded-full bg-cyan-500 px-5 text-sm font-bold text-white shadow-lg">
+                {project.source.type === "youtube" && !youtubeReady ? "Loading…" : "Play"}
+              </span>
+            </button>
+          )}
           {isFullscreen && !fullscreenControlsVisible && (
             <button
               type="button"
@@ -774,7 +913,7 @@ export default function ShortsPlayer({
                 type="button"
                 onPointerDown={(event) => event.stopPropagation()}
                 onClick={togglePlayback}
-                disabled={project.source.type === "upload" && !videoUrl}
+                disabled={!sourceReady}
                 aria-label={playing ? "Pause preview" : "Play preview"}
                 className="min-h-12 min-w-12 rounded-lg bg-black/75 px-3 text-sm font-bold text-white disabled:opacity-40"
               >
@@ -794,7 +933,7 @@ export default function ShortsPlayer({
         <button
           type="button"
           onClick={togglePlayback}
-          disabled={project.source.type === "upload" && !videoUrl}
+          disabled={!sourceReady}
           className="min-h-12 min-w-12 rounded-lg border border-slate-700 px-3 text-sm font-bold text-white disabled:opacity-40"
           aria-label={playing ? "Pause preview" : "Play preview"}
         >
@@ -812,7 +951,7 @@ export default function ShortsPlayer({
         />
         <span className="min-w-16 text-right text-xs tabular-nums text-slate-400">{formatTime(currentTime)}</span>
       </div>
-      {project.status === "published" && !compactPreview && (
+      {project.status === "published" && !compactPreview && !embedMode && (
         <div className="mt-2">
           <button
             type="button"
@@ -821,11 +960,18 @@ export default function ShortsPlayer({
           >
             Share short
           </button>
+          <button
+            type="button"
+            onClick={() => void copyEmbedLink()}
+            className="ml-2 min-h-12 rounded-lg border border-cyan-900 px-4 text-sm font-semibold text-cyan-100"
+          >
+            Copy player link
+          </button>
           {shareStatus && <p role="status" className="mt-2 text-xs text-emerald-300">{shareStatus}</p>}
           {shareError && <p role="alert" className="mt-2 text-xs text-rose-300">{shareError}</p>}
         </div>
       )}
-      {project.source.type === "youtube" && !compactPreview && (
+      {project.source.type === "youtube" && !compactPreview && !embedMode && (
         <a
           href={`https://www.youtube.com/watch?v=${project.source.videoId}`}
           target="_blank"

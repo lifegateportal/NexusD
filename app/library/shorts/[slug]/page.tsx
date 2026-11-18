@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import { headers } from "next/headers";
 import { notFound } from "next/navigation";
 import ShortsPlayer from "@/app/components/ShortsPlayer";
 import LibraryNav from "../../LibraryNav";
@@ -10,6 +11,26 @@ export const runtime = "nodejs";
 
 type Props = { params: Promise<{ slug: string }> };
 
+async function getRequestOrigin(): Promise<string | undefined> {
+  const requestHeaders = await headers();
+  const host = (requestHeaders.get("x-forwarded-host") ?? requestHeaders.get("host"))
+    ?.split(",")[0]
+    ?.trim();
+  const protocol = (requestHeaders.get("x-forwarded-proto") ?? "https")
+    .split(",")[0]
+    .trim();
+  const port = host?.match(/:(\d+)$/)?.[1];
+  if (
+    !host
+    || !/^[a-z0-9.-]+(?::\d{1,5})?$/i.test(host)
+    || (port !== undefined && Number(port) > 65535)
+    || !["http", "https"].includes(protocol)
+  ) {
+    return undefined;
+  }
+  return `${protocol}://${host}`;
+}
+
 export async function generateMetadata({ params }: Props): Promise<Metadata> {
   const { slug } = await params;
   if (!/^[a-z0-9][a-z0-9-]{0,79}$/.test(slug)) {
@@ -19,21 +40,39 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
   const title = project ? `${project.title} | Nexus Library` : "Video Short | Nexus Library";
   const description = project?.description || "A transcript-captioned video short from Nexus Library.";
   const thumbnailUrl = project ? getShortThumbnailUrl(project) : undefined;
+  const requestOrigin = project ? await getRequestOrigin() : undefined;
+  const playerUrl = project && requestOrigin
+    ? new URL(`/library/shorts/${encodeURIComponent(project.slug)}/embed`, requestOrigin).toString()
+    : undefined;
+  const [aspectWidth, aspectHeight] = (project?.frameSlots[0]?.aspectRatio ?? "9:16")
+    .split(":")
+    .map(Number);
+  const videoWidth = 720;
+  const videoHeight = Math.round(videoWidth * aspectHeight / aspectWidth);
   return {
     title,
     description,
-    ...(thumbnailUrl && project ? {
+    ...(project ? {
       openGraph: {
         title,
         description,
-        type: "website" as const,
-        images: [{ url: thumbnailUrl, alt: project.title }],
+        type: playerUrl ? "video.other" as const : "website" as const,
+        ...(playerUrl ? {
+          videos: [{
+            url: playerUrl,
+            secureUrl: playerUrl,
+            type: "text/html",
+            width: videoWidth,
+            height: videoHeight,
+          }],
+        } : {}),
+        ...(thumbnailUrl ? { images: [{ url: thumbnailUrl, alt: project.title }] } : {}),
       },
       twitter: {
-        card: "summary_large_image" as const,
+        card: thumbnailUrl ? "summary_large_image" as const : "summary" as const,
         title,
         description,
-        images: [thumbnailUrl],
+        ...(thumbnailUrl ? { images: [thumbnailUrl] } : {}),
       },
     } : {}),
   };

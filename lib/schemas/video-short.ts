@@ -58,6 +58,7 @@ export const ShortOverlaySchema = z.object({
   zIndex: z.number().int().min(0).max(100).default(60),
   text: z.string().trim().max(300).optional(),
   imageUrl: z.string().url().optional(),
+  imageFit: z.enum(["contain", "cover"]).optional(),
 }).strict().superRefine((overlay, context) => {
   if (overlay.endSeconds <= overlay.startSeconds) {
     context.addIssue({ code: z.ZodIssueCode.custom, path: ["endSeconds"], message: "Overlay end must be after its start." });

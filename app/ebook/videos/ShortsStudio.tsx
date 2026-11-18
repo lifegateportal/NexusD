@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import type { PointerEvent } from "react";
 import { z } from "zod";
 import ShortsPlayer from "@/app/components/ShortsPlayer";
 import { deleteShortSource, getShortSource, saveShortSource } from "@/lib/short-video-store";
@@ -66,6 +67,15 @@ type SuggestedBoundaries = Pick<
   z.infer<typeof SuggestionResponseSchema>,
   "videoStartSeconds" | "videoEndSeconds" | "sermonStartSeconds" | "sermonEndSeconds"
 >;
+type OverlayTimelineAction = "start" | "move" | "end";
+type OverlayTimelineDrag = {
+  id: string;
+  action: OverlayTimelineAction;
+  clientX: number;
+  trackWidth: number;
+  startSeconds: number;
+  endSeconds: number;
+};
 
 async function requestJson(url: string, init?: RequestInit): Promise<unknown> {
   const response = await fetch(url, init);
@@ -282,6 +292,7 @@ export default function ShortsStudio() {
   const [scrollEditorOnUpdate, setScrollEditorOnUpdate] = useState(false);
   const localFileRef = useRef<File | null>(null);
   const editorRef = useRef<HTMLElement>(null);
+  const overlayTimelineDragRef = useRef<OverlayTimelineDrag | null>(null);
 
   const selectedVideo = useMemo(
     () => videos.find((video) => video.videoId === (project?.sourceVideoId ?? selectedVideoId)),
@@ -906,6 +917,80 @@ export default function ShortsStudio() {
         overlay.id === id ? { ...overlay, ...patch } : overlay,
       ),
     });
+  }
+
+  function setImageOverlayPlacement(id: string, edge: "intro" | "outro") {
+    if (!project) return;
+    const overlay = project.overlays.find((item) => item.id === id);
+    if (!overlay?.imageUrl) return;
+    const duration = Math.min(3, project.endSeconds - project.startSeconds);
+    const startSeconds = edge === "intro" ? project.startSeconds : project.endSeconds - duration;
+    const endSeconds = edge === "intro" ? project.startSeconds + duration : project.endSeconds;
+    updateOverlay(id, {
+      startSeconds,
+      endSeconds,
+      left: 0,
+      top: 0,
+      width: 100,
+      height: 100,
+      imageFit: "cover",
+      zIndex: 100,
+    });
+    setNotice(`Image set as a full-frame ${edge} for ${duration.toFixed(1)} seconds. Drag the timeline handles to adjust its duration.`);
+    setError("");
+  }
+
+  function startOverlayTimelineDrag(event: PointerEvent<HTMLDivElement>, id: string) {
+    if (!project) return;
+    const target = event.target instanceof HTMLElement
+      ? event.target.closest<HTMLElement>("[data-overlay-range-action]")
+      : null;
+    const action = target?.dataset.overlayRangeAction;
+    const overlay = project.overlays.find((item) => item.id === id);
+    const bounds = event.currentTarget.getBoundingClientRect();
+    if (
+      !overlay
+      || (action !== "start" && action !== "move" && action !== "end")
+      || bounds.width <= 0
+    ) return;
+    event.preventDefault();
+    overlayTimelineDragRef.current = {
+      id,
+      action,
+      clientX: event.clientX,
+      trackWidth: bounds.width,
+      startSeconds: overlay.startSeconds,
+      endSeconds: overlay.endSeconds,
+    };
+    event.currentTarget.setPointerCapture(event.pointerId);
+  }
+
+  function moveOverlayTimeline(event: PointerEvent<HTMLDivElement>) {
+    const drag = overlayTimelineDragRef.current;
+    if (!drag || !project) return;
+    const projectDuration = project.endSeconds - project.startSeconds;
+    const delta = (event.clientX - drag.clientX) / drag.trackWidth * projectDuration;
+    const originalDuration = drag.endSeconds - drag.startSeconds;
+    let startSeconds = drag.startSeconds;
+    let endSeconds = drag.endSeconds;
+    if (drag.action === "move") {
+      startSeconds = Math.max(
+        project.startSeconds,
+        Math.min(project.endSeconds - originalDuration, drag.startSeconds + delta),
+      );
+      endSeconds = startSeconds + originalDuration;
+    } else if (drag.action === "start") {
+      startSeconds = Math.max(
+        project.startSeconds,
+        Math.min(drag.endSeconds - 0.1, drag.startSeconds + delta),
+      );
+    } else {
+      endSeconds = Math.min(
+        project.endSeconds,
+        Math.max(drag.startSeconds + 0.1, drag.endSeconds + delta),
+      );
+    }
+    updateOverlay(drag.id, { startSeconds, endSeconds });
   }
 
   function changeOverlayNumber(id: string, field: "startSeconds" | "endSeconds" | "left" | "top" | "width" | "height", value: string) {
@@ -1589,6 +1674,7 @@ export default function ShortsStudio() {
                   compactPreview
                   onTimeChange={setCurrentTime}
                   onCropChange={setKeyframe}
+                  onOverlayChange={updateOverlay}
                 />
               </div>
 
@@ -2672,6 +2758,42 @@ export default function ShortsStudio() {
                               </select>
                             </label>
                           )}
+                          {overlay.type === "image" && overlay.imageUrl && (
+                            <div className="space-y-2 rounded-lg border border-slate-800 bg-slate-900/70 p-3">
+                              <p className="text-xs leading-relaxed text-slate-400">
+                                Drag the image in the preview to position it, or drag its bottom-right handle to resize.
+                              </p>
+                              <div className="flex flex-wrap gap-2">
+                                <button
+                                  type="button"
+                                  onClick={() => setImageOverlayPlacement(overlay.id, "intro")}
+                                  className="min-h-12 rounded-lg border border-fuchsia-800 px-3 text-xs font-semibold text-fuchsia-100"
+                                >
+                                  Use as intro (up to 3 sec)
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => setImageOverlayPlacement(overlay.id, "outro")}
+                                  className="min-h-12 rounded-lg border border-fuchsia-800 px-3 text-xs font-semibold text-fuchsia-100"
+                                >
+                                  Use as ending (up to 3 sec)
+                                </button>
+                              </div>
+                              <label className="block text-xs text-slate-400">
+                                Image fit
+                                <select
+                                  value={overlay.imageFit ?? "contain"}
+                                  onChange={(event) => updateOverlay(overlay.id, {
+                                    imageFit: event.target.value === "cover" ? "cover" : "contain",
+                                  })}
+                                  className="mt-1 min-h-12 w-full rounded-lg border border-slate-700 bg-slate-900 px-3 text-base text-white"
+                                >
+                                  <option value="contain">Fit whole image</option>
+                                  <option value="cover">Fill box (crop edges)</option>
+                                </select>
+                              </label>
+                            </div>
+                          )}
                           <div className="grid gap-3 sm:grid-cols-3">
                             <label className="text-xs text-slate-400">
                               Accent / border color
@@ -2712,6 +2834,60 @@ export default function ShortsStudio() {
                                 className="mt-1 min-h-12 w-full rounded-lg border border-slate-700 bg-slate-900 px-3 text-base text-white"
                               />
                             </label>
+                          </div>
+                          <div className="space-y-1">
+                            <p className="text-xs text-slate-400">
+                              Timeline · {formatTime(overlay.startSeconds)}–{formatTime(overlay.endSeconds)}. Drag the bar to move it; drag either end to trim.
+                            </p>
+                            <div
+                              className="relative h-12 touch-none select-none rounded-lg bg-slate-800"
+                              onPointerDown={(event) => startOverlayTimelineDrag(event, overlay.id)}
+                              onPointerMove={moveOverlayTimeline}
+                              onPointerUp={() => { overlayTimelineDragRef.current = null; }}
+                              onPointerCancel={() => { overlayTimelineDragRef.current = null; }}
+                              onLostPointerCapture={() => { overlayTimelineDragRef.current = null; }}
+                            >
+                              <div
+                                className="pointer-events-none absolute inset-y-2 rounded bg-fuchsia-500/60"
+                                style={{
+                                  left: `${(overlay.startSeconds - project.startSeconds) / (project.endSeconds - project.startSeconds) * 100}%`,
+                                  width: `${(overlay.endSeconds - overlay.startSeconds) / (project.endSeconds - project.startSeconds) * 100}%`,
+                                }}
+                              />
+                              <button
+                                type="button"
+                                data-overlay-range-action="move"
+                                aria-label="Drag to move overlay timeline range"
+                                className="absolute top-0 z-10 flex min-h-12 min-w-12 -translate-x-1/2 items-center justify-center rounded-lg border border-fuchsia-200 bg-fuchsia-800 text-[10px] font-bold uppercase text-white"
+                                style={{
+                                  left: `${(overlay.startSeconds + overlay.endSeconds - 2 * project.startSeconds) / (project.endSeconds - project.startSeconds) / 2 * 100}%`,
+                                }}
+                              >
+                                Move
+                              </button>
+                              <button
+                                type="button"
+                                data-overlay-range-action="start"
+                                aria-label="Drag to change overlay start time"
+                                className="absolute top-0 z-20 flex min-h-12 min-w-12 -translate-x-1/2 items-center justify-center rounded-lg border-2 border-white bg-slate-950 text-xs font-bold text-white"
+                                style={{
+                                  left: `${(overlay.startSeconds - project.startSeconds) / (project.endSeconds - project.startSeconds) * 100}%`,
+                                }}
+                              >
+                                |
+                              </button>
+                              <button
+                                type="button"
+                                data-overlay-range-action="end"
+                                aria-label="Drag to change overlay end time"
+                                className="absolute top-0 z-20 flex min-h-12 min-w-12 -translate-x-1/2 items-center justify-center rounded-lg border-2 border-white bg-slate-950 text-xs font-bold text-white"
+                                style={{
+                                  left: `${(overlay.endSeconds - project.startSeconds) / (project.endSeconds - project.startSeconds) * 100}%`,
+                                }}
+                              >
+                                |
+                              </button>
+                            </div>
                           </div>
                           <div className="grid gap-2 sm:grid-cols-2">
                             {([
