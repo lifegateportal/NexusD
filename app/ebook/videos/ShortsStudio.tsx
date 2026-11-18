@@ -148,6 +148,13 @@ export default function ShortsStudio() {
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const localFileRef = useRef<File | null>(null);
+  const editorRef = useRef<HTMLElement>(null);
+
+  function scrollToEditor() {
+    window.requestAnimationFrame(() => {
+      editorRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
+  }
 
   const selectedVideo = useMemo(
     () => videos.find((video) => video.videoId === (project?.sourceVideoId ?? selectedVideoId)),
@@ -390,25 +397,9 @@ export default function ShortsStudio() {
     setError("");
   }
 
-  function createProject() {
-    const video = videos.find((item) => item.videoId === selectedVideoId);
-    if (!video || video.segments.length === 0) {
-      setError("Choose a video with a saved timestamped transcript first.");
-      return;
-    }
-    const startSeconds = video.sermonStartSeconds ?? video.segments[0].startSeconds;
-    const endSeconds = Math.min(
-      video.segments[video.segments.length - 1].endSeconds,
-      startSeconds + 60,
-      video.sermonEndSeconds ?? Number.POSITIVE_INFINITY,
-    );
-    if (endSeconds <= startSeconds) {
-      setError("This transcript does not contain a usable clip range.");
-      return;
-    }
-    const title = `${video.title} Short`;
+  function makeProject(video: Video, startSeconds: number, endSeconds: number, title: string): ShortProject {
     const projectSlug = `${slugify(video.title)}-${video.videoId.slice(0, 5).toLocaleLowerCase()}-${Date.now().toString(36)}`;
-    setProject(ShortProjectSchema.parse({
+    return ShortProjectSchema.parse({
       slug: projectSlug,
       title,
       description: "",
@@ -430,7 +421,26 @@ export default function ShortsStudio() {
       captionSize: "medium",
       status: "draft",
       updatedAt: new Date().toISOString(),
-    }));
+    });
+  }
+
+  function createProject() {
+    const video = videos.find((item) => item.videoId === selectedVideoId);
+    if (!video || video.segments.length === 0) {
+      setError("Choose a video with a saved timestamped transcript first.");
+      return;
+    }
+    const startSeconds = video.sermonStartSeconds ?? video.segments[0].startSeconds;
+    const endSeconds = Math.min(
+      video.segments[video.segments.length - 1].endSeconds,
+      startSeconds + 60,
+      video.sermonEndSeconds ?? Number.POSITIVE_INFINITY,
+    );
+    if (endSeconds <= startSeconds) {
+      setError("This transcript does not contain a usable clip range.");
+      return;
+    }
+    setProject(makeProject(video, startSeconds, endSeconds, `${video.title} Short`));
     setLocalVideoUrl(null);
     localFileRef.current = null;
     setCurrentTime(startSeconds);
@@ -598,8 +608,22 @@ export default function ShortsStudio() {
   }
 
   function useSuggestion(suggestion: Suggestion) {
-    if (!project) return;
     const video = selectedVideo;
+    if (!video) {
+      setError("Choose the source video for this AI suggestion first.");
+      return;
+    }
+    if (!project) {
+      setProject(makeProject(video, suggestion.startSeconds, suggestion.endSeconds, suggestion.title));
+      setSelectedVideoId(video.videoId);
+      setLocalVideoUrl(null);
+      localFileRef.current = null;
+      setCurrentTime(suggestion.startSeconds);
+      setError("");
+      setNotice("AI moment opened in the editor. Adjust its framing or timing, then save or publish.");
+      scrollToEditor();
+      return;
+    }
     const overlays = project.overlays.flatMap((overlay) => {
       const startSeconds = Math.max(suggestion.startSeconds, overlay.startSeconds);
       const endSeconds = Math.min(suggestion.endSeconds, overlay.endSeconds);
@@ -624,6 +648,7 @@ export default function ShortsStudio() {
     });
     setCurrentTime(suggestion.startSeconds);
     setError("");
+    scrollToEditor();
   }
 
   async function saveDraft() {
@@ -893,10 +918,10 @@ export default function ShortsStudio() {
                 <button
                   type="button"
                   onClick={() => useSuggestion(suggestion)}
-                  disabled={!project}
+                  disabled={busy}
                   className="mt-3 min-h-12 rounded-lg border border-cyan-800 px-4 text-sm font-semibold text-cyan-200 disabled:opacity-50"
                 >
-                  Use this moment
+                  Open in editor
                 </button>
               </li>
             ))}
@@ -947,7 +972,7 @@ export default function ShortsStudio() {
             Choose a transcribed video to start editing, or open a saved short.
           </section>
         ) : (
-          <section className="space-y-5 rounded-2xl border border-slate-800 bg-slate-900/30 p-4 sm:p-6">
+          <section ref={editorRef} className="scroll-mt-4 space-y-5 rounded-2xl border border-slate-800 bg-slate-900/30 p-4 sm:p-6">
             <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
               <div>
                 <h3 className="text-xl font-bold text-white">Edit short</h3>
@@ -1223,14 +1248,14 @@ export default function ShortsStudio() {
                           }}
                           className="mt-2 min-h-12 w-full rounded-lg border border-slate-700 bg-slate-900 px-3 text-base text-white"
                         >
-                          <option value="cover">Crop to fill</option>
-                          <option value="contain">Show full frame</option>
+                          <option value="cover">Fill frame (crop edges)</option>
+                          <option value="contain">Fit whole video</option>
                         </select>
                       </label>
                     </div>
                     {(["x", "y", "zoom"] as const).map((axis) => (
                       <label key={axis} className="block text-sm text-slate-300">
-                        {axis === "x" ? "Horizontal crop" : axis === "y" ? "Vertical crop" : "Zoom"} · {axis === "zoom" ? `${framePosition[axis].toFixed(2)}×` : `${Math.round(framePosition[axis])}%`}
+                        {axis === "x" ? "Horizontal position" : axis === "y" ? "Vertical position" : "Scale video in frame"} · {axis === "zoom" ? `${framePosition[axis].toFixed(2)}×` : `${Math.round(framePosition[axis])}%`}
                         <input
                           type="range"
                           min={axis === "zoom" ? 1 : 0}

@@ -396,7 +396,6 @@ export default function ShortsPlayer({
         >
           {project.source.type === "youtube" ? (
             <div
-              ref={youtubeHostRef}
               className="absolute"
               style={{
                 width: `${playerWidthPercent}%`,
@@ -404,19 +403,25 @@ export default function ShortsPlayer({
                 left: `${playerLeftPercent}%`,
                 top: `${playerTopPercent}%`,
                 transform: `scale(${position.zoom})`,
-                transformOrigin: `${position.x}% ${position.y}%`,
-                pointerEvents: editable ? "none" : "auto",
+                transformOrigin: "center center",
               }}
-            />
+            >
+              <div
+                ref={youtubeHostRef}
+                className="h-full w-full"
+                style={{ pointerEvents: editable ? "none" : "auto" }}
+              />
+            </div>
           ) : videoUrl ? (
             <video
               ref={videoRef}
               src={videoUrl}
-              className="h-full w-full"
+              className="block h-full w-full"
               style={{
                 objectFit: activeSlot.fit,
                 objectPosition: `${position.x}% ${position.y}%`,
                 transform: `scale(${position.zoom})`,
+                transformOrigin: "center center",
                 pointerEvents: editable ? "none" : "auto",
               }}
               playsInline
