@@ -1,8 +1,9 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, PointerEvent } from "react";
 import type { ShortProject, ShortCropKeyframe, ShortFrameSlot } from "@/lib/schemas/video-short";
+import { buildTimedCaptionCues } from "@/lib/short-caption-cues";
 
 type YouTubePlayerInstance = {
   destroy(): void;
@@ -103,6 +104,14 @@ function aspectValue(value: ShortFrameSlot["aspectRatio"]): number {
   return width / height;
 }
 
+function colorWithOpacity(color: string, opacity: number): string {
+  if (color === "transparent") return "transparent";
+  const channels = color.match(/[A-Fa-f0-9]{2}/g);
+  if (!channels || channels.length !== 3) return "transparent";
+  const [red, green, blue] = channels.map((channel) => Number.parseInt(channel, 16));
+  return `rgba(${red}, ${green}, ${blue}, ${opacity})`;
+}
+
 export default function ShortsPlayer({
   project,
   localVideoUrl,
@@ -135,12 +144,13 @@ export default function ShortsPlayer({
   const videoUrl = project.source.type === "upload"
     ? localVideoUrl || project.source.sourceUrl || null
     : null;
-  const activeCaption = project.captions.find((caption) =>
+  const timedCaptions = useMemo(() => buildTimedCaptionCues(project.captions), [project.captions]);
+  const activeTimedCaption = timedCaptions.find((caption) =>
     currentTime >= caption.startSeconds && currentTime < caption.endSeconds,
   );
   const activeOverlays = project.overlays.filter((overlay) =>
     currentTime >= overlay.startSeconds && currentTime < overlay.endSeconds,
-  );
+  ).sort((first, second) => first.zIndex - second.zIndex);
 
   useEffect(() => {
     setCurrentTime(project.startSeconds);
@@ -369,11 +379,46 @@ export default function ShortsPlayer({
     : project.captionPosition === "middle"
       ? "top-1/2 -translate-y-1/2"
       : "bottom-4";
-  const captionSize = project.captionSize === "large"
-    ? "text-xl sm:text-2xl"
-    : project.captionSize === "small"
-      ? "text-sm"
-      : "text-base sm:text-lg";
+  const legacyCaptionSize = project.captionSize === "small" ? 4.4 : project.captionSize === "large" ? 6.2 : 5.2;
+  const captionFontSize = project.captionFontSize ?? legacyCaptionSize;
+  const captionFontFamily = {
+    sans: "ui-sans-serif, system-ui, sans-serif",
+    condensed: '"Arial Narrow", "Roboto Condensed", sans-serif',
+    rounded: 'ui-rounded, "Trebuchet MS", sans-serif',
+    serif: 'Georgia, "Times New Roman", serif',
+  }[project.captionFontFamily];
+  const captionStyle = {
+    "bold-box": {
+      backgroundColor: colorWithOpacity(project.captionBackgroundColor, project.captionBackgroundOpacity),
+      borderRadius: "0.35em",
+      fontWeight: 800,
+      textShadow: "0 1px 3px rgb(0 0 0 / 55%)",
+    },
+    clean: {
+      backgroundColor: "transparent",
+      borderRadius: "0",
+      fontWeight: 700,
+      textShadow: "0 2px 6px rgb(0 0 0 / 95%)",
+    },
+    outline: {
+      backgroundColor: "transparent",
+      borderRadius: "0",
+      fontWeight: 900,
+      textShadow: "0 2px 2px #000, 2px 0 2px #000, -2px 0 2px #000, 0 -2px 2px #000",
+    },
+    pill: {
+      backgroundColor: colorWithOpacity(project.captionBackgroundColor, project.captionBackgroundOpacity),
+      borderRadius: "999px",
+      fontWeight: 800,
+      textShadow: "0 1px 2px rgb(0 0 0 / 45%)",
+    },
+    minimal: {
+      backgroundColor: "transparent",
+      borderRadius: "0",
+      fontWeight: 700,
+      textShadow: "0 2px 8px rgb(0 0 0 / 95%)",
+    },
+  }[project.captionStyle];
 
   const previewStyle: PreviewStyle = isFullscreen
     ? {
@@ -409,10 +454,13 @@ export default function ShortsPlayer({
       >
         <div
           className="relative h-full w-full overflow-hidden bg-black"
-          style={isFullscreen ? {
-            width: `min(100vw, ${ratio * 100}dvh)`,
-            height: `min(100dvh, ${100 / ratio}vw)`,
-          } : undefined}
+          style={{
+            containerType: "inline-size",
+            ...(isFullscreen ? {
+              width: `min(100vw, ${ratio * 100}dvh)`,
+              height: `min(100dvh, ${100 / ratio}vw)`,
+            } : {}),
+          }}
         >
           {project.source.type === "youtube" ? (
             <div
@@ -452,11 +500,23 @@ export default function ShortsPlayer({
               Choose an authorized MP4 or WebM source to preview reliable manual reframing.
             </div>
           )}
-          {project.captionsEnabled && activeCaption && (
+          {project.captionsEnabled && activeTimedCaption && (
             <div
-              className={`pointer-events-none absolute left-3 right-3 z-10 text-center font-bold leading-snug text-white [text-shadow:0_2px_6px_#000] ${captionPosition} ${captionSize}`}
+              className={`pointer-events-none absolute left-[5%] right-[5%] z-[50] text-center leading-[1.12] ${captionPosition}`}
+              aria-live="off"
             >
-              <span className="rounded-md bg-black/70 px-2 py-1">{activeCaption.text}</span>
+              <span
+                className="inline-block max-w-full px-[0.35em] py-[0.18em] [overflow-wrap:anywhere] [display:-webkit-inline-box] [-webkit-box-orient:vertical] [-webkit-line-clamp:2] [overflow:hidden]"
+                style={{
+                  ...captionStyle,
+                  color: project.captionTextColor,
+                  fontFamily: captionFontFamily,
+                  fontSize: `clamp(12px, ${captionFontSize}cqw, 48px)`,
+                  WebkitBoxDecorationBreak: "clone",
+                }}
+              >
+                {activeTimedCaption.text}
+              </span>
             </div>
           )}
           {activeOverlays.map((overlay) => {
@@ -466,6 +526,7 @@ export default function ShortsPlayer({
               width: `${overlay.width}%`,
               height: `${overlay.height}%`,
               opacity: overlay.opacity,
+              zIndex: overlay.zIndex,
             };
             if (overlay.type === "text") {
               return (
@@ -518,7 +579,7 @@ export default function ShortsPlayer({
             return (
               <div
                 key={overlay.id}
-                className="pointer-events-none absolute z-10 box-border"
+                className="pointer-events-none absolute box-border"
                 style={{
                   ...positionStyle,
                   borderColor: overlay.borderColor,
@@ -552,12 +613,12 @@ export default function ShortsPlayer({
             }}
             aria-label={isFullscreen ? "Exit fullscreen" : "Expand video to fullscreen"}
             title={isFullscreen ? "Exit fullscreen" : "Expand video"}
-            className="absolute right-2 top-2 z-20 flex min-h-12 min-w-12 items-center justify-center rounded-lg bg-black/75 px-3 text-xs font-semibold text-white"
+            className="absolute right-2 top-2 z-[200] flex min-h-12 min-w-12 items-center justify-center rounded-lg bg-black/75 px-3 text-xs font-semibold text-white"
           >
             {isFullscreen ? "Exit" : "Expand"}
           </button>
           {playerError && (
-            <p role="alert" className="absolute inset-x-2 top-14 z-20 rounded-lg bg-rose-950/90 p-2 text-xs text-rose-100">
+            <p role="alert" className="absolute inset-x-2 top-14 z-[210] rounded-lg bg-rose-950/90 p-2 text-xs text-rose-100">
               {playerError}
             </p>
           )}

@@ -154,6 +154,7 @@ function presetLayerToOverlay(
     borderColor: layer.accentColor,
     borderWidth: 2,
     borderRadius: 8,
+    zIndex: 60,
     text: layer.text,
   };
   const style = {
@@ -460,6 +461,7 @@ export default function ShortsStudio() {
       borderColor: "#22d3ee",
       borderWidth: 0,
       borderRadius: 8,
+      zIndex: 60,
       text: "Your text",
     };
     updateProject({ overlays: [...project.overlays, overlay] });
@@ -513,6 +515,7 @@ export default function ShortsStudio() {
         borderColor: "#22d3ee",
         borderWidth: 0,
         borderRadius: 8,
+        zIndex: 60,
         imageUrl: upload.data.sourceUrl,
       };
       setProject((current) => current
@@ -613,6 +616,12 @@ export default function ShortsStudio() {
       captionsEnabled: true,
       captionPosition: "bottom",
       captionSize: "medium",
+      captionFontSize: 5.2,
+      captionFontFamily: "sans",
+      captionStyle: "bold-box",
+      captionTextColor: "#ffffff",
+      captionBackgroundColor: "#000000",
+      captionBackgroundOpacity: 0.78,
       status: "draft",
       updatedAt: new Date().toISOString(),
     });
@@ -1599,12 +1608,98 @@ export default function ShortsStudio() {
                       </select>
                     </label>
                     <label className="block text-sm text-slate-300">
-                      Text size
-                      <select value={project.captionSize} onChange={(event) => updateProject({ captionSize: event.target.value as ShortProject["captionSize"] })} className="mt-2 min-h-12 w-full rounded-lg border border-slate-700 bg-slate-900 px-3 text-base text-white">
-                        <option value="small">Small</option><option value="medium">Medium</option><option value="large">Large</option>
+                      Caption style
+                      <select value={project.captionStyle} onChange={(event) => updateProject({ captionStyle: event.target.value as ShortProject["captionStyle"] })} className="mt-2 min-h-12 w-full rounded-lg border border-slate-700 bg-slate-900 px-3 text-base text-white">
+                        <option value="bold-box">Bold box</option>
+                        <option value="clean">Clean</option>
+                        <option value="outline">Outlined</option>
+                        <option value="pill">Pill</option>
+                        <option value="minimal">Minimal</option>
                       </select>
                     </label>
+                    <label className="block text-sm text-slate-300">
+                      Font
+                      <select value={project.captionFontFamily} onChange={(event) => updateProject({ captionFontFamily: event.target.value as ShortProject["captionFontFamily"] })} className="mt-2 min-h-12 w-full rounded-lg border border-slate-700 bg-slate-900 px-3 text-base text-white">
+                        <option value="sans">Modern sans</option>
+                        <option value="condensed">Condensed</option>
+                        <option value="rounded">Rounded</option>
+                        <option value="serif">Serif</option>
+                      </select>
+                    </label>
+                    <label className="block text-sm text-slate-300">
+                      Text color
+                      <input
+                        type="color"
+                        value={project.captionTextColor}
+                        onChange={(event) => updateProject({ captionTextColor: event.target.value })}
+                        className="mt-2 h-12 w-full rounded-lg border border-slate-700 bg-slate-900 p-1"
+                      />
+                    </label>
+                    {["bold-box", "pill"].includes(project.captionStyle) && (
+                      <>
+                        <label className="block text-sm text-slate-300">
+                          Background fill
+                          <select
+                            value={project.captionBackgroundColor === "transparent" ? "transparent" : "color"}
+                            onChange={(event) => updateProject({
+                              captionBackgroundColor: event.target.value === "transparent"
+                                ? "transparent"
+                                : project.captionBackgroundColor === "transparent" ? "#000000" : project.captionBackgroundColor,
+                            })}
+                            className="mt-2 min-h-12 w-full rounded-lg border border-slate-700 bg-slate-900 px-3 text-base text-white"
+                          >
+                            <option value="color">Solid color</option>
+                            <option value="transparent">No fill</option>
+                          </select>
+                        </label>
+                        {project.captionBackgroundColor !== "transparent" && (
+                          <label className="block text-sm text-slate-300">
+                            Background color
+                            <input
+                              type="color"
+                              value={project.captionBackgroundColor}
+                              onChange={(event) => updateProject({ captionBackgroundColor: event.target.value })}
+                              className="mt-2 h-12 w-full rounded-lg border border-slate-700 bg-slate-900 p-1"
+                            />
+                          </label>
+                        )}
+                      </>
+                    )}
                   </div>
+                  <label className="block text-sm text-slate-300">
+                    Font size · {Math.round(((project.captionFontSize ?? (
+                      project.captionSize === "small" ? 4.4 : project.captionSize === "large" ? 6.2 : 5.2
+                    )) / 5.2) * 100)}%
+                    <input
+                      type="range"
+                      min="3.5"
+                      max="8"
+                      step="0.1"
+                      value={project.captionFontSize ?? (
+                        project.captionSize === "small" ? 4.4 : project.captionSize === "large" ? 6.2 : 5.2
+                      )}
+                      onChange={(event) => updateProject({ captionFontSize: Number(event.target.value) })}
+                      aria-label="Subtitle font size"
+                      className="min-h-12 w-full accent-cyan-400"
+                    />
+                  </label>
+                  {["bold-box", "pill"].includes(project.captionStyle) && project.captionBackgroundColor !== "transparent" && (
+                    <label className="block text-sm text-slate-300">
+                      Background opacity · {Math.round(project.captionBackgroundOpacity * 100)}%
+                      <input
+                        type="range"
+                        min="0"
+                        max="1"
+                        step="0.05"
+                        value={project.captionBackgroundOpacity}
+                        onChange={(event) => updateProject({ captionBackgroundOpacity: Number(event.target.value) })}
+                        className="min-h-12 w-full accent-cyan-400"
+                      />
+                    </label>
+                  )}
+                  <p className="text-xs leading-relaxed text-slate-500">
+                    Long transcript timestamps are split into timed phrases. Captions are capped at two lines on screen. Background controls apply to Bold box and Pill styles.
+                  </p>
                   {project.captions.length === 0 ? (
                     <p className="text-xs text-slate-400">No transcript captions fall inside this clip range.</p>
                   ) : (
@@ -1749,6 +1844,45 @@ export default function ShortsStudio() {
                               Remove
                             </button>
                           </div>
+                          <div className="space-y-2">
+                            <p className="text-xs text-slate-400">
+                              Layer order · {overlay.zIndex < 50 ? "behind subtitles" : "in front of subtitles"}
+                            </p>
+                            <div className="flex flex-wrap gap-2">
+                              <button
+                                type="button"
+                                onClick={() => updateOverlay(overlay.id, { zIndex: 0 })}
+                                disabled={overlay.zIndex === 0}
+                                className="min-h-12 rounded-lg border border-slate-700 px-3 text-xs font-semibold text-slate-200 disabled:opacity-40"
+                              >
+                                Send to back
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => updateOverlay(overlay.id, { zIndex: 40 })}
+                                disabled={overlay.zIndex === 40}
+                                className="min-h-12 rounded-lg border border-cyan-900 px-3 text-xs font-semibold text-cyan-100 disabled:opacity-40"
+                              >
+                                Behind subtitles
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => updateOverlay(overlay.id, { zIndex: Math.min(100, overlay.zIndex + 5) })}
+                                disabled={overlay.zIndex === 100}
+                                className="min-h-12 rounded-lg border border-slate-700 px-3 text-xs font-semibold text-slate-200 disabled:opacity-40"
+                              >
+                                Bring forward
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => updateOverlay(overlay.id, { zIndex: 100 })}
+                                disabled={overlay.zIndex === 100}
+                                className="min-h-12 rounded-lg border border-cyan-900 px-3 text-xs font-semibold text-cyan-100 disabled:opacity-40"
+                              >
+                                Above subtitles
+                              </button>
+                            </div>
+                          </div>
                           {overlay.type === "text" && (
                             <>
                               <textarea
@@ -1770,13 +1904,19 @@ export default function ShortsStudio() {
                                   />
                                 </label>
                                 <label className="text-xs text-slate-400">
-                                  Background
-                                  <input
-                                    type="color"
-                                    value={overlay.backgroundColor === "transparent" ? "#000000" : overlay.backgroundColor}
-                                    onChange={(event) => updateOverlay(overlay.id, { backgroundColor: event.target.value })}
-                                    className="mt-1 h-12 w-full rounded-lg border border-slate-700 bg-slate-900 p-1"
-                                  />
+                                  Color fill
+                                  <select
+                                    value={overlay.backgroundColor === "transparent" ? "transparent" : "solid"}
+                                    onChange={(event) => updateOverlay(overlay.id, {
+                                      backgroundColor: event.target.value === "transparent"
+                                        ? "transparent"
+                                        : overlay.backgroundColor === "transparent" ? "#111827" : overlay.backgroundColor,
+                                    })}
+                                    className="mt-1 min-h-12 w-full rounded-lg border border-slate-700 bg-slate-900 px-3 text-base text-white"
+                                  >
+                                    <option value="solid">Solid color</option>
+                                    <option value="transparent">No fill</option>
+                                  </select>
                                 </label>
                                 <label className="text-xs text-slate-400">
                                   Font size
@@ -1792,6 +1932,17 @@ export default function ShortsStudio() {
                                     className="mt-1 min-h-12 w-full rounded-lg border border-slate-700 bg-slate-900 px-3 text-base text-white"
                                   />
                                 </label>
+                                {overlay.backgroundColor !== "transparent" && (
+                                  <label className="text-xs text-slate-400">
+                                    Fill color
+                                    <input
+                                      type="color"
+                                      value={overlay.backgroundColor}
+                                      onChange={(event) => updateOverlay(overlay.id, { backgroundColor: event.target.value })}
+                                      className="mt-1 h-12 w-full rounded-lg border border-slate-700 bg-slate-900 p-1"
+                                    />
+                                  </label>
+                                )}
                               </div>
                             </>
                           )}

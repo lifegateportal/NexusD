@@ -3,6 +3,8 @@ import { LibraryVideoSegmentSchema } from "@/lib/schemas/library-video";
 
 export const ShortAspectRatioSchema = z.enum(["9:16", "4:5", "1:1", "16:9"]);
 export const MAX_SHORT_DURATION_SECONDS = 3 * 60;
+export const ShortCaptionFontFamilySchema = z.enum(["sans", "condensed", "rounded", "serif"]);
+export const ShortCaptionStyleSchema = z.enum(["bold-box", "clean", "outline", "pill", "minimal"]);
 export const ShortOverlayPresetStyleSchema = z.enum([
   "headline",
   "lower-third",
@@ -53,6 +55,7 @@ export const ShortOverlaySchema = z.object({
   borderColor: z.string().regex(/^#[0-9A-Fa-f]{6}$/).default("#22d3ee"),
   borderWidth: z.number().finite().min(0).max(12).default(2),
   borderRadius: z.number().finite().min(0).max(100).default(8),
+  zIndex: z.number().int().min(0).max(100).default(60),
   text: z.string().trim().max(300).optional(),
   imageUrl: z.string().url().optional(),
 }).strict().superRefine((overlay, context) => {
@@ -105,6 +108,12 @@ export const ShortProjectSchema = z.object({
   captionsEnabled: z.boolean().default(true),
   captionPosition: z.enum(["top", "middle", "bottom"]).default("bottom"),
   captionSize: z.enum(["small", "medium", "large"]).default("medium"),
+  captionFontSize: z.number().finite().min(3.5).max(8).optional(),
+  captionFontFamily: ShortCaptionFontFamilySchema.default("sans"),
+  captionStyle: ShortCaptionStyleSchema.default("bold-box"),
+  captionTextColor: z.string().regex(/^#[0-9A-Fa-f]{6}$/).default("#ffffff"),
+  captionBackgroundColor: z.string().regex(/^(#[0-9A-Fa-f]{6}|transparent)$/).default("#000000"),
+  captionBackgroundOpacity: z.number().finite().min(0).max(1).default(0.78),
   status: z.enum(["draft", "published"]),
   updatedAt: z.string().datetime(),
 }).strict().refine((project) => project.endSeconds > project.startSeconds, {
