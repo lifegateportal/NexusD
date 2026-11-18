@@ -135,6 +135,7 @@ export default function ShortsPlayer({
   const [playing, setPlaying] = useState(false);
   const [playerError, setPlayerError] = useState("");
   const [isFullscreen, setIsFullscreen] = useState(false);
+  const [fullscreenControlsVisible, setFullscreenControlsVisible] = useState(true);
   const [shareStatus, setShareStatus] = useState("");
   const [shareError, setShareError] = useState("");
 
@@ -164,12 +165,23 @@ export default function ShortsPlayer({
   useEffect(() => {
     const updateFullscreen = () => {
       setIsFullscreen(document.fullscreenElement === fullscreenContainerRef.current);
+      setFullscreenControlsVisible(true);
     };
     document.addEventListener("fullscreenchange", updateFullscreen);
     return () => {
       document.removeEventListener("fullscreenchange", updateFullscreen);
     };
   }, []);
+
+  useEffect(() => {
+    if (!isFullscreen || !playing) {
+      setFullscreenControlsVisible(true);
+      return;
+    }
+    if (!fullscreenControlsVisible) return;
+    const timer = window.setTimeout(() => setFullscreenControlsVisible(false), 2500);
+    return () => window.clearTimeout(timer);
+  }, [fullscreenControlsVisible, isFullscreen, playing]);
 
   useEffect(() => {
     if (project.source.type !== "youtube") return;
@@ -378,6 +390,7 @@ export default function ShortsPlayer({
 
   async function toggleFullscreen() {
     if (isFullscreen) {
+      setFullscreenControlsVisible(true);
       if (!document.fullscreenElement) {
         setIsFullscreen(false);
         return;
@@ -390,6 +403,7 @@ export default function ShortsPlayer({
       return;
     }
 
+    setFullscreenControlsVisible(true);
     const container = fullscreenContainerRef.current;
     if (container?.requestFullscreen) {
       try {
@@ -532,13 +546,13 @@ export default function ShortsPlayer({
         ref={fullscreenContainerRef}
         className={`relative touch-none overflow-hidden bg-black ${
           isFullscreen ? "flex items-center justify-center rounded-none" : "rounded-xl"
-        } ${compactPreview ? "mx-auto w-[min(100%,var(--preview-width-mobile))] lg:w-[min(100%,var(--preview-width-desktop))]" : "w-full"} ${editable ? "cursor-move" : ""}`}
+        } ${compactPreview ? "mx-auto w-[min(100%,var(--preview-width-mobile))] lg:w-[min(100%,var(--preview-width-desktop))]" : "w-full"} ${editable && !isFullscreen ? "cursor-move" : ""}`}
         style={previewStyle}
-        onPointerDown={onPointerDown}
-        onPointerMove={onPointerMove}
-        onPointerUp={() => { dragRef.current = null; }}
-        onPointerCancel={() => { dragRef.current = null; }}
-        aria-label={editable ? "Drag the video to adjust its crop" : undefined}
+        onPointerDown={isFullscreen ? undefined : onPointerDown}
+        onPointerMove={isFullscreen ? undefined : onPointerMove}
+        onPointerUp={isFullscreen ? undefined : () => { dragRef.current = null; }}
+        onPointerCancel={isFullscreen ? undefined : () => { dragRef.current = null; }}
+        aria-label={editable && !isFullscreen ? "Drag the video to adjust its crop" : undefined}
       >
         <div
           className="relative h-full w-full overflow-hidden bg-black"
@@ -730,20 +744,46 @@ export default function ShortsPlayer({
               </div>
             );
           })}
-          <button
-            type="button"
-            onPointerDown={(event) => event.stopPropagation()}
-            onClick={(event) => {
-              event.stopPropagation();
-              void toggleFullscreen();
-            }}
-            aria-label={isFullscreen ? "Exit fullscreen" : "Expand video to fullscreen"}
-            title={isFullscreen ? "Exit fullscreen" : "Expand video"}
-            className="absolute right-2 top-2 z-[200] flex min-h-12 min-w-12 items-center justify-center rounded-lg bg-black/75 px-3 text-xs font-semibold text-white"
-          >
-            {isFullscreen ? "Exit" : "Expand"}
-          </button>
-          {playerError && (
+          {isFullscreen && !fullscreenControlsVisible && (
+            <button
+              type="button"
+              onPointerDown={(event) => event.stopPropagation()}
+              onClick={() => setFullscreenControlsVisible(true)}
+              aria-label="Show clean-view controls"
+              className="absolute inset-0 z-[180] bg-transparent"
+            />
+          )}
+          {(!isFullscreen || fullscreenControlsVisible) && (
+            <button
+              type="button"
+              onPointerDown={(event) => event.stopPropagation()}
+              onClick={(event) => {
+                event.stopPropagation();
+                void toggleFullscreen();
+              }}
+              aria-label={isFullscreen ? "Exit clean view" : editable ? "Open clean recording view" : "Expand video to fullscreen"}
+              title={isFullscreen ? "Exit clean view" : editable ? "Clean recording view" : "Expand video"}
+              className="absolute right-2 top-2 z-[200] flex min-h-12 min-w-12 items-center justify-center rounded-lg bg-black/75 px-3 text-xs font-semibold text-white"
+            >
+              {isFullscreen ? "Exit" : editable ? "Clean view" : "Expand"}
+            </button>
+          )}
+          {isFullscreen && fullscreenControlsVisible && (
+            <div className="absolute inset-x-0 bottom-0 z-[190] flex items-center gap-3 bg-gradient-to-t from-black/85 to-transparent px-3 pb-[max(env(safe-area-inset-bottom),_1rem)] pt-8">
+              <button
+                type="button"
+                onPointerDown={(event) => event.stopPropagation()}
+                onClick={togglePlayback}
+                disabled={project.source.type === "upload" && !videoUrl}
+                aria-label={playing ? "Pause preview" : "Play preview"}
+                className="min-h-12 min-w-12 rounded-lg bg-black/75 px-3 text-sm font-bold text-white disabled:opacity-40"
+              >
+                {playing ? "Pause" : "Play"}
+              </button>
+              <p className="text-xs text-white/80">Controls hide while playing. Tap the video to show them.</p>
+            </div>
+          )}
+          {playerError && (!isFullscreen || fullscreenControlsVisible) && (
             <p role="alert" className="absolute inset-x-2 top-14 z-[210] rounded-lg bg-rose-950/90 p-2 text-xs text-rose-100">
               {playerError}
             </p>
