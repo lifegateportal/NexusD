@@ -126,6 +126,8 @@ export default function ShortsPlayer({
   const fullscreenContainerRef = useRef<HTMLDivElement>(null);
   const brollVideoRefs = useRef(new Map<string, HTMLVideoElement>());
   const musicTrackRefs = useRef(new Map<string, HTMLAudioElement>());
+  const musicTrackIdsRef = useRef(new Set(project.musicTracks.map((track) => track.id)));
+  const requireUserPlayAfterMusicAddRef = useRef(false);
   const timeCallbackRef = useRef(onTimeChange);
   const dragRef = useRef<{ x: number; y: number; clientX: number; clientY: number; width: number; height: number } | null>(null);
   const [currentTime, setCurrentTime] = useState(project.startSeconds);
@@ -288,8 +290,9 @@ export default function ShortsPlayer({
     for (const track of project.musicTracks) {
       const audio = musicTrackRefs.current.get(track.id);
       if (!audio) continue;
+      const audioShouldPlay = shouldPlay && !requireUserPlayAfterMusicAddRef.current;
       const active = timeSeconds >= track.startSeconds && timeSeconds < track.endSeconds;
-      if (!active) {
+      if (!active || !audioShouldPlay) {
         audio.pause();
         continue;
       }
@@ -305,8 +308,12 @@ export default function ShortsPlayer({
       if (audio.readyState >= 1 && Math.abs(audio.currentTime - elapsed) > 0.75) {
         audio.currentTime = elapsed;
       }
-      if (shouldPlay && audio.paused) {
-        void audio.play().catch(() => {
+      if (audio.paused) {
+        void audio.play().catch((error: unknown) => {
+          if (error instanceof Error && error.name === "NotAllowedError") {
+            setPlayerError("Your browser blocked music playback. Press Play to start the short and music together.");
+            return;
+          }
           setPlayerError("Could not play the instrumental track. Check its format and start playback with the Play button.");
         });
       } else if (!shouldPlay) {
@@ -316,7 +323,21 @@ export default function ShortsPlayer({
   }, [project.brollClips, project.musicTracks]);
 
   useEffect(() => {
-    syncAuxiliaryMedia(currentTime, playing);
+    const currentTrackIds = new Set(project.musicTracks.map((track) => track.id));
+    const addedTrack = [...currentTrackIds].some((id) => !musicTrackIdsRef.current.has(id));
+    musicTrackIdsRef.current = currentTrackIds;
+    if (!addedTrack || !playing) return;
+
+    requireUserPlayAfterMusicAddRef.current = true;
+    if (project.source.type === "youtube") youtubePlayerRef.current?.pauseVideo();
+    else videoRef.current?.pause();
+    setPlaying(false);
+    setPlayerError("");
+  }, [project.musicTracks, project.source.type, playing]);
+
+  useEffect(() => {
+    const shouldPlay = playing && !requireUserPlayAfterMusicAddRef.current;
+    syncAuxiliaryMedia(currentTime, shouldPlay);
   }, [currentTime, playing, syncAuxiliaryMedia]);
 
   useEffect(() => {
@@ -333,7 +354,9 @@ export default function ShortsPlayer({
   }
 
   function togglePlayback() {
+    setPlayerError("");
     const nextPlaying = !playing;
+    if (nextPlaying) requireUserPlayAfterMusicAddRef.current = false;
     const playbackTime = !playing && currentTime >= project.endSeconds
       ? project.startSeconds
       : currentTime;

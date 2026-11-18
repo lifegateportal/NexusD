@@ -295,3 +295,5 @@ export type ShortOverlay = z.infer<typeof ShortOverlaySchema>;
 export type ShortOverlayPreset = z.infer<typeof ShortOverlayPresetSchema>;
 export type ShortOverlayPresetLayer = z.infer<typeof ShortOverlayPresetLayerSchema>;
 export type ShortSummary = z.infer<typeof ShortSummarySchema>;
+export type ShortBrollClip = z.infer<typeof ShortBrollClipSchema>;
+export type ShortMusicTrack = z.infer<typeof ShortMusicTrackSchema>;

@@ -841,7 +841,7 @@ export default function ShortsStudio() {
       commercialLicenseConfirmed: false,
     };
     updateProject({ musicTracks: [...project.musicTracks, track] });
-    setNotice("Jamendo instrumental added. Obtain and confirm its commercial license before publishing.");
+    setNotice("Jamendo instrumental added. Press Play to start the preview with music. Obtain and confirm its commercial license before publishing.");
     setError("");
   }
 
@@ -2111,17 +2111,24 @@ export default function ShortsStudio() {
                               </button>
                             </div>
                             {track.provider === "jamendo" && (
-                              <label className="flex min-h-12 items-center gap-3 rounded-lg border border-amber-900/70 bg-amber-950/20 px-3 text-xs leading-relaxed text-amber-100">
-                                <input
-                                  type="checkbox"
-                                  checked={track.commercialLicenseConfirmed}
-                                  onChange={(event) => updateMusicTrack(track.id, {
-                                    commercialLicenseConfirmed: event.target.checked,
-                                  })}
-                                  className="min-h-12 min-w-12 accent-amber-400"
-                                />
-                                I have obtained the Jamendo commercial license for public use of this track.
-                              </label>
+                              <>
+                                {!track.commercialLicenseConfirmed && (
+                                  <p className="text-xs leading-relaxed text-amber-200">
+                                    Publishing is blocked until you obtain the Jamendo commercial license and confirm it below.
+                                  </p>
+                                )}
+                                <label className="flex min-h-12 items-center gap-3 rounded-lg border border-amber-900/70 bg-amber-950/20 px-3 text-xs leading-relaxed text-amber-100">
+                                  <input
+                                    type="checkbox"
+                                    checked={track.commercialLicenseConfirmed}
+                                    onChange={(event) => updateMusicTrack(track.id, {
+                                      commercialLicenseConfirmed: event.target.checked,
+                                    })}
+                                    className="min-h-12 min-w-12 accent-amber-400"
+                                  />
+                                  I have obtained the Jamendo commercial license for public use of this track.
+                                </label>
+                              </>
                             )}
                             <div className="grid gap-3 sm:grid-cols-2">
                               <label className="block text-xs text-slate-400">
