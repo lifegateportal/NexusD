@@ -11,8 +11,10 @@ import {
   ShortOverlayPresetResponseSchema,
   ShortOverlaySchema,
   ShortProjectSchema,
+  type ShortBrollClip,
   type ShortCropKeyframe,
   type ShortFrameSlot,
+  type ShortMusicTrack,
   type ShortOverlay,
   type ShortOverlayPreset,
   type ShortOverlayPresetLayer,
@@ -38,7 +40,18 @@ const SuggestionResponseSchema = z.object({
 const UploadResponseSchema = z.object({
   presignedUrl: z.string().url(),
   sourceUrl: z.string().url(),
-  contentType: z.enum(["video/mp4", "video/webm", "image/png", "image/jpeg", "image/webp"]),
+  contentType: z.enum([
+    "video/mp4",
+    "video/webm",
+    "audio/mpeg",
+    "audio/mp4",
+    "audio/aac",
+    "audio/wav",
+    "audio/x-wav",
+    "image/png",
+    "image/jpeg",
+    "image/webp",
+  ]),
 });
 
 type Video = z.infer<typeof DirectorVideoCatalogSchema>["videos"][number];
@@ -56,6 +69,56 @@ async function requestJson(url: string, init?: RequestInit): Promise<unknown> {
     throw new Error(parsed.success ? parsed.data.error : `Request failed (HTTP ${response.status}).`);
   }
   return body;
+}
+
+async function uploadShortAsset(file: File): Promise<string> {
+  const body = await requestJson("/api/ebook/shorts/source", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ filename: file.name, contentType: file.type, size: file.size }),
+  });
+  const upload = UploadResponseSchema.safeParse(body);
+  if (!upload.success || upload.data.contentType !== file.type) {
+    throw new Error("The Shorts asset upload service returned invalid file details.");
+  }
+  const response = await fetch(upload.data.presignedUrl, {
+    method: "PUT",
+    headers: { "Content-Type": file.type },
+    body: file,
+  });
+  if (!response.ok) throw new Error(`Asset upload failed (HTTP ${response.status}).`);
+  return upload.data.sourceUrl;
+}
+
+function readMediaDuration(file: File, type: "audio" | "video"): Promise<number> {
+  const media = document.createElement(type);
+  const objectUrl = URL.createObjectURL(file);
+  media.preload = "metadata";
+  media.src = objectUrl;
+  return new Promise((resolve, reject) => {
+    const cleanup = () => {
+      media.removeEventListener("loadedmetadata", onLoaded);
+      media.removeEventListener("error", onError);
+      media.removeAttribute("src");
+      media.load();
+      URL.revokeObjectURL(objectUrl);
+    };
+    const onLoaded = () => {
+      const duration = media.duration;
+      cleanup();
+      if (!Number.isFinite(duration) || duration <= 0 || duration > 3600) {
+        reject(new Error("Media duration must be between 0 and 60 minutes."));
+        return;
+      }
+      resolve(duration);
+    };
+    const onError = () => {
+      cleanup();
+      reject(new Error("The selected media file could not be read by this browser."));
+    };
+    media.addEventListener("loadedmetadata", onLoaded, { once: true });
+    media.addEventListener("error", onError, { once: true });
+  });
 }
 
 function slugify(value: string): string {
@@ -565,6 +628,139 @@ export default function ShortsStudio() {
     }
   }
 
+  async function addBrollClip(file: File | undefined) {
+    if (!file || !project) return;
+    if (project.brollClips.length >= 10) {
+      setError("A short can have up to 10 B-roll clips.");
+      return;
+    }
+    if (!["video/mp4", "video/webm"].includes(file.type) || file.size > 500 * 1024 * 1024) {
+      setError("Choose an MP4 or WebM B-roll clip up to 500 MB.");
+      return;
+    }
+    setBusy(true);
+    setError("");
+    setNotice("");
+    try {
+      const sourceDurationSeconds = await readMediaDuration(file, "video");
+      const clipDuration = Math.min(sourceDurationSeconds, project.endSeconds - project.startSeconds);
+      if (clipDuration < 0.1) throw new Error("This short does not have enough room for a B-roll clip.");
+      const videoUrl = await uploadShortAsset(file);
+      const clip: ShortBrollClip = {
+        id: crypto.randomUUID(),
+        fileName: file.name,
+        videoUrl,
+        sourceDurationSeconds,
+        startSeconds: project.startSeconds,
+        endSeconds: project.startSeconds + clipDuration,
+        fit: "cover",
+      };
+      setProject((current) => current && current.slug === project.slug
+        ? { ...current, brollClips: [...current.brollClips, clip] }
+        : current);
+      setNotice("B-roll uploaded and added at the start of this short. Adjust its timeline range below.");
+    } catch (uploadError) {
+      setError(uploadError instanceof Error ? uploadError.message : "Could not add this B-roll clip.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function addMusicTrack(file: File | undefined) {
+    if (!file || !project) return;
+    if (project.musicTracks.length >= 5) {
+      setError("A short can have up to 5 instrumental tracks.");
+      return;
+    }
+    const supportedAudioTypes = ["audio/mpeg", "audio/mp4", "audio/aac", "audio/wav", "audio/x-wav"];
+    if (!supportedAudioTypes.includes(file.type) || file.size > 100 * 1024 * 1024) {
+      setError("Choose an MP3, M4A, AAC, or WAV instrumental file up to 100 MB.");
+      return;
+    }
+    setBusy(true);
+    setError("");
+    setNotice("");
+    try {
+      const sourceDurationSeconds = await readMediaDuration(file, "audio");
+      const trackDuration = Math.min(sourceDurationSeconds, project.endSeconds - project.startSeconds);
+      if (trackDuration < 0.1) throw new Error("This short does not have enough room for an instrumental track.");
+      const audioUrl = await uploadShortAsset(file);
+      const track: ShortMusicTrack = {
+        id: crypto.randomUUID(),
+        fileName: file.name,
+        audioUrl,
+        sourceDurationSeconds,
+        startSeconds: project.startSeconds,
+        endSeconds: project.startSeconds + trackDuration,
+        volume: 0.25,
+        fadeInSeconds: Math.min(1, trackDuration / 2),
+        fadeOutSeconds: Math.min(2, trackDuration / 2),
+      };
+      setProject((current) => current && current.slug === project.slug
+        ? { ...current, musicTracks: [...current.musicTracks, track] }
+        : current);
+      setNotice("Instrumental uploaded and added with a low starting volume and fades.");
+    } catch (uploadError) {
+      setError(uploadError instanceof Error ? uploadError.message : "Could not add this instrumental track.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function changeBrollRange(id: string, field: "startSeconds" | "endSeconds", value: string) {
+    if (!project || value.trim() === "") return;
+    const clip = project.brollClips.find((item) => item.id === id);
+    const next = Number(value);
+    if (!clip || !Number.isFinite(next)) return;
+    const startSeconds = field === "startSeconds"
+      ? Math.max(project.startSeconds, Math.min(next, clip.endSeconds - 0.1))
+      : clip.startSeconds;
+    const endSeconds = field === "endSeconds"
+      ? Math.max(clip.startSeconds + 0.1, Math.min(next, project.endSeconds, startSeconds + clip.sourceDurationSeconds))
+      : Math.min(clip.endSeconds, startSeconds + clip.sourceDurationSeconds);
+    updateProject({
+      brollClips: project.brollClips.map((item) =>
+        item.id === id ? { ...item, startSeconds, endSeconds } : item,
+      ),
+    });
+  }
+
+  function changeMusicRange(id: string, field: "startSeconds" | "endSeconds", value: string) {
+    if (!project || value.trim() === "") return;
+    const track = project.musicTracks.find((item) => item.id === id);
+    const next = Number(value);
+    if (!track || !Number.isFinite(next)) return;
+    const startSeconds = field === "startSeconds"
+      ? Math.max(project.startSeconds, Math.min(next, track.endSeconds - 0.1))
+      : track.startSeconds;
+    const endSeconds = field === "endSeconds"
+      ? Math.max(track.startSeconds + 0.1, Math.min(next, project.endSeconds, startSeconds + track.sourceDurationSeconds))
+      : Math.min(track.endSeconds, startSeconds + track.sourceDurationSeconds);
+    const fadeLimit = (endSeconds - startSeconds) / 2;
+    updateProject({
+      musicTracks: project.musicTracks.map((item) =>
+        item.id === id
+          ? {
+            ...item,
+            startSeconds,
+            endSeconds,
+            fadeInSeconds: Math.min(item.fadeInSeconds, fadeLimit),
+            fadeOutSeconds: Math.min(item.fadeOutSeconds, fadeLimit),
+          }
+          : item,
+      ),
+    });
+  }
+
+  function updateMusicTrack(id: string, patch: Partial<ShortMusicTrack>) {
+    if (!project) return;
+    updateProject({
+      musicTracks: project.musicTracks.map((track) =>
+        track.id === id ? { ...track, ...patch } : track,
+      ),
+    });
+  }
+
   function updateOverlay(id: string, patch: Partial<ShortOverlay>) {
     if (!project) return;
     updateProject({
@@ -721,15 +917,35 @@ export default function ShortsStudio() {
         ? [{ ...overlay, startSeconds: overlayStart, endSeconds: overlayEnd }]
         : [];
     });
+    const brollClips = project.brollClips.flatMap((clip) => {
+      const clipStart = Math.max(startSeconds, clip.startSeconds);
+      const clipEnd = Math.min(endSeconds, clip.endSeconds);
+      return clipEnd - clipStart >= 0.1
+        ? [{ ...clip, startSeconds: clipStart, endSeconds: clipEnd }]
+        : [];
+    });
+    const musicTracks = project.musicTracks.flatMap((track) => {
+      const trackStart = Math.max(startSeconds, track.startSeconds);
+      const trackEnd = Math.min(endSeconds, track.endSeconds);
+      return trackEnd - trackStart >= 0.1
+        ? [{ ...track, startSeconds: trackStart, endSeconds: trackEnd }]
+        : [];
+    });
     updateProject({
       [field]: nextValue,
       frameSlots,
       captions: filterCaptions(selectedVideo, startSeconds, endSeconds),
       overlays,
+      brollClips,
+      musicTracks,
     });
     setCurrentTime(startSeconds);
-    if (overlays.length !== project.overlays.length) {
-      setNotice("Overlays outside the new clip range were removed.");
+    if (
+      overlays.length !== project.overlays.length
+      || brollClips.length !== project.brollClips.length
+      || musicTracks.length !== project.musicTracks.length
+    ) {
+      setNotice("Layers outside the new clip range were removed.");
     }
     setError("");
   }
@@ -1492,6 +1708,218 @@ export default function ShortsStudio() {
                     </p>
                   </div>
                 )}
+                </div>
+              </details>
+              <details className="rounded-xl border border-slate-700 bg-slate-950/70 p-3">
+                <summary className="flex min-h-12 cursor-pointer items-center text-sm font-bold text-cyan-100">
+                  B-roll and instrumental music
+                </summary>
+                <div className="mt-3 space-y-4">
+                  <section className="space-y-3 rounded-xl border border-slate-800 bg-slate-950/60 p-3">
+                    <div className="flex flex-wrap items-start justify-between gap-2">
+                      <div>
+                        <h4 className="text-sm font-semibold text-white">B-roll cutaways</h4>
+                        <p className="mt-1 text-xs leading-relaxed text-slate-400">
+                          Add up to 10 authorized MP4/WebM clips. They cover the YouTube picture during their timeline range while the sermon audio continues.
+                        </p>
+                      </div>
+                      <label className="flex min-h-12 cursor-pointer items-center rounded-lg border border-cyan-800 px-3 text-xs font-semibold text-cyan-100">
+                        Add B-roll video
+                        <input
+                          type="file"
+                          accept="video/mp4,video/webm,.mp4,.webm"
+                          disabled={busy || project.brollClips.length >= 10}
+                          onChange={(event) => {
+                            void addBrollClip(event.target.files?.[0]);
+                            event.target.value = "";
+                          }}
+                          className="sr-only"
+                        />
+                      </label>
+                    </div>
+                    {project.brollClips.length === 0 ? (
+                      <p className="text-xs text-slate-500">No B-roll clips yet.</p>
+                    ) : (
+                      <ul className="space-y-3">
+                        {project.brollClips.map((clip, index) => (
+                          <li key={clip.id} className="space-y-3 rounded-lg border border-slate-800 bg-slate-900 p-3">
+                            <div className="flex items-center justify-between gap-2">
+                              <div className="min-w-0">
+                                <p className="truncate text-sm font-semibold text-white">B-roll {index + 1}</p>
+                                <p className="truncate text-xs text-slate-400">{clip.fileName} · {formatTime(clip.sourceDurationSeconds)}</p>
+                              </div>
+                              <button
+                                type="button"
+                                onClick={() => updateProject({
+                                  brollClips: project.brollClips.filter((item) => item.id !== clip.id),
+                                })}
+                                className="min-h-12 min-w-12 rounded-lg border border-rose-900 px-3 text-xs font-semibold text-rose-200"
+                              >
+                                Remove
+                              </button>
+                            </div>
+                            <div className="grid gap-3 sm:grid-cols-2">
+                              <label className="block text-xs text-slate-400">
+                                Show from
+                                <input
+                                  type="number"
+                                  min={project.startSeconds}
+                                  max={clip.endSeconds - 0.1}
+                                  step="0.1"
+                                  value={clip.startSeconds}
+                                  onChange={(event) => changeBrollRange(clip.id, "startSeconds", event.target.value)}
+                                  className="mt-1 min-h-12 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 text-base text-white"
+                                />
+                              </label>
+                              <label className="block text-xs text-slate-400">
+                                Show until
+                                <input
+                                  type="number"
+                                  min={clip.startSeconds + 0.1}
+                                  max={Math.min(project.endSeconds, clip.startSeconds + clip.sourceDurationSeconds)}
+                                  step="0.1"
+                                  value={clip.endSeconds}
+                                  onChange={(event) => changeBrollRange(clip.id, "endSeconds", event.target.value)}
+                                  className="mt-1 min-h-12 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 text-base text-white"
+                                />
+                              </label>
+                              <label className="block text-xs text-slate-400 sm:col-span-2">
+                                B-roll fit
+                                <select
+                                  value={clip.fit}
+                                  onChange={(event) => updateProject({
+                                    brollClips: project.brollClips.map((item) =>
+                                      item.id === clip.id ? { ...item, fit: event.target.value as ShortBrollClip["fit"] } : item,
+                                    ),
+                                  })}
+                                  className="mt-1 min-h-12 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 text-base text-white"
+                                >
+                                  <option value="cover">Fill the frame</option>
+                                  <option value="contain">Show full B-roll frame</option>
+                                </select>
+                              </label>
+                            </div>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </section>
+
+                  <section className="space-y-3 rounded-xl border border-slate-800 bg-slate-950/60 p-3">
+                    <div className="flex flex-wrap items-start justify-between gap-2">
+                      <div>
+                        <h4 className="text-sm font-semibold text-white">Instrumental bed</h4>
+                        <p className="mt-1 text-xs leading-relaxed text-slate-400">
+                          Upload music you own or are licensed to use. It plays under the original audio with adjustable volume and fades.
+                        </p>
+                      </div>
+                      <label className="flex min-h-12 cursor-pointer items-center rounded-lg border border-violet-800 px-3 text-xs font-semibold text-violet-100">
+                        Add instrumental
+                        <input
+                          type="file"
+                          accept="audio/mpeg,audio/mp4,audio/aac,audio/wav,audio/x-wav,.mp3,.m4a,.aac,.wav"
+                          disabled={busy || project.musicTracks.length >= 5}
+                          onChange={(event) => {
+                            void addMusicTrack(event.target.files?.[0]);
+                            event.target.value = "";
+                          }}
+                          className="sr-only"
+                        />
+                      </label>
+                    </div>
+                    {project.musicTracks.length === 0 ? (
+                      <p className="text-xs text-slate-500">No instrumental tracks yet.</p>
+                    ) : (
+                      <ul className="space-y-3">
+                        {project.musicTracks.map((track, index) => (
+                          <li key={track.id} className="space-y-3 rounded-lg border border-slate-800 bg-slate-900 p-3">
+                            <div className="flex items-center justify-between gap-2">
+                              <div className="min-w-0">
+                                <p className="truncate text-sm font-semibold text-white">Instrumental {index + 1}</p>
+                                <p className="truncate text-xs text-slate-400">{track.fileName} · {formatTime(track.sourceDurationSeconds)}</p>
+                              </div>
+                              <button
+                                type="button"
+                                onClick={() => updateProject({
+                                  musicTracks: project.musicTracks.filter((item) => item.id !== track.id),
+                                })}
+                                className="min-h-12 min-w-12 rounded-lg border border-rose-900 px-3 text-xs font-semibold text-rose-200"
+                              >
+                                Remove
+                              </button>
+                            </div>
+                            <div className="grid gap-3 sm:grid-cols-2">
+                              <label className="block text-xs text-slate-400">
+                                Start at
+                                <input
+                                  type="number"
+                                  min={project.startSeconds}
+                                  max={track.endSeconds - 0.1}
+                                  step="0.1"
+                                  value={track.startSeconds}
+                                  onChange={(event) => changeMusicRange(track.id, "startSeconds", event.target.value)}
+                                  className="mt-1 min-h-12 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 text-base text-white"
+                                />
+                              </label>
+                              <label className="block text-xs text-slate-400">
+                                End at
+                                <input
+                                  type="number"
+                                  min={track.startSeconds + 0.1}
+                                  max={Math.min(project.endSeconds, track.startSeconds + track.sourceDurationSeconds)}
+                                  step="0.1"
+                                  value={track.endSeconds}
+                                  onChange={(event) => changeMusicRange(track.id, "endSeconds", event.target.value)}
+                                  className="mt-1 min-h-12 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 text-base text-white"
+                                />
+                              </label>
+                            </div>
+                            <label className="block text-xs text-slate-400">
+                              Music level · {Math.round(track.volume * 100)}%
+                              <input
+                                type="range"
+                                min="0"
+                                max="1"
+                                step="0.01"
+                                value={track.volume}
+                                onChange={(event) => updateMusicTrack(track.id, { volume: Number(event.target.value) })}
+                                className="min-h-12 w-full accent-violet-400"
+                              />
+                            </label>
+                            <div className="grid gap-3 sm:grid-cols-2">
+                              <label className="block text-xs text-slate-400">
+                                Fade in · {track.fadeInSeconds.toFixed(1)} sec
+                                <input
+                                  type="range"
+                                  min="0"
+                                  max={Math.min(10, (track.endSeconds - track.startSeconds) / 2)}
+                                  step="0.1"
+                                  value={Math.min(track.fadeInSeconds, (track.endSeconds - track.startSeconds) / 2)}
+                                  onChange={(event) => updateMusicTrack(track.id, { fadeInSeconds: Number(event.target.value) })}
+                                  className="min-h-12 w-full accent-violet-400"
+                                />
+                              </label>
+                              <label className="block text-xs text-slate-400">
+                                Fade out · {track.fadeOutSeconds.toFixed(1)} sec
+                                <input
+                                  type="range"
+                                  min="0"
+                                  max={Math.min(10, (track.endSeconds - track.startSeconds) / 2)}
+                                  step="0.1"
+                                  value={Math.min(track.fadeOutSeconds, (track.endSeconds - track.startSeconds) / 2)}
+                                  onChange={(event) => updateMusicTrack(track.id, { fadeOutSeconds: Number(event.target.value) })}
+                                  className="min-h-12 w-full accent-violet-400"
+                                />
+                              </label>
+                            </div>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </section>
+                  <p className="text-xs leading-relaxed text-amber-200">
+                    B-roll and music are separate hosted tracks over the embedded YouTube player. They preview and publish on this page; a downloadable, merged video still requires an authorized source upload.
+                  </p>
                 </div>
               </details>
               <details open className="rounded-xl border border-slate-700 bg-slate-950/70 p-3">

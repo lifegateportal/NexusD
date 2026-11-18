@@ -135,6 +135,22 @@ export async function publishShort(projectInput: unknown): Promise<ShortProject>
       throw new Error("Custom thumbnail must use an image asset uploaded through the Shorts Studio.");
     }
   }
+  const expectedAssetPrefix = env.R2_PUBLIC_URL
+    ? `${env.R2_PUBLIC_URL.replace(/\/$/, "")}/published/shorts/assets/`
+    : "";
+  if ((project.brollClips.length > 0 || project.musicTracks.length > 0) && !expectedAssetPrefix) {
+    throw new Error("Configure R2_PUBLIC_URL before publishing B-roll or music tracks.");
+  }
+  for (const clip of project.brollClips) {
+    if (!clip.videoUrl.startsWith(expectedAssetPrefix)) {
+      throw new Error("B-roll must use an asset uploaded through the Shorts Studio.");
+    }
+  }
+  for (const track of project.musicTracks) {
+    if (!track.audioUrl.startsWith(expectedAssetPrefix)) {
+      throw new Error("Music must use an asset uploaded through the Shorts Studio.");
+    }
+  }
 
   const catalog = await listPublicShorts();
   if (!catalog.shorts.some((short) => short.slug === project.slug) && catalog.shorts.length >= 500) {

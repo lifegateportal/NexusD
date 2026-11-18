@@ -8,11 +8,25 @@ export const runtime = "nodejs";
 
 const RequestSchema = z.object({
   filename: z.string().trim().min(1).max(255),
-  contentType: z.enum(["video/mp4", "video/webm", "image/png", "image/jpeg", "image/webp"]),
+  contentType: z.enum([
+    "video/mp4",
+    "video/webm",
+    "audio/mpeg",
+    "audio/mp4",
+    "audio/aac",
+    "audio/wav",
+    "audio/x-wav",
+    "image/png",
+    "image/jpeg",
+    "image/webp",
+  ]),
   size: z.number().int().min(1).max(500 * 1024 * 1024),
 }).strict().refine(
   (input) => !input.contentType.startsWith("image/") || input.size <= 10 * 1024 * 1024,
   { message: "Images must be 10 MB or smaller.", path: ["size"] },
+).refine(
+  (input) => !input.contentType.startsWith("audio/") || input.size <= 100 * 1024 * 1024,
+  { message: "Instrumental audio files must be 100 MB or smaller.", path: ["size"] },
 );
 
 export async function POST(request: NextRequest) {
@@ -40,6 +54,11 @@ export async function POST(request: NextRequest) {
     const extensionByType = {
       "video/mp4": "mp4",
       "video/webm": "webm",
+      "audio/mpeg": "mp3",
+      "audio/mp4": "m4a",
+      "audio/aac": "aac",
+      "audio/wav": "wav",
+      "audio/x-wav": "wav",
       "image/png": "png",
       "image/jpeg": "jpg",
       "image/webp": "webp",

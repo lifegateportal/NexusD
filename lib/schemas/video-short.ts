@@ -76,6 +76,40 @@ export const ShortOverlaySchema = z.object({
   }
 });
 
+export const ShortBrollClipSchema = z.object({
+  id: z.string().uuid(),
+  fileName: z.string().trim().min(1).max(255),
+  videoUrl: z.string().url(),
+  sourceDurationSeconds: z.number().finite().positive().max(3600),
+  startSeconds: z.number().finite().min(0),
+  endSeconds: z.number().finite().min(0),
+  fit: z.enum(["cover", "contain"]).default("cover"),
+}).strict().refine((clip) => clip.endSeconds > clip.startSeconds, {
+  message: "B-roll clip end must be after its start.",
+  path: ["endSeconds"],
+}).refine((clip) => clip.endSeconds - clip.startSeconds <= clip.sourceDurationSeconds, {
+  message: "B-roll timeline duration cannot exceed its uploaded file duration.",
+  path: ["endSeconds"],
+});
+
+export const ShortMusicTrackSchema = z.object({
+  id: z.string().uuid(),
+  fileName: z.string().trim().min(1).max(255),
+  audioUrl: z.string().url(),
+  sourceDurationSeconds: z.number().finite().positive().max(3600),
+  startSeconds: z.number().finite().min(0),
+  endSeconds: z.number().finite().min(0),
+  volume: z.number().finite().min(0).max(1).default(0.25),
+  fadeInSeconds: z.number().finite().min(0).max(30).default(1),
+  fadeOutSeconds: z.number().finite().min(0).max(30).default(2),
+}).strict().refine((track) => track.endSeconds > track.startSeconds, {
+  message: "Music track end must be after its start.",
+  path: ["endSeconds"],
+}).refine((track) => track.endSeconds - track.startSeconds <= track.sourceDurationSeconds, {
+  message: "Music timeline duration cannot exceed its uploaded file duration.",
+  path: ["endSeconds"],
+});
+
 const YouTubeShortSourceSchema = z.object({
   type: z.literal("youtube"),
   videoId: z.string().regex(/^[A-Za-z0-9_-]{11}$/),
@@ -105,6 +139,8 @@ export const ShortProjectSchema = z.object({
   frameSlots: z.array(ShortFrameSlotSchema).min(1).max(100),
   captions: z.array(LibraryVideoSegmentSchema).max(5000),
   overlays: z.array(ShortOverlaySchema).max(20).default([]),
+  brollClips: z.array(ShortBrollClipSchema).max(10).default([]),
+  musicTracks: z.array(ShortMusicTrackSchema).max(5).default([]),
   captionsEnabled: z.boolean().default(true),
   captionPosition: z.enum(["top", "middle", "bottom"]).default("bottom"),
   captionSize: z.enum(["small", "medium", "large"]).default("medium"),
@@ -132,6 +168,16 @@ export const ShortProjectSchema = z.object({
     (overlay) => overlay.startSeconds >= project.startSeconds && overlay.endSeconds <= project.endSeconds,
   ),
   { message: "Overlays must be inside the short's time range.", path: ["overlays"] },
+).refine(
+  (project) => project.brollClips.every(
+    (clip) => clip.startSeconds >= project.startSeconds && clip.endSeconds <= project.endSeconds,
+  ),
+  { message: "B-roll clips must be inside the short's time range.", path: ["brollClips"] },
+).refine(
+  (project) => project.musicTracks.every(
+    (track) => track.startSeconds >= project.startSeconds && track.endSeconds <= project.endSeconds,
+  ),
+  { message: "Music tracks must be inside the short's time range.", path: ["musicTracks"] },
 ).refine((project) => {
   const slots = [...project.frameSlots].sort((a, b) => a.startSeconds - b.startSeconds);
   if (

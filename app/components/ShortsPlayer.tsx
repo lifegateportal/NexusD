@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, PointerEvent } from "react";
 import type { ShortProject, ShortCropKeyframe, ShortFrameSlot } from "@/lib/schemas/video-short";
 import { buildTimedCaptionCues } from "@/lib/short-caption-cues";
@@ -124,6 +124,8 @@ export default function ShortsPlayer({
   const youtubeHostRef = useRef<HTMLDivElement>(null);
   const youtubePlayerRef = useRef<YouTubePlayerInstance | null>(null);
   const fullscreenContainerRef = useRef<HTMLDivElement>(null);
+  const brollVideoRefs = useRef(new Map<string, HTMLVideoElement>());
+  const musicTrackRefs = useRef(new Map<string, HTMLAudioElement>());
   const timeCallbackRef = useRef(onTimeChange);
   const dragRef = useRef<{ x: number; y: number; clientX: number; clientY: number; width: number; height: number } | null>(null);
   const [currentTime, setCurrentTime] = useState(project.startSeconds);
@@ -261,6 +263,62 @@ export default function ShortsPlayer({
     };
   }, [project.startSeconds, project.endSeconds, videoUrl]);
 
+  const syncAuxiliaryMedia = useCallback((timeSeconds: number, shouldPlay: boolean) => {
+    for (const clip of project.brollClips) {
+      const video = brollVideoRefs.current.get(clip.id);
+      if (!video) continue;
+      const active = timeSeconds >= clip.startSeconds && timeSeconds < clip.endSeconds;
+      if (!active) {
+        video.pause();
+        continue;
+      }
+      const targetTime = Math.min(clip.sourceDurationSeconds, timeSeconds - clip.startSeconds);
+      if (video.readyState >= 1 && Math.abs(video.currentTime - targetTime) > 0.4) {
+        video.currentTime = targetTime;
+      }
+      if (shouldPlay && video.paused) {
+        void video.play().catch(() => {
+          setPlayerError("Could not play this B-roll clip. Check that the uploaded file is a supported MP4 or WebM.");
+        });
+      } else if (!shouldPlay) {
+        video.pause();
+      }
+    }
+
+    for (const track of project.musicTracks) {
+      const audio = musicTrackRefs.current.get(track.id);
+      if (!audio) continue;
+      const active = timeSeconds >= track.startSeconds && timeSeconds < track.endSeconds;
+      if (!active) {
+        audio.pause();
+        continue;
+      }
+      const elapsed = timeSeconds - track.startSeconds;
+      const remaining = track.endSeconds - timeSeconds;
+      const fadeInGain = track.fadeInSeconds > 0
+        ? Math.min(1, elapsed / track.fadeInSeconds)
+        : 1;
+      const fadeOutGain = track.fadeOutSeconds > 0
+        ? Math.min(1, remaining / track.fadeOutSeconds)
+        : 1;
+      audio.volume = Math.max(0, Math.min(1, track.volume * fadeInGain * fadeOutGain));
+      if (audio.readyState >= 1 && Math.abs(audio.currentTime - elapsed) > 0.75) {
+        audio.currentTime = elapsed;
+      }
+      if (shouldPlay && audio.paused) {
+        void audio.play().catch(() => {
+          setPlayerError("Could not play the instrumental track. Check its format and start playback with the Play button.");
+        });
+      } else if (!shouldPlay) {
+        audio.pause();
+      }
+    }
+  }, [project.brollClips, project.musicTracks]);
+
+  useEffect(() => {
+    syncAuxiliaryMedia(currentTime, playing);
+  }, [currentTime, playing, syncAuxiliaryMedia]);
+
   useEffect(() => {
     const video = videoRef.current;
     if (video && video.readyState >= 1) video.currentTime = project.startSeconds;
@@ -269,23 +327,30 @@ export default function ShortsPlayer({
   function seek(seconds: number) {
     const bounded = Math.max(project.startSeconds, Math.min(project.endSeconds, seconds));
     setCurrentTime(bounded);
+    syncAuxiliaryMedia(bounded, playing);
     if (project.source.type === "youtube") youtubePlayerRef.current?.seekTo(bounded, true);
     else if (videoRef.current) videoRef.current.currentTime = bounded;
   }
 
   function togglePlayback() {
+    const nextPlaying = !playing;
+    const playbackTime = !playing && currentTime >= project.endSeconds
+      ? project.startSeconds
+      : currentTime;
     if (project.source.type === "youtube") {
       if (!playing && currentTime >= project.endSeconds) seek(project.startSeconds);
       if (playing) youtubePlayerRef.current?.pauseVideo();
       else youtubePlayerRef.current?.playVideo();
-      setPlaying(!playing);
+      syncAuxiliaryMedia(playbackTime, nextPlaying);
+      setPlaying(nextPlaying);
       return;
     }
     if (!videoRef.current) return;
     if (!playing && currentTime >= project.endSeconds) seek(project.startSeconds);
     if (playing) videoRef.current.pause();
     else void videoRef.current.play();
-    setPlaying(!playing);
+    syncAuxiliaryMedia(playbackTime, nextPlaying);
+    setPlaying(nextPlaying);
   }
 
   async function toggleFullscreen() {
@@ -500,6 +565,44 @@ export default function ShortsPlayer({
               Choose an authorized MP4 or WebM source to preview reliable manual reframing.
             </div>
           )}
+          {project.brollClips.map((clip) => {
+            const active = currentTime >= clip.startSeconds && currentTime < clip.endSeconds;
+            return (
+              <video
+                key={clip.id}
+                ref={(element) => {
+                  if (element) brollVideoRefs.current.set(clip.id, element);
+                  else brollVideoRefs.current.delete(clip.id);
+                }}
+                src={clip.videoUrl}
+                muted
+                playsInline
+                preload="metadata"
+                aria-label={`B-roll: ${clip.fileName}`}
+                className="absolute inset-0 h-full w-full"
+                style={{
+                  display: active ? "block" : "none",
+                  objectFit: clip.fit,
+                  pointerEvents: "none",
+                  zIndex: 30,
+                }}
+                onLoadedMetadata={() => syncAuxiliaryMedia(currentTime, playing)}
+              />
+            );
+          })}
+          {project.musicTracks.map((track) => (
+            <audio
+              key={track.id}
+              ref={(element) => {
+                if (element) musicTrackRefs.current.set(track.id, element);
+                else musicTrackRefs.current.delete(track.id);
+              }}
+              src={track.audioUrl}
+              preload="metadata"
+              aria-label={`Instrumental: ${track.fileName}`}
+              onLoadedMetadata={() => syncAuxiliaryMedia(currentTime, playing)}
+            />
+          ))}
           {project.captionsEnabled && activeTimedCaption && (
             <div
               className={`pointer-events-none absolute left-[5%] right-[5%] z-[50] text-center leading-[1.12] ${captionPosition}`}
