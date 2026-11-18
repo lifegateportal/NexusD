@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import type { PointerEvent } from "react";
+import type { CSSProperties, PointerEvent } from "react";
 import type { ShortProject, ShortCropKeyframe, ShortFrameSlot } from "@/lib/schemas/video-short";
 
 type YouTubePlayerInstance = {
@@ -13,11 +13,6 @@ type YouTubePlayerInstance = {
   pauseVideo(): void;
   playVideo(): void;
   seekTo(seconds: number, allowSeekAhead: boolean): void;
-};
-
-type NativeFullscreenVideo = HTMLVideoElement & {
-  webkitDisplayingFullscreen?: boolean;
-  webkitEnterFullscreen?: () => void;
 };
 
 type YouTubeApi = {
@@ -42,6 +37,11 @@ type Props = {
   compactPreview?: boolean;
   onTimeChange?: (seconds: number) => void;
   onCropChange?: (timeSeconds: number, x: number, y: number, zoom: number, fit: ShortCropKeyframe["fit"]) => void;
+};
+
+type PreviewStyle = CSSProperties & {
+  "--preview-width-mobile"?: string;
+  "--preview-width-desktop"?: string;
 };
 
 let youtubeApiPromise: Promise<void> | null = null;
@@ -148,24 +148,14 @@ export default function ShortsPlayer({
   }, [project.startSeconds, project.endSeconds]);
 
   useEffect(() => {
-    const video = videoRef.current as NativeFullscreenVideo | null;
     const updateFullscreen = () => {
-      setIsFullscreen(
-        document.fullscreenElement === fullscreenContainerRef.current
-        || Boolean(video?.webkitDisplayingFullscreen),
-      );
+      setIsFullscreen(document.fullscreenElement === fullscreenContainerRef.current);
     };
     document.addEventListener("fullscreenchange", updateFullscreen);
-    document.addEventListener("webkitfullscreenchange", updateFullscreen);
-    video?.addEventListener("webkitbeginfullscreen", updateFullscreen);
-    video?.addEventListener("webkitendfullscreen", updateFullscreen);
     return () => {
       document.removeEventListener("fullscreenchange", updateFullscreen);
-      document.removeEventListener("webkitfullscreenchange", updateFullscreen);
-      video?.removeEventListener("webkitbeginfullscreen", updateFullscreen);
-      video?.removeEventListener("webkitendfullscreen", updateFullscreen);
     };
-  }, [videoUrl]);
+  }, []);
 
   useEffect(() => {
     if (project.source.type !== "youtube") return;
@@ -289,7 +279,11 @@ export default function ShortsPlayer({
   }
 
   async function toggleFullscreen() {
-    if (document.fullscreenElement) {
+    if (isFullscreen) {
+      if (!document.fullscreenElement) {
+        setIsFullscreen(false);
+        return;
+      }
       try {
         await document.exitFullscreen();
       } catch {
@@ -304,16 +298,10 @@ export default function ShortsPlayer({
         await container.requestFullscreen();
         return;
       } catch {
-        // Continue to the native video fallback for browsers that restrict element fullscreen.
+        setPlayerError("");
       }
     }
-
-    const video = videoRef.current as NativeFullscreenVideo | null;
-    if (video?.webkitEnterFullscreen) {
-      video.webkitEnterFullscreen();
-      return;
-    }
-    setPlayerError("Fullscreen playback is not supported by this browser.");
+    setIsFullscreen(true);
   }
 
   async function shareShort() {
@@ -387,18 +375,32 @@ export default function ShortsPlayer({
       ? "text-sm"
       : "text-base sm:text-lg";
 
+  const previewStyle: PreviewStyle = isFullscreen
+    ? {
+      position: "fixed",
+      inset: 0,
+      zIndex: 100,
+      width: "100vw",
+      height: "100dvh",
+      aspectRatio: "auto",
+      borderRadius: 0,
+    }
+    : {
+      aspectRatio: activeSlot.aspectRatio.replace(":", "/"),
+      ...(compactPreview ? {
+        "--preview-width-mobile": `${ratio * 52}dvh`,
+        "--preview-width-desktop": `${ratio * 66}dvh`,
+      } : {}),
+    };
+
   return (
-    <div className="w-full">
+    <div className={compactPreview ? "flex w-full flex-col items-center" : "w-full"}>
       <div
         ref={fullscreenContainerRef}
         className={`relative touch-none overflow-hidden bg-black ${
-          isFullscreen ? "flex h-dvh w-screen items-center justify-center rounded-none" : "rounded-xl"
-        } ${compactPreview ? "inline-block h-[33dvh] w-auto max-w-full lg:h-[52dvh]" : "w-full"} ${editable ? "cursor-move" : ""}`}
-        style={isFullscreen
-          ? { width: "100vw", height: "100dvh", aspectRatio: "auto", borderRadius: 0 }
-          : {
-            aspectRatio: activeSlot.aspectRatio.replace(":", "/"),
-          }}
+          isFullscreen ? "flex items-center justify-center rounded-none" : "rounded-xl"
+        } ${compactPreview ? "mx-auto w-[min(100%,var(--preview-width-mobile))] lg:w-[min(100%,var(--preview-width-desktop))]" : "w-full"} ${editable ? "cursor-move" : ""}`}
+        style={previewStyle}
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
         onPointerUp={() => { dragRef.current = null; }}

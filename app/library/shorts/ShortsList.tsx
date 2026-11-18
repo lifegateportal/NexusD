@@ -52,16 +52,34 @@ export default function ShortsList() {
           No shorts have been published yet.
         </p>
       ) : (
-        <ul className="grid gap-5 sm:grid-cols-2 xl:grid-cols-3">
+        <ul className="grid grid-cols-2 gap-3 sm:grid-cols-3 sm:gap-4 xl:grid-cols-4">
           {shorts.map((short) => (
-            <li key={short.slug} className="rounded-2xl border border-slate-800 bg-slate-900/50 p-4">
-              <h2 className="font-semibold leading-snug text-white">{short.title}</h2>
-              {short.videoTitle && <p className="mt-2 text-xs text-slate-400">From: {short.videoTitle}</p>}
+            <li key={short.slug}>
               <Link
                 href={`/library/shorts/${short.slug}`}
-                className="mt-3 flex min-h-12 items-center justify-center rounded-xl bg-cyan-400 px-4 text-sm font-bold text-slate-950"
+                className="relative block aspect-[9/16] min-h-48 overflow-hidden rounded-xl border border-slate-800 bg-gradient-to-br from-slate-800 via-slate-900 to-cyan-950"
               >
-                Watch short
+                {short.thumbnailUrl && (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img
+                    src={short.thumbnailUrl}
+                    alt=""
+                    className="absolute inset-0 h-full w-full object-cover"
+                  />
+                )}
+                <span className="absolute left-1/2 top-1/2 flex h-12 min-w-12 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full bg-black/70 px-3 text-xs font-bold text-white">
+                  Play
+                </span>
+                <span className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/95 via-black/60 to-transparent p-3 pt-16">
+                  <span className="line-clamp-2 block text-sm font-bold leading-snug text-white sm:text-base">
+                    {short.title}
+                  </span>
+                  {short.videoTitle && (
+                    <span className="mt-1 line-clamp-1 block text-[11px] text-slate-200 sm:text-xs">
+                      From: {short.videoTitle}
+                    </span>
+                  )}
+                </span>
               </Link>
             </li>
           ))}

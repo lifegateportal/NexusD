@@ -9,6 +9,7 @@ import {
   ShortProjectSchema,
   type ShortProject,
 } from "@/lib/schemas/video-short";
+import { getShortThumbnailUrl } from "@/lib/short-video-utils";
 
 const PRIVATE_CATALOG_KEY = "director/shorts/index.json";
 const PUBLIC_CATALOG_KEY = "published/shorts/index.json";
@@ -53,13 +54,27 @@ async function deleteObject(key: string): Promise<void> {
 }
 
 function summaryFor(project: ShortProject) {
+  const thumbnailUrl = getShortThumbnailUrl(project);
   return {
     slug: project.slug,
     title: project.title,
     sourceType: project.source.type,
+    ...(thumbnailUrl ? { thumbnailUrl } : {}),
     ...(project.source.type === "youtube" ? { videoTitle: project.source.videoTitle } : {}),
     status: project.status,
     updatedAt: project.updatedAt,
+  };
+}
+
+function publicSummaryFor(project: ShortProject) {
+  const summary = summaryFor(project);
+  return {
+    slug: summary.slug,
+    title: summary.title,
+    sourceType: summary.sourceType,
+    ...(summary.thumbnailUrl ? { thumbnailUrl: summary.thumbnailUrl } : {}),
+    ...(summary.videoTitle ? { videoTitle: summary.videoTitle } : {}),
+    updatedAt: summary.updatedAt,
   };
 }
 
@@ -113,6 +128,13 @@ export async function publishShort(projectInput: unknown): Promise<ShortProject>
       throw new Error("Uploaded source must use a video asset created by the Shorts Studio.");
     }
   }
+  if (project.thumbnailUrl) {
+    if (!env.R2_PUBLIC_URL) throw new Error("Configure R2_PUBLIC_URL before publishing a custom thumbnail.");
+    const expectedPrefix = `${env.R2_PUBLIC_URL.replace(/\/$/, "")}/published/shorts/assets/`;
+    if (!project.thumbnailUrl.startsWith(expectedPrefix)) {
+      throw new Error("Custom thumbnail must use an image asset uploaded through the Shorts Studio.");
+    }
+  }
 
   const catalog = await listPublicShorts();
   if (!catalog.shorts.some((short) => short.slug === project.slug) && catalog.shorts.length >= 500) {
@@ -123,13 +145,7 @@ export async function publishShort(projectInput: unknown): Promise<ShortProject>
   await writeJsonObject(PUBLIC_CATALOG_KEY, PublicShortCatalogSchema.parse({
     updatedAt: new Date().toISOString(),
     shorts: [
-      {
-        slug: published.slug,
-        title: published.title,
-        sourceType: published.source.type,
-        ...(published.source.type === "youtube" ? { videoTitle: published.source.videoTitle } : {}),
-        updatedAt: published.updatedAt,
-      },
+      publicSummaryFor(published),
       ...catalog.shorts.filter((short) => short.slug !== published.slug),
     ],
   }), true);

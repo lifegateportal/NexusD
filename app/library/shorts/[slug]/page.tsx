@@ -4,6 +4,7 @@ import { notFound } from "next/navigation";
 import ShortsPlayer from "@/app/components/ShortsPlayer";
 import LibraryNav from "../../LibraryNav";
 import { readPublicShort } from "@/lib/shorts-store";
+import { getShortThumbnailUrl } from "@/lib/short-video-utils";
 
 export const runtime = "nodejs";
 
@@ -15,9 +16,26 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
     return { title: "Video Short | Nexus Library" };
   }
   const project = await readPublicShort(slug);
+  const title = project ? `${project.title} | Nexus Library` : "Video Short | Nexus Library";
+  const description = project?.description || "A transcript-captioned video short from Nexus Library.";
+  const thumbnailUrl = project ? getShortThumbnailUrl(project) : undefined;
   return {
-    title: project ? `${project.title} | Nexus Library` : "Video Short | Nexus Library",
-    description: project?.description || "A transcript-captioned video short from Nexus Library.",
+    title,
+    description,
+    ...(thumbnailUrl && project ? {
+      openGraph: {
+        title,
+        description,
+        type: "website" as const,
+        images: [{ url: thumbnailUrl, alt: project.title }],
+      },
+      twitter: {
+        card: "summary_large_image" as const,
+        title,
+        description,
+        images: [thumbnailUrl],
+      },
+    } : {}),
   };
 }
 

@@ -528,6 +528,40 @@ export default function ShortsStudio() {
     }
   }
 
+  async function uploadThumbnail(file: File | undefined) {
+    if (!file || !project) return;
+    if (!["image/png", "image/jpeg", "image/webp"].includes(file.type) || file.size > 10 * 1024 * 1024) {
+      setError("Choose a PNG, JPEG, or WebP thumbnail up to 10 MB.");
+      return;
+    }
+    setBusy(true);
+    setError("");
+    setNotice("");
+    try {
+      const body = await requestJson("/api/ebook/shorts/source", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ filename: file.name, contentType: file.type, size: file.size }),
+      });
+      const upload = UploadResponseSchema.safeParse(body);
+      if (!upload.success || upload.data.contentType !== file.type) {
+        throw new Error("The thumbnail upload service returned invalid image details.");
+      }
+      const response = await fetch(upload.data.presignedUrl, {
+        method: "PUT",
+        headers: { "Content-Type": file.type },
+        body: file,
+      });
+      if (!response.ok) throw new Error(`Thumbnail upload failed (HTTP ${response.status}).`);
+      updateProject({ thumbnailUrl: upload.data.sourceUrl });
+      setNotice("Thumbnail uploaded. It will appear on the public short card and supported link previews.");
+    } catch (uploadError) {
+      setError(uploadError instanceof Error ? uploadError.message : "Could not upload this thumbnail.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   function updateOverlay(id: string, patch: Partial<ShortOverlay>) {
     if (!project) return;
     updateProject({
@@ -1179,7 +1213,7 @@ export default function ShortsStudio() {
               </div>
             </div>
 
-            <div className="grid min-h-0 flex-1 grid-cols-1 grid-rows-[minmax(0,42dvh)_minmax(0,1fr)] gap-3 overflow-hidden lg:grid-cols-[minmax(0,1fr)_minmax(20rem,0.82fr)] lg:grid-rows-1">
+            <div className="grid min-h-0 flex-1 grid-cols-1 grid-rows-[minmax(0,62dvh)_minmax(0,1fr)] gap-3 overflow-hidden lg:grid-cols-[minmax(0,1fr)_minmax(20rem,0.82fr)] lg:grid-rows-1">
               <div className="flex min-h-0 items-center justify-center overflow-hidden rounded-2xl border border-slate-800 bg-slate-900/60 p-2">
                 <ShortsPlayer
                   project={project}
@@ -1282,6 +1316,52 @@ export default function ShortsStudio() {
                   Short details and source
                 </summary>
                 <div className="mt-3 space-y-3">
+                <div className="grid items-start gap-3 rounded-xl border border-slate-800 bg-slate-950/60 p-3 sm:grid-cols-[10rem_minmax(0,1fr)]">
+                  {project.thumbnailUrl ? (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img
+                      src={project.thumbnailUrl}
+                      alt="Current short thumbnail"
+                      className="aspect-video w-full rounded-lg border border-slate-800 object-cover"
+                    />
+                  ) : (
+                    <div className="flex aspect-video items-center justify-center rounded-lg border border-dashed border-slate-700 text-xs text-slate-500">
+                      No custom thumbnail
+                    </div>
+                  )}
+                  <div className="space-y-2">
+                    <h4 className="text-sm font-semibold text-white">Short thumbnail</h4>
+                    <p className="text-xs leading-relaxed text-slate-400">
+                      Used on the public Shorts card and in link previews when a platform supports them. A wide image works well for link previews.
+                    </p>
+                    <div className="flex flex-wrap gap-2">
+                      <label className="flex min-h-12 cursor-pointer items-center rounded-lg border border-cyan-800 px-3 text-sm font-semibold text-cyan-100">
+                        {project.thumbnailUrl ? "Replace thumbnail" : "Upload thumbnail"}
+                        <input
+                          type="file"
+                          accept="image/png,image/jpeg,image/webp"
+                          disabled={busy}
+                          onChange={(event) => {
+                            void uploadThumbnail(event.target.files?.[0]);
+                            event.target.value = "";
+                          }}
+                          className="sr-only"
+                        />
+                      </label>
+                      {project.thumbnailUrl && (
+                        <button
+                          type="button"
+                          onClick={() => updateProject({ thumbnailUrl: undefined })}
+                          disabled={busy}
+                          className="min-h-12 rounded-lg border border-slate-700 px-3 text-sm font-semibold text-slate-300 disabled:opacity-50"
+                        >
+                          Remove
+                        </button>
+                      )}
+                    </div>
+                    <p className="text-xs text-slate-500">PNG, JPEG, or WebP · up to 10 MB</p>
+                  </div>
+                </div>
                 <label className="block text-sm font-medium text-slate-300">
                   Short title
                   <input

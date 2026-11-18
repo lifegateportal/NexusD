@@ -94,6 +94,7 @@ export const ShortProjectSchema = z.object({
   slug: z.string().regex(/^[a-z0-9][a-z0-9-]{0,79}$/),
   title: z.string().trim().min(1).max(120),
   description: z.string().trim().max(1000).default(""),
+  thumbnailUrl: z.string().url().optional(),
   sourceVideoId: z.string().regex(/^[A-Za-z0-9_-]{11}$/).optional(),
   source: ShortSourceSchema,
   startSeconds: z.number().finite().min(0),
@@ -152,6 +153,7 @@ export const PublishedShortProjectSchema = ShortProjectSchema.superRefine((proje
 export const ShortSummarySchema = z.object({
   slug: z.string().regex(/^[a-z0-9][a-z0-9-]{0,79}$/),
   title: z.string().trim().min(1).max(120),
+  thumbnailUrl: z.string().url().optional(),
   sourceType: z.enum(["youtube", "upload"]),
   videoTitle: z.string().trim().max(200).optional(),
   status: z.enum(["draft", "published"]),

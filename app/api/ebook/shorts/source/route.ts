@@ -12,16 +12,16 @@ const RequestSchema = z.object({
   size: z.number().int().min(1).max(500 * 1024 * 1024),
 }).strict().refine(
   (input) => !input.contentType.startsWith("image/") || input.size <= 10 * 1024 * 1024,
-  { message: "Overlay images must be 10 MB or smaller.", path: ["size"] },
+  { message: "Images must be 10 MB or smaller.", path: ["size"] },
 );
 
 export async function POST(request: NextRequest) {
   if (!process.env.AUTH_PASSWORD || !process.env.AUTH_COOKIE_SECRET) {
-    return NextResponse.json({ error: "Configure Director authentication before uploading video sources." }, { status: 503 });
+    return NextResponse.json({ error: "Configure Director authentication before uploading Shorts assets." }, { status: 503 });
   }
   if (!env.R2_ACCOUNT_ID || !env.R2_ACCESS_KEY_ID || !env.R2_SECRET_ACCESS_KEY || !env.R2_BUCKET_NAME || !env.R2_PUBLIC_URL) {
     return NextResponse.json(
-      { error: "Configure Cloudflare R2 credentials, bucket, and public URL before publishing uploaded video sources." },
+      { error: "Configure Cloudflare R2 credentials, bucket, and public URL before publishing Shorts assets." },
       { status: 503 },
     );
   }
