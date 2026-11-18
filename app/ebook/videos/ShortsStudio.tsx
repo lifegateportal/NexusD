@@ -140,6 +140,7 @@ export default function ShortsStudio() {
   const [localVideoUrl, setLocalVideoUrl] = useState<string | null>(null);
   const [currentTime, setCurrentTime] = useState(0);
   const [suggestions, setSuggestions] = useState<Suggestion[]>([]);
+  const [suggestionsVideoId, setSuggestionsVideoId] = useState("");
   const [suggestedBoundaries, setSuggestedBoundaries] = useState<SuggestedBoundaries | null>(null);
   const [agentInstructions, setAgentInstructions] = useState("");
   const [sermonBoundaryDrafts, setSermonBoundaryDrafts] = useState<Record<string, { start: string; end: string }>>({});
@@ -147,14 +148,9 @@ export default function ShortsStudio() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+  const [scrollEditorOnUpdate, setScrollEditorOnUpdate] = useState(false);
   const localFileRef = useRef<File | null>(null);
   const editorRef = useRef<HTMLElement>(null);
-
-  function scrollToEditor() {
-    window.requestAnimationFrame(() => {
-      editorRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
-    });
-  }
 
   const selectedVideo = useMemo(
     () => videos.find((video) => video.videoId === (project?.sourceVideoId ?? selectedVideoId)),
@@ -209,6 +205,12 @@ export default function ShortsStudio() {
   useEffect(() => () => {
     if (localVideoUrl?.startsWith("blob:")) URL.revokeObjectURL(localVideoUrl);
   }, [localVideoUrl]);
+
+  useEffect(() => {
+    if (!scrollEditorOnUpdate || !project) return;
+    editorRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    setScrollEditorOnUpdate(false);
+  }, [project, scrollEditorOnUpdate]);
 
   async function refreshShorts(): Promise<void> {
     const body = await requestJson("/api/ebook/shorts", { cache: "no-store" });
@@ -445,6 +447,7 @@ export default function ShortsStudio() {
     localFileRef.current = null;
     setCurrentTime(startSeconds);
     setSuggestions([]);
+    setSuggestionsVideoId("");
     setSuggestedBoundaries(null);
     setError("");
     setNotice("");
@@ -462,6 +465,7 @@ export default function ShortsStudio() {
       if (parsed.data.sourceVideoId) setSelectedVideoId(parsed.data.sourceVideoId);
       setCurrentTime(parsed.data.startSeconds);
       setSuggestions([]);
+      setSuggestionsVideoId("");
       setSuggestedBoundaries(null);
       setLocalVideoUrl(null);
       localFileRef.current = null;
@@ -580,6 +584,9 @@ export default function ShortsStudio() {
     setBusy(true);
     setError("");
     setNotice("");
+    setSuggestions([]);
+    setSuggestionsVideoId("");
+    setSuggestedBoundaries(null);
     try {
       const body = await requestJson("/api/ebook/shorts/suggest", {
         method: "POST",
@@ -593,6 +600,7 @@ export default function ShortsStudio() {
       const parsed = SuggestionResponseSchema.safeParse(body);
       if (!parsed.success) throw new Error("AI returned invalid short suggestions.");
       setSuggestions(parsed.data.suggestions);
+      setSuggestionsVideoId(selectedVideo.videoId);
       setSuggestedBoundaries({
         videoStartSeconds: parsed.data.videoStartSeconds,
         videoEndSeconds: parsed.data.videoEndSeconds,
@@ -608,47 +616,23 @@ export default function ShortsStudio() {
   }
 
   function useSuggestion(suggestion: Suggestion) {
-    const video = selectedVideo;
+    const video = videos.find((item) => item.videoId === suggestionsVideoId);
     if (!video) {
       setError("Choose the source video for this AI suggestion first.");
       return;
     }
-    if (!project) {
+    try {
       setProject(makeProject(video, suggestion.startSeconds, suggestion.endSeconds, suggestion.title));
       setSelectedVideoId(video.videoId);
       setLocalVideoUrl(null);
       localFileRef.current = null;
       setCurrentTime(suggestion.startSeconds);
       setError("");
-      setNotice("AI moment opened in the editor. Adjust its framing or timing, then save or publish.");
-      scrollToEditor();
-      return;
+      setNotice("AI moment opened as a new draft. Adjust the clip, then save or publish it.");
+      setScrollEditorOnUpdate(true);
+    } catch (selectionError) {
+      setError(selectionError instanceof Error ? selectionError.message : "Could not open this AI suggestion.");
     }
-    const overlays = project.overlays.flatMap((overlay) => {
-      const startSeconds = Math.max(suggestion.startSeconds, overlay.startSeconds);
-      const endSeconds = Math.min(suggestion.endSeconds, overlay.endSeconds);
-      return endSeconds > startSeconds
-        ? [{ ...overlay, startSeconds, endSeconds }]
-        : [];
-    });
-    const frameSlots: ShortFrameSlot[] = [{
-      startSeconds: suggestion.startSeconds,
-      endSeconds: suggestion.endSeconds,
-      aspectRatio: activeSlot?.aspectRatio ?? "9:16",
-      fit: activeSlot?.fit ?? "cover",
-      keyframes: [{ timeSeconds: suggestion.startSeconds, x: 50, y: 50, zoom: 1 }],
-    }];
-    updateProject({
-      title: suggestion.title,
-      startSeconds: suggestion.startSeconds,
-      endSeconds: suggestion.endSeconds,
-      frameSlots,
-      captions: filterCaptions(video, suggestion.startSeconds, suggestion.endSeconds),
-      overlays,
-    });
-    setCurrentTime(suggestion.startSeconds);
-    setError("");
-    scrollToEditor();
   }
 
   async function saveDraft() {
@@ -826,12 +810,22 @@ export default function ShortsStudio() {
       {error && <p role="alert" className="rounded-xl border border-rose-900 bg-rose-950/40 p-4 text-sm text-rose-200">{error}</p>}
       {notice && <p role="status" className="rounded-xl border border-emerald-900 bg-emerald-950/30 p-4 text-sm text-emerald-200">{notice}</p>}
 
-      <section className="grid gap-4 rounded-2xl border border-slate-800 bg-slate-900/40 p-4 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-end sm:p-6">
+      <section className="space-y-3 rounded-2xl border border-slate-800 bg-slate-900/40 p-4 sm:p-6">
         <label className="block text-sm font-medium text-slate-300">
-          Start from a saved transcript
+          Select a saved transcript
           <select
             value={selectedVideoId}
-            onChange={(event) => setSelectedVideoId(event.target.value)}
+            onChange={(event) => {
+              setSelectedVideoId(event.target.value);
+              setProject(null);
+              setLocalVideoUrl(null);
+              localFileRef.current = null;
+              setSuggestions([]);
+              setSuggestionsVideoId("");
+              setSuggestedBoundaries(null);
+              setError("");
+              setNotice("");
+            }}
             className="mt-2 min-h-12 w-full rounded-xl border border-slate-700 bg-slate-950 px-4 text-base text-white focus:border-cyan-400 focus:outline-none"
           >
             <option value="">Choose a video…</option>
@@ -840,14 +834,27 @@ export default function ShortsStudio() {
             ))}
           </select>
         </label>
-        <button
-          type="button"
-          onClick={createProject}
-          disabled={busy || !selectedVideoId}
-          className="min-h-12 rounded-xl bg-cyan-400 px-5 text-sm font-bold text-slate-950 disabled:opacity-50"
-        >
-          Create short draft
-        </button>
+        <p className="text-sm leading-relaxed text-slate-400">
+          Find AI moments analyzes the transcript and opens any selected moment directly in the editor. Start manual draft creates a basic 60-second draft without AI.
+        </p>
+        <div className="flex flex-wrap gap-3">
+          <button
+            type="button"
+            onClick={addAiSuggestions}
+            disabled={busy || !selectedVideo?.segments.length}
+            className="min-h-12 rounded-xl bg-violet-500 px-5 text-sm font-bold text-white disabled:opacity-50"
+          >
+            {busy ? "Finding AI moments…" : "Find AI moments"}
+          </button>
+          <button
+            type="button"
+            onClick={createProject}
+            disabled={busy || !selectedVideoId}
+            className="min-h-12 rounded-xl border border-slate-600 px-5 text-sm font-semibold text-slate-200 disabled:opacity-50"
+          >
+            Start manual draft
+          </button>
+        </div>
       </section>
 
       <section className="space-y-3 rounded-2xl border border-violet-900/70 bg-violet-950/20 p-4 sm:p-6">
@@ -908,20 +915,24 @@ export default function ShortsStudio() {
               </div>
             </div>
           )}
+          <p className="text-sm text-slate-400">Tap a suggestion card to open and edit that clip.</p>
           <ul className="grid gap-3 lg:grid-cols-2">
             {suggestions.map((suggestion, index) => (
-              <li key={`${suggestion.startSeconds}-${index}`} className="rounded-xl border border-cyan-900/70 bg-cyan-950/20 p-4">
-                <h4 className="font-semibold text-white">{suggestion.title}</h4>
-                <p className="mt-2 text-sm text-cyan-100">{suggestion.hook}</p>
-                <p className="mt-2 text-xs leading-relaxed text-slate-400">{suggestion.reason}</p>
-                <p className="mt-2 text-xs text-slate-500">{formatTime(suggestion.startSeconds)}–{formatTime(suggestion.endSeconds)}</p>
+              <li key={`${suggestion.startSeconds}-${index}`}>
                 <button
                   type="button"
                   onClick={() => useSuggestion(suggestion)}
-                  disabled={busy}
-                  className="mt-3 min-h-12 rounded-lg border border-cyan-800 px-4 text-sm font-semibold text-cyan-200 disabled:opacity-50"
+                  disabled={busy || !suggestionsVideoId}
+                  aria-label={`Edit ${suggestion.title} in Shorts Studio`}
+                  className="block min-h-48 w-full cursor-pointer rounded-xl border border-cyan-700 bg-cyan-950/40 p-4 text-left text-white shadow-sm transition-colors hover:border-cyan-400 hover:bg-cyan-950/70 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-cyan-300 disabled:cursor-wait disabled:opacity-50"
                 >
-                  Open in editor
+                  <span className="block font-semibold text-white">{suggestion.title}</span>
+                  <span className="mt-2 block text-sm text-cyan-100">{suggestion.hook}</span>
+                  <span className="mt-2 block text-xs leading-relaxed text-slate-300">{suggestion.reason}</span>
+                  <span className="mt-2 block text-xs text-slate-300">{formatTime(suggestion.startSeconds)}–{formatTime(suggestion.endSeconds)}</span>
+                  <span className="mt-3 inline-flex min-h-12 items-center rounded-lg bg-cyan-400 px-4 text-sm font-bold text-slate-950">
+                    Edit this short
+                  </span>
                 </button>
               </li>
             ))}
@@ -933,14 +944,6 @@ export default function ShortsStudio() {
         <aside className="space-y-3">
           <div className="flex items-center justify-between gap-3">
             <h3 className="text-lg font-semibold text-white">Your shorts</h3>
-            <button
-              type="button"
-              onClick={addAiSuggestions}
-              disabled={busy || !selectedVideo?.segments.length}
-              className="min-h-12 rounded-lg border border-violet-800 px-3 text-xs font-semibold text-violet-200 disabled:opacity-50"
-            >
-              {busy ? "Working…" : "AI: find moments"}
-            </button>
           </div>
           {shorts.length === 0 ? (
             <p className="rounded-xl border border-dashed border-slate-700 p-5 text-sm text-slate-400">Saved drafts and published shorts will appear here.</p>

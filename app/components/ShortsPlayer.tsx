@@ -7,6 +7,7 @@ import type { ShortProject, ShortCropKeyframe, ShortFrameSlot } from "@/lib/sche
 type YouTubePlayerInstance = {
   destroy(): void;
   getCurrentTime(): number;
+  getIframe(): HTMLIFrameElement;
   getPlayerState(): number;
   unloadModule(moduleName: string): void;
   pauseVideo(): void;
@@ -189,8 +190,18 @@ export default function ShortsPlayer({
         },
         events: {
           onReady: () => {
-            youtubePlayerRef.current?.unloadModule("captions");
-            youtubePlayerRef.current?.seekTo(startSeconds, true);
+            const player = youtubePlayerRef.current;
+            if (player) {
+              const iframe = player.getIframe();
+              iframe.style.position = "absolute";
+              iframe.style.inset = "0";
+              iframe.style.width = "100%";
+              iframe.style.height = "100%";
+              iframe.style.maxWidth = "none";
+              iframe.style.border = "0";
+              player.unloadModule("captions");
+              player.seekTo(startSeconds, true);
+            }
             timer = window.setInterval(() => {
               const player = youtubePlayerRef.current;
               if (!player) return;
@@ -350,16 +361,17 @@ export default function ShortsPlayer({
     onCropChange(currentTime, x, y, position.zoom);
   }
 
-  const playerWidthPercent = activeSlot.fit === "contain"
-    ? 100
-    : Math.max(100, ((16 / 9) / ratio) * 100);
-  const playerHeightPercent = activeSlot.fit === "contain"
-    ? Math.min(100, (ratio / (16 / 9)) * 100)
-    : 100;
-  const playerLeftPercent = activeSlot.fit === "contain"
-    ? 0
-    : (100 - playerWidthPercent) * (position.x / 100);
-  const playerTopPercent = (100 - playerHeightPercent) / 2;
+  const sourceAspectRatio = 16 / 9;
+  const widthAtFit = (activeSlot.fit === "cover"
+    ? Math.max(100, (sourceAspectRatio / ratio) * 100)
+    : Math.min(100, (sourceAspectRatio / ratio) * 100));
+  const heightAtFit = (activeSlot.fit === "cover"
+    ? Math.max(100, (ratio / sourceAspectRatio) * 100)
+    : Math.min(100, (ratio / sourceAspectRatio) * 100));
+  const playerWidthPercent = widthAtFit * position.zoom;
+  const playerHeightPercent = heightAtFit * position.zoom;
+  const playerLeftPercent = (100 - playerWidthPercent) * (position.x / 100);
+  const playerTopPercent = (100 - playerHeightPercent) * (position.y / 100);
   const captionPosition = project.captionPosition === "top"
     ? "top-4"
     : project.captionPosition === "middle"
@@ -402,8 +414,6 @@ export default function ShortsPlayer({
                 height: `${playerHeightPercent}%`,
                 left: `${playerLeftPercent}%`,
                 top: `${playerTopPercent}%`,
-                transform: `scale(${position.zoom})`,
-                transformOrigin: "center center",
               }}
             >
               <div
