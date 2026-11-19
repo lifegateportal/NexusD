@@ -49,7 +49,7 @@ export default async function ShortEmbedPage({ params }: Props) {
 
   return (
     <main className="flex min-h-dvh w-full items-center justify-center overflow-x-hidden bg-black px-2 py-2">
-      <ShortsPlayer project={project} embedMode />
+      <ShortsPlayer project={project} embedMode showErrors={false} />
     </main>
   );
 }

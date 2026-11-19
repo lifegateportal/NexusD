@@ -98,7 +98,7 @@ export default async function LibraryShortPage({ params }: Props) {
             {project.description && <p className="mt-2 text-sm leading-relaxed text-slate-300">{project.description}</p>}
           </header>
           <div className="mx-auto w-full max-w-md">
-            <ShortsPlayer project={project} />
+            <ShortsPlayer project={project} showErrors={false} />
           </div>
           <p className="mt-4 text-center text-xs text-slate-500">
             {project.source.type === "youtube" ? "Playback provided by YouTube." : "Published video source."}

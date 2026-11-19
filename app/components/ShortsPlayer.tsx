@@ -45,6 +45,7 @@ type Props = {
   onCropChange?: (timeSeconds: number, x: number, y: number, zoom: number, fit: ShortCropKeyframe["fit"]) => void;
   onOverlayChange?: (id: string, patch: Partial<ShortOverlay>) => void;
   embedMode?: boolean;
+  showErrors?: boolean;
 };
 
 type PreviewStyle = CSSProperties & {
@@ -129,6 +130,7 @@ export default function ShortsPlayer({
   onCropChange,
   onOverlayChange,
   embedMode = false,
+  showErrors = true,
 }: Props) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const youtubeHostRef = useRef<HTMLDivElement>(null);
@@ -977,7 +979,7 @@ export default function ShortsPlayer({
               <p className="text-xs text-white/80">Controls hide while playing. Tap the video to show them.</p>
             </div>
           )}
-          {playerError && (!isFullscreen || fullscreenControlsVisible) && (
+          {showErrors && playerError && (!isFullscreen || fullscreenControlsVisible) && (
             <p role="alert" className="absolute inset-x-2 top-14 z-[210] rounded-lg bg-rose-950/90 p-2 text-xs text-rose-100">
               {playerError}
             </p>
@@ -1023,7 +1025,7 @@ export default function ShortsPlayer({
             Copy player link
           </button>
           {shareStatus && <p role="status" className="mt-2 text-xs text-emerald-300">{shareStatus}</p>}
-          {shareError && <p role="alert" className="mt-2 text-xs text-rose-300">{shareError}</p>}
+          {showErrors && shareError && <p role="alert" className="mt-2 text-xs text-rose-300">{shareError}</p>}
         </div>
       )}
       {project.source.type === "youtube" && !compactPreview && !embedMode && (
