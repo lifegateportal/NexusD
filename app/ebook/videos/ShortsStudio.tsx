@@ -43,8 +43,16 @@ import {
   type ShortBrollSuggestion,
   type ShortMusicSuggestion,
 } from "@/lib/schemas/short-media";
+import {
+  ShortCaptureCreateResponseSchema,
+  ShortCaptureJobStatusResponseSchema,
+  type ShortCaptureJobStatusResponse,
+} from "@/lib/schemas/short-capture";
 
 const ErrorSchema = z.object({ error: z.string() });
+const CaptureHistoryResponseSchema = z.object({
+  job: ShortCaptureJobStatusResponseSchema.nullable(),
+}).strict();
 const SuggestionResponseSchema = GeneratedShortSuggestionsSchema;
 const AlignmentResponseSchema = z.object({
   wordTimings: z.array(ShortTranscriptWordTimingSchema).max(50000),
@@ -80,6 +88,14 @@ const UploadResponseSchema = z.object({
 
 type Video = z.infer<typeof DirectorVideoCatalogSchema>["videos"][number];
 type Suggestion = z.infer<typeof SuggestionResponseSchema>["suggestions"][number];
+const captureStatusLabels: Record<ShortCaptureJobStatusResponse["status"], string> = {
+  queued: "Queued",
+  starting: "Starting browser",
+  capturing: "Capturing playback",
+  uploading: "Saving MP4",
+  completed: "Capture complete",
+  failed: "Capture failed",
+};
 type SuggestedBoundaries = Pick<
   z.infer<typeof SuggestionResponseSchema>,
   "videoStartSeconds" | "videoEndSeconds" | "sermonStartSeconds" | "sermonEndSeconds"
@@ -315,6 +331,7 @@ export default function ShortsStudio() {
   const [exportProgress, setExportProgress] = useState<number | null>(null);
   const [exportDownloadUrl, setExportDownloadUrl] = useState<string | null>(null);
   const [exportFileName, setExportFileName] = useState("");
+  const [captureJob, setCaptureJob] = useState<ShortCaptureJobStatusResponse | null>(null);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [scrollEditorOnUpdate, setScrollEditorOnUpdate] = useState(false);
@@ -330,6 +347,11 @@ export default function ShortsStudio() {
     () => videos.find((video) => video.videoId === (project?.sourceVideoId ?? selectedVideoId)),
     [project?.sourceVideoId, selectedVideoId, videos],
   );
+  const captureProjectSlug = project?.slug ?? "";
+  const captureVideoId = project?.source.type === "youtube" ? project.source.videoId : "";
+  const captureSourceKey = project
+    ? `${project.slug}:${project.source.type === "youtube" ? project.source.videoId : "upload"}`
+    : "";
   const sourceVideoBounds = selectedVideo?.segments.length
     ? {
       start: selectedVideo.segments[0].startSeconds,
@@ -510,7 +532,47 @@ export default function ShortsStudio() {
     setCaptionDrafts({});
     setCleanupSuggestions([]);
     setExportDownloadUrl(null);
+    setCaptureJob(null);
   }, [project?.slug]);
+
+  useEffect(() => {
+    if (!captureJob || ["completed", "failed"].includes(captureJob.status)) return;
+    let active = true;
+    let timer: number | null = null;
+    const poll = async () => {
+      try {
+        const body = await requestJson(`/api/ebook/shorts/capture/${captureJob.jobId}`, { cache: "no-store" });
+        const parsed = ShortCaptureJobStatusResponseSchema.safeParse(body);
+        if (!parsed.success) throw new Error("Nexus Director returned an invalid capture job status.");
+        if (active) setCaptureJob(parsed.data);
+      } catch (pollError) {
+        if (active) setError(pollError instanceof Error ? pollError.message : "Could not check Shorts capture status.");
+      } finally {
+        if (active) timer = window.setTimeout(() => void poll(), 1500);
+      }
+    };
+    void poll();
+    return () => {
+      active = false;
+      if (timer !== null) window.clearTimeout(timer);
+    };
+  }, [captureJob?.jobId, captureJob?.status]);
+
+  useEffect(() => {
+    setCaptureJob(null);
+    if (!captureProjectSlug || !captureVideoId) return;
+    let active = true;
+    requestJson(`/api/ebook/shorts/capture?slug=${encodeURIComponent(captureProjectSlug)}`, { cache: "no-store" })
+      .then((body) => {
+        const parsed = CaptureHistoryResponseSchema.safeParse(body);
+        if (!parsed.success) throw new Error("Nexus Director returned invalid Shorts capture history.");
+        if (active) setCaptureJob(parsed.data.job);
+      })
+      .catch((historyError) => {
+        if (active) setError(historyError instanceof Error ? historyError.message : "Could not load Shorts capture history.");
+      });
+    return () => { active = false; };
+  }, [captureProjectSlug, captureSourceKey, captureVideoId]);
 
   useEffect(() => () => {
     if (exportDownloadUrl) URL.revokeObjectURL(exportDownloadUrl);
@@ -2004,6 +2066,35 @@ export default function ShortsStudio() {
     };
   }
 
+  async function captureYoutubeProject() {
+    if (!project || project.source.type !== "youtube") return;
+    setBusy(true);
+    setError("");
+    setNotice("");
+    try {
+      const body = await requestJson("/api/ebook/shorts/capture", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ project }),
+      });
+      const parsed = ShortCaptureCreateResponseSchema.safeParse(body);
+      if (!parsed.success) throw new Error("The Shorts capture service returned an invalid job.");
+      setCaptureJob({
+        jobId: parsed.data.jobId,
+        status: parsed.data.status,
+        progress: 0,
+        error: null,
+        downloadUrl: null,
+        fileName: `${project.slug}.mp4`,
+      });
+      setNotice("Capture queued on the server. It will play this preview in real time and save the MP4 to private storage.");
+    } catch (captureError) {
+      setError(captureError instanceof Error ? captureError.message : "Could not start Shorts capture.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function exportProject() {
     if (!project) return;
     setBusy(true);
@@ -2419,32 +2510,53 @@ export default function ShortsStudio() {
                     <div className="min-w-0 flex-1">
                       <h4 className="text-sm font-semibold text-emerald-100">Download video file</h4>
                       <p className="mt-1 text-xs leading-relaxed text-slate-400">
-                        Renders locally in this tab from your authorized upload, including cuts, framing, captions, overlays, B-roll, and music. Keep the screen awake and this tab in the foreground.
+                        {project.source.type === "youtube"
+                          ? "The host captures this composed YouTube preview, including its framing, captions, overlays, B-roll, and music."
+                          : "Renders locally in this tab from your authorized upload, including cuts, framing, captions, overlays, B-roll, and music. Keep the screen awake and this tab in the foreground."}
                       </p>
                       {project.source.type === "youtube" && (
-                        <p className="mt-1 text-xs text-amber-200">YouTube-only projects can be previewed but cannot be rendered or downloaded.</p>
+                        <p className="mt-1 text-xs text-amber-200">Server capture runs in real time. Output quality depends on the YouTube playback and the capture worker must be online.</p>
                       )}
                     </div>
                     <button
                       type="button"
-                      onClick={() => void exportProject()}
-                      disabled={busy || project.source.type !== "upload"}
+                      onClick={() => void (project.source.type === "youtube" ? captureYoutubeProject() : exportProject())}
+                      disabled={busy || Boolean(captureJob && !["completed", "failed"].includes(captureJob.status))}
                       className="min-h-12 rounded-lg bg-emerald-400 px-4 text-sm font-bold text-slate-950 disabled:opacity-50"
                     >
-                      {exportProgress === null ? "Render export" : `Rendering ${Math.round(exportProgress * 100)}%`}
+                      {project.source.type === "youtube"
+                        ? captureJob && !["completed", "failed"].includes(captureJob.status)
+                          ? `${captureStatusLabels[captureJob.status]} ${Math.round(captureJob.progress * 100)}%`
+                          : "Capture MP4"
+                        : exportProgress === null ? "Render export" : `Rendering ${Math.round(exportProgress * 100)}%`}
                     </button>
                   </div>
-                  {exportProgress !== null && (
+                  {(exportProgress !== null || (captureJob && !["completed", "failed"].includes(captureJob.status))) && (
                     <div
                       role="progressbar"
                       aria-label="Video export progress"
                       aria-valuemin={0}
                       aria-valuemax={100}
-                      aria-valuenow={Math.round(exportProgress * 100)}
+                      aria-valuenow={Math.round((project.source.type === "youtube" ? captureJob?.progress ?? 0 : exportProgress ?? 0) * 100)}
                       className="h-2 overflow-hidden rounded-full bg-slate-800"
                     >
-                      <div className="h-full bg-emerald-400 transition-[width]" style={{ width: `${exportProgress * 100}%` }} />
+                      <div
+                        className="h-full bg-emerald-400 transition-[width]"
+                        style={{
+                          width: `${(project.source.type === "youtube" ? captureJob?.progress ?? 0 : exportProgress ?? 0) * 100}%`,
+                        }}
+                      />
                     </div>
+                  )}
+                  {captureJob && (
+                    <p
+                      role={captureJob.status === "failed" ? "alert" : "status"}
+                      className={`text-xs ${captureJob.status === "failed" ? "text-rose-200" : "text-slate-300"}`}
+                    >
+                      {captureJob.status === "failed"
+                        ? captureJob.error ?? captureStatusLabels.failed
+                        : `${captureStatusLabels[captureJob.status]}${captureJob.status === "completed" ? ". The private download link is refreshed when used." : "…"}`}
+                    </p>
                   )}
                   {exportDownloadUrl && (
                     <a
@@ -2455,8 +2567,18 @@ export default function ShortsStudio() {
                       Download {exportFileName}
                     </a>
                   )}
+                  {captureJob?.downloadUrl && (
+                    <a
+                      href={captureJob.downloadUrl}
+                      className="flex min-h-12 w-full items-center justify-center rounded-lg border border-emerald-700 px-4 text-sm font-bold text-emerald-100 sm:w-auto"
+                    >
+                      Download {captureJob.fileName}
+                    </a>
+                  )}
                   <p className="text-[11px] leading-relaxed text-slate-500">
-                    Browser export records in real time at 720p. Short playback cuts are applied; mixed frame ratios are letterboxed to the first framing slot. Some remote media may be blocked by its host&apos;s CORS policy.
+                    {project.source.type === "youtube"
+                      ? "Capture records at 30 fps using the selected frame ratio (up to 1280px on the long edge). Keep the worker online; the MP4 is stored in private R2."
+                      : "Browser export records in real time at 720p. Short playback cuts are applied; mixed frame ratios are letterboxed to the first framing slot. Some remote media may be blocked by its host&apos;s CORS policy."}
                   </p>
                 </section>
                 <ShortsTimeline

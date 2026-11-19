@@ -46,6 +46,7 @@ type Props = {
   onOverlayChange?: (id: string, patch: Partial<ShortOverlay>) => void;
   embedMode?: boolean;
   showErrors?: boolean;
+  captureMode?: boolean;
 };
 
 type PreviewStyle = CSSProperties & {
@@ -131,6 +132,7 @@ export default function ShortsPlayer({
   onOverlayChange,
   embedMode = false,
   showErrors = true,
+  captureMode = false,
 }: Props) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const youtubeHostRef = useRef<HTMLDivElement>(null);
@@ -666,6 +668,10 @@ export default function ShortsPlayer({
   const playerHeightPercent = heightAtFit * position.zoom;
   const playerLeftPercent = (100 - playerWidthPercent) * (position.x / 100);
   const playerTopPercent = (100 - playerHeightPercent) * (position.y / 100);
+  const [captureAspectWidth, captureAspectHeight] = project.frameSlots[0].aspectRatio.split(":").map(Number);
+  const captureAspect = captureAspectWidth / captureAspectHeight;
+  const captureWidth = captureAspect >= 1 ? 1280 : 720;
+  const captureHeight = Math.round(captureWidth / captureAspect);
   const captionPosition = project.captionPosition === "top"
     ? "top-4"
     : project.captionPosition === "middle"
@@ -712,7 +718,14 @@ export default function ShortsPlayer({
     },
   }[project.captionStyle];
 
-  const previewStyle: PreviewStyle = isFullscreen
+  const previewStyle: PreviewStyle = captureMode
+    ? {
+      width: `${captureWidth}px`,
+      height: `${captureHeight}px`,
+      aspectRatio: project.frameSlots[0].aspectRatio.replace(":", "/"),
+      borderRadius: 0,
+    }
+    : isFullscreen
     ? {
       position: "fixed",
       inset: 0,
@@ -735,10 +748,11 @@ export default function ShortsPlayer({
   const sourceReady = project.source.type === "youtube" ? youtubeReady : Boolean(videoUrl);
 
   return (
-    <div className={compactPreview || embedMode ? "flex w-full flex-col items-center" : "w-full"}>
+    <div className={captureMode || compactPreview || embedMode ? "flex h-full w-full flex-col items-center" : "w-full"}>
       <div
         ref={fullscreenContainerRef}
         className={`relative touch-none overflow-hidden bg-black ${
+          captureMode ? "h-full w-full rounded-none" :
           isFullscreen ? "flex items-center justify-center rounded-none" : "rounded-xl"
         } ${compactPreview ? "mx-auto w-[min(100%,var(--preview-width-mobile))] lg:w-[min(100%,var(--preview-width-desktop))]" : "w-full"} ${editable && !isFullscreen ? "cursor-move" : ""}`}
         style={previewStyle}
@@ -961,7 +975,7 @@ export default function ShortsPlayer({
               </div>
             );
           })}
-          {!editable && !hasStarted && project.thumbnailUrl && (
+          {!editable && !hasStarted && (project.thumbnailUrl || captureMode) && (
             <button
               type="button"
               onPointerDown={(event) => event.stopPropagation()}
@@ -970,8 +984,10 @@ export default function ShortsPlayer({
               aria-label={`Play ${project.title}`}
               className="absolute inset-0 z-[80] flex items-center justify-center overflow-hidden bg-black disabled:cursor-not-allowed"
             >
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img src={project.thumbnailUrl} alt="" className="absolute inset-0 h-full w-full object-cover" />
+              {project.thumbnailUrl && (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img src={project.thumbnailUrl} alt="" className="absolute inset-0 h-full w-full object-cover" />
+              )}
               <span className="relative flex min-h-12 min-w-12 items-center justify-center rounded-full bg-cyan-500 px-5 text-sm font-bold text-white shadow-lg">
                 {project.source.type === "youtube" && !youtubeReady ? "Loading…" : "Play"}
               </span>
@@ -986,7 +1002,7 @@ export default function ShortsPlayer({
               className="absolute inset-0 z-[180] bg-transparent"
             />
           )}
-          {(!isFullscreen || fullscreenControlsVisible) && (
+          {!captureMode && (!isFullscreen || fullscreenControlsVisible) && (
             <button
               type="button"
               onPointerDown={(event) => event.stopPropagation()}
@@ -1001,7 +1017,7 @@ export default function ShortsPlayer({
               {isFullscreen ? "Exit" : editable ? "Clean view" : "Expand"}
             </button>
           )}
-          {isFullscreen && fullscreenControlsVisible && (
+          {!captureMode && isFullscreen && fullscreenControlsVisible && (
             <div className="absolute inset-x-0 bottom-0 z-[190] flex items-center gap-3 bg-gradient-to-t from-black/85 to-transparent px-3 pb-[max(env(safe-area-inset-bottom),_1rem)] pt-8">
               <button
                 type="button"
@@ -1023,7 +1039,7 @@ export default function ShortsPlayer({
           )}
         </div>
       </div>
-      <div className="mt-3 flex items-center gap-3">
+      {!captureMode && <div className="mt-3 flex items-center gap-3">
         <button
           type="button"
           onClick={togglePlayback}
@@ -1046,7 +1062,7 @@ export default function ShortsPlayer({
         <span className="min-w-24 text-right text-xs tabular-nums text-slate-400">
           {formatTime(currentShortTimeSeconds)} / {formatTime(shortDurationSeconds)}
         </span>
-      </div>
+      </div>}
       {project.status === "published" && !compactPreview && !embedMode && (
         <div className="mt-2">
           <button
@@ -1083,7 +1099,7 @@ export default function ShortsPlayer({
         </p>
       )}
       {(project.brollClips.some((clip) => clip.provider === "pexels")
-        || project.musicTracks.some((track) => track.provider === "jamendo")) && (
+        || project.musicTracks.some((track) => track.provider === "jamendo")) && !captureMode && (
         <div className="mt-2 border-t border-slate-800 pt-2 text-xs leading-relaxed text-slate-400">
           <p className="font-semibold text-slate-300">Media credits</p>
           {project.brollClips.filter((clip) => clip.provider === "pexels").map((clip) => (

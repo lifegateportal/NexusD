@@ -33,6 +33,14 @@ const EnvironmentSchema = z.object({
   R2_SECRET_ACCESS_KEY: z.string().optional(),
   R2_BUCKET_NAME:      z.string().optional(),
   R2_PUBLIC_URL:       z.string().optional(), // e.g. https://pub-xxxx.r2.dev
+  SHORT_CAPTURE_JOB_DIR: z.string().optional(),
+  SHORT_CAPTURE_R2_BUCKET: z.string().optional(),
+  SHORT_CAPTURE_APP_ORIGIN: z.string().url().optional(),
+  SHORT_CAPTURE_CHROMIUM_PATH: z.string().optional(),
+  SHORT_CAPTURE_FFMPEG_PATH: z.string().optional(),
+  SHORT_CAPTURE_XVFB_PATH: z.string().optional(),
+  SHORT_CAPTURE_PULSE_SINK: z.string().optional(),
+  SHORT_CAPTURE_DISPLAY: z.string().regex(/^:\d{1,3}$/).optional(),
   // RunPod Voice Cloning — optional, enables XTTS v2 audiobook narration
   RUNPOD_API_KEY:             z.string().optional(),
   RUNPOD_VOICE_ENDPOINT_ID:   z.string().optional(), // RunPod Serverless endpoint ID
