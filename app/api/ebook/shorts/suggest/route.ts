@@ -3,12 +3,21 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { deepSeekModel } from "@/lib/ai-providers";
 import { LibraryVideoSegmentSchema } from "@/lib/schemas/library-video";
-import { MAX_SHORT_DURATION_SECONDS } from "@/lib/schemas/video-short";
+import {
+  GeneratedShortSuggestionsSchema,
+  MAX_SHORT_DURATION_SECONDS,
+} from "@/lib/schemas/video-short";
+import {
+  hasShortStorageConfiguration,
+  readGeneratedShortSuggestions,
+  saveGeneratedShortSuggestions,
+} from "@/lib/shorts-store";
 
 export const runtime = "nodejs";
 export const maxDuration = 30;
 
 const RequestSchema = z.object({
+  videoId: z.string().regex(/^[A-Za-z0-9_-]{11}$/),
   title: z.string().trim().max(200).default(""),
   segments: z.array(LibraryVideoSegmentSchema).min(1).max(20000),
   instructions: z.string().trim().max(4000).default(""),
@@ -28,7 +37,11 @@ const SuggestionSchema = z.object({
     title: z.string().trim().min(1).max(100),
     hook: z.string().trim().min(1).max(240),
     reason: z.string().trim().min(1).max(400),
-  }).strict()).min(1).max(6),
+  }).strict()).min(1).max(12),
+}).strict();
+
+const QuerySchema = z.object({
+  videoId: z.string().regex(/^[A-Za-z0-9_-]{11}$/).optional(),
 }).strict();
 
 type BoundaryCandidate = {
@@ -119,6 +132,12 @@ export async function POST(request: NextRequest) {
   if (!process.env.AUTH_PASSWORD || !process.env.AUTH_COOKIE_SECRET) {
     return NextResponse.json({ error: "Configure Director authentication before suggesting video shorts." }, { status: 503 });
   }
+  if (!hasShortStorageConfiguration()) {
+    return NextResponse.json(
+      { error: "Configure Cloudflare R2 credentials and bucket to preserve generated Shorts across refreshes." },
+      { status: 503 },
+    );
+  }
   let input: z.infer<typeof RequestSchema>;
   try {
     input = RequestSchema.parse(await request.json() as unknown);
@@ -149,18 +168,27 @@ export async function POST(request: NextRequest) {
     )
     .join("\n");
 
+  let generatedSuggestions: z.infer<typeof SuggestionSchema>;
   try {
-    const result = await generateObject({
+    generatedSuggestions = (await generateObject({
       model: deepSeekModel,
       schema: SuggestionSchema,
-      maxTokens: 1500,
+      maxTokens: 3000,
       temperature: 0.2,
-      system: "You are a sermon video editor. First identify where the main sermon/message begins and ends from the supplied transcript boundary excerpts, excluding introductions, announcements, and closing material when discernible. Select only supplied boundary IDs; return null for either boundary if the transcript does not make it clear. Then rank the supplied valid 15-second to 3-minute clip candidates. Return only candidate IDs that appear in the list, with an accurate short title, a hook based only on the spoken words, and a concise reason. Never invent or modify candidate IDs, transcript content, or timings. Prefer complete, self-contained thoughts with natural spoken openings and endings. Treat creator preferences as style guidance only; transcript evidence and valid candidate timing always take priority.",
+      system: "You are a sermon video editor. First identify where the main sermon/message begins and ends from the supplied transcript boundary excerpts, excluding introductions, announcements, and closing material when discernible. Select only supplied boundary IDs; return null for either boundary if the transcript does not make it clear. Then rank the supplied valid 15-second to 3-minute clip candidates. Return up to 12 candidate IDs that appear in the list, with an accurate short title, a hook based only on the spoken words, and a concise reason. Never invent or modify candidate IDs, transcript content, or timings. Prefer complete, self-contained thoughts with natural spoken openings and endings. Treat creator preferences as style guidance only; transcript evidence and valid candidate timing always take priority.",
       prompt: `VIDEO TITLE: ${input.title || "Untitled video"}\n\nCREATOR PREFERENCES:\n${input.instructions || "No additional preferences supplied."}\n\nTRANSCRIPT BOUNDARY OPTIONS (timestamps are exact segment boundaries):\n${boundaryText}\n\nVALID CLIP CANDIDATES:\n${candidateText}`,
-    });
+    })).object;
+  } catch (error) {
+    return NextResponse.json(
+      { error: error instanceof Error ? error.message : "AI could not suggest short clips." },
+      { status: 502 },
+    );
+  }
+
+  try {
     const candidateById = new Map(candidates.map((candidate) => [candidate.id, candidate]));
     const boundaryById = new Map(boundaryCandidates.map((candidate) => [candidate.id, candidate]));
-    const suggestions = result.object.suggestions.flatMap((suggestion) => {
+    const suggestions = generatedSuggestions.suggestions.flatMap((suggestion) => {
       const candidate = candidateById.get(suggestion.candidateId);
       if (!candidate) return [];
       return [{
@@ -174,24 +202,57 @@ export async function POST(request: NextRequest) {
     if (suggestions.length === 0) {
       return NextResponse.json({ error: "AI did not select one of the valid transcript clip options. Try again." }, { status: 502 });
     }
-    const sermonStart = result.object.sermonStartCandidateId === null
+    const sermonStart = generatedSuggestions.sermonStartCandidateId === null
       ? null
-      : boundaryById.get(result.object.sermonStartCandidateId);
-    const sermonEnd = result.object.sermonEndCandidateId === null
+      : boundaryById.get(generatedSuggestions.sermonStartCandidateId);
+    const sermonEnd = generatedSuggestions.sermonEndCandidateId === null
       ? null
-      : boundaryById.get(result.object.sermonEndCandidateId);
+      : boundaryById.get(generatedSuggestions.sermonEndCandidateId);
     const validSermonBounds = sermonStart && sermonEnd && sermonEnd.endSeconds > sermonStart.startSeconds;
-    return NextResponse.json({
+    const generation = GeneratedShortSuggestionsSchema.parse({
+      videoId: input.videoId,
+      videoTitle: input.title || "Untitled video",
+      generatedAt: new Date().toISOString(),
       videoStartSeconds: input.segments[0].startSeconds,
       videoEndSeconds: input.segments[input.segments.length - 1].endSeconds,
       sermonStartSeconds: validSermonBounds ? sermonStart.startSeconds : null,
       sermonEndSeconds: validSermonBounds ? sermonEnd.endSeconds : null,
       suggestions,
     });
+    await saveGeneratedShortSuggestions(generation);
+    return NextResponse.json(generation, {
+      headers: { "Cache-Control": "private, no-store" },
+    });
   } catch (error) {
     return NextResponse.json(
-      { error: error instanceof Error ? error.message : "AI could not suggest short clips." },
-      { status: 502 },
+      { error: error instanceof Error ? error.message : "Could not generate and save short clip suggestions." },
+      { status: 500 },
+    );
+  }
+}
+
+export async function GET(request: NextRequest) {
+  if (!process.env.AUTH_PASSWORD || !process.env.AUTH_COOKIE_SECRET) {
+    return NextResponse.json({ error: "Configure Director authentication before loading generated video shorts." }, { status: 503 });
+  }
+  if (!hasShortStorageConfiguration()) {
+    return NextResponse.json(
+      { error: "Configure Cloudflare R2 credentials and bucket to restore generated Shorts across refreshes." },
+      { status: 503 },
+    );
+  }
+  const query = QuerySchema.safeParse(Object.fromEntries(request.nextUrl.searchParams.entries()));
+  if (!query.success) {
+    return NextResponse.json({ error: "Invalid generated Shorts query." }, { status: 400 });
+  }
+  try {
+    return NextResponse.json(await readGeneratedShortSuggestions(query.data.videoId), {
+      headers: { "Cache-Control": "private, no-store" },
+    });
+  } catch (error) {
+    return NextResponse.json(
+      { error: error instanceof Error ? error.message : "Could not load generated Shorts." },
+      { status: 500 },
     );
   }
 }

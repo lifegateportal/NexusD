@@ -10,6 +10,7 @@ import { exportShortVideo } from "@/lib/short-video-export";
 import {
   ShortAgentSettingsSchema,
   ShortCatalogSchema,
+  GeneratedShortSuggestionsSchema,
   MAX_SHORT_DURATION_SECONDS,
   ShortOverlayPresetResponseSchema,
   ShortOverlaySchema,
@@ -44,19 +45,7 @@ import {
 } from "@/lib/schemas/short-media";
 
 const ErrorSchema = z.object({ error: z.string() });
-const SuggestionResponseSchema = z.object({
-  videoStartSeconds: z.number().finite().min(0),
-  videoEndSeconds: z.number().finite().min(0),
-  sermonStartSeconds: z.number().finite().min(0).nullable(),
-  sermonEndSeconds: z.number().finite().min(0).nullable(),
-  suggestions: z.array(z.object({
-    startSeconds: z.number().finite().min(0),
-    endSeconds: z.number().finite().min(0),
-    title: z.string(),
-    hook: z.string(),
-    reason: z.string(),
-  })),
-});
+const SuggestionResponseSchema = GeneratedShortSuggestionsSchema;
 const AlignmentResponseSchema = z.object({
   wordTimings: z.array(ShortTranscriptWordTimingSchema).max(50000),
   matchedWords: z.number().int().min(0),
@@ -436,7 +425,7 @@ export default function ShortsStudio() {
       requestJson("/api/ebook/videos", { cache: "no-store" }),
       requestJson("/api/ebook/shorts", { cache: "no-store" }),
       requestJson("/api/ebook/shorts/settings", { cache: "no-store" }),
-    ]).then(([videoBody, shortBody, settingsBody]) => {
+    ]).then(async ([videoBody, shortBody, settingsBody]) => {
       const videoCatalog = DirectorVideoCatalogSchema.safeParse(videoBody);
       const shortCatalog = ShortCatalogSchema.safeParse(shortBody);
       const settings = ShortAgentSettingsSchema.safeParse(settingsBody);
@@ -449,6 +438,28 @@ export default function ShortsStudio() {
         setAgentInstructions(settings.data.instructions);
         setOverlayPresets(settings.data.overlayPresets);
       }
+      const generatedBody = await requestJson("/api/ebook/shorts/suggest", { cache: "no-store" });
+      const generated = SuggestionResponseSchema.nullable().safeParse(generatedBody);
+      if (!generated.success) {
+        throw new Error("Nexus Director returned invalid saved clip suggestions.");
+      }
+      const savedGeneration = generated.data;
+      if (
+        active
+        && savedGeneration
+        && videoCatalog.data.videos.some((video) => video.videoId === savedGeneration.videoId)
+      ) {
+        setSelectedVideoId(savedGeneration.videoId);
+        setSuggestions(savedGeneration.suggestions);
+        setSuggestionsVideoId(savedGeneration.videoId);
+        setSuggestedBoundaries({
+          videoStartSeconds: savedGeneration.videoStartSeconds,
+          videoEndSeconds: savedGeneration.videoEndSeconds,
+          sermonStartSeconds: savedGeneration.sermonStartSeconds,
+          sermonEndSeconds: savedGeneration.sermonEndSeconds,
+        });
+        setNotice("Restored the latest generated clip ideas from server storage.");
+      }
     }).catch((loadError: unknown) => {
       if (active) setError(loadError instanceof Error ? loadError.message : "Could not load Shorts Studio.");
     }).finally(() => {
@@ -456,6 +467,30 @@ export default function ShortsStudio() {
     });
     return () => { active = false; };
   }, []);
+
+  useEffect(() => {
+    if (!selectedVideoId) return;
+    let active = true;
+    requestJson(`/api/ebook/shorts/suggest?videoId=${encodeURIComponent(selectedVideoId)}`, { cache: "no-store" })
+      .then((body) => {
+        const parsed = SuggestionResponseSchema.nullable().safeParse(body);
+        if (!parsed.success) throw new Error("Nexus Director returned invalid saved clip suggestions.");
+        if (!active) return;
+        const generation = parsed.data;
+        setSuggestions(generation?.suggestions ?? []);
+        setSuggestionsVideoId(generation?.videoId ?? "");
+        setSuggestedBoundaries(generation ? {
+          videoStartSeconds: generation.videoStartSeconds,
+          videoEndSeconds: generation.videoEndSeconds,
+          sermonStartSeconds: generation.sermonStartSeconds,
+          sermonEndSeconds: generation.sermonEndSeconds,
+        } : null);
+      })
+      .catch((loadError: unknown) => {
+        if (active) setError(loadError instanceof Error ? loadError.message : "Could not load saved clip suggestions.");
+      });
+    return () => { active = false; };
+  }, [selectedVideoId]);
 
   useEffect(() => () => {
     if (localVideoUrl?.startsWith("blob:")) URL.revokeObjectURL(localVideoUrl);
@@ -1869,6 +1904,7 @@ export default function ShortsStudio() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          videoId: selectedVideo.videoId,
           title: selectedVideo.title,
           segments: selectedVideo.segments,
           instructions: agentInstructions,
@@ -1877,14 +1913,14 @@ export default function ShortsStudio() {
       const parsed = SuggestionResponseSchema.safeParse(body);
       if (!parsed.success) throw new Error("AI returned invalid short suggestions.");
       setSuggestions(parsed.data.suggestions);
-      setSuggestionsVideoId(selectedVideo.videoId);
+      setSuggestionsVideoId(parsed.data.videoId);
       setSuggestedBoundaries({
         videoStartSeconds: parsed.data.videoStartSeconds,
         videoEndSeconds: parsed.data.videoEndSeconds,
         sermonStartSeconds: parsed.data.sermonStartSeconds,
         sermonEndSeconds: parsed.data.sermonEndSeconds,
       });
-      setNotice("AI reviewed transcript moments across the full video. Check the detected sermon boundaries and preview each clip.");
+      setNotice("Generated clip ideas are saved on the server. Check the detected sermon boundaries and preview each clip.");
     } catch (suggestionError) {
       setError(suggestionError instanceof Error ? suggestionError.message : "Could not suggest short clips.");
     } finally {
@@ -2148,7 +2184,7 @@ export default function ShortsStudio() {
           </select>
         </label>
         <p className="text-sm leading-relaxed text-slate-400">
-          Find AI moments analyzes the transcript and opens any selected moment directly in the editor. Start manual draft creates a basic 60-second draft without AI.
+          Find AI moments analyzes the transcript and saves up to 12 choices on the server, so they remain available after a refresh. Start manual draft creates a basic 60-second draft without AI.
         </p>
         <div className="flex flex-wrap gap-3">
           <button

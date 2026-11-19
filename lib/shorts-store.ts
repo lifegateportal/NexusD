@@ -4,6 +4,7 @@ import { makeR2Client } from "@/lib/r2-storage";
 import {
   PublicShortCatalogSchema,
   PublishedShortProjectSchema,
+  GeneratedShortSuggestionsSchema,
   ShortAgentSettingsSchema,
   ShortCatalogSchema,
   ShortProjectSchema,
@@ -15,7 +16,12 @@ import { getShortThumbnailUrl } from "@/lib/short-video-utils";
 const PRIVATE_CATALOG_KEY = "director/shorts/index.json";
 const PUBLIC_CATALOG_KEY = "published/shorts/index.json";
 const AGENT_SETTINGS_KEY = "director/shorts/agent-settings.json";
+const LATEST_GENERATED_SUGGESTIONS_KEY = "director/shorts/generated-suggestions/latest.json";
 const MAX_PROJECT_VERSIONS = 20;
+
+function generatedSuggestionsKey(videoId: string): string {
+  return `director/shorts/generated-suggestions/${videoId}.json`;
+}
 
 function historyIndexKey(slug: string): string {
   return `director/shorts/${slug}/history.json`;
@@ -36,8 +42,12 @@ function belongsToHttpsDomain(value: string | undefined, domain: string): boolea
   }
 }
 
+export function hasShortStorageConfiguration(): boolean {
+  return Boolean(env.R2_ACCOUNT_ID && env.R2_ACCESS_KEY_ID && env.R2_SECRET_ACCESS_KEY && env.R2_BUCKET_NAME);
+}
+
 function assertStorageConfigured(): void {
-  if (!env.R2_ACCOUNT_ID || !env.R2_ACCESS_KEY_ID || !env.R2_SECRET_ACCESS_KEY || !env.R2_BUCKET_NAME) {
+  if (!hasShortStorageConfiguration()) {
     throw new Error("Configure Cloudflare R2 credentials and bucket to manage video shorts.");
   }
 }
@@ -115,6 +125,22 @@ export async function saveShortAgentSettings(input: unknown) {
   const settings = ShortAgentSettingsSchema.parse(input);
   await writeJsonObject(AGENT_SETTINGS_KEY, settings);
   return settings;
+}
+
+export async function readGeneratedShortSuggestions(videoId?: string) {
+  const raw = await readJsonObject(
+    videoId ? generatedSuggestionsKey(videoId) : LATEST_GENERATED_SUGGESTIONS_KEY,
+  );
+  return raw ? GeneratedShortSuggestionsSchema.parse(raw) : null;
+}
+
+export async function saveGeneratedShortSuggestions(input: unknown) {
+  const generation = GeneratedShortSuggestionsSchema.parse(input);
+  await Promise.all([
+    writeJsonObject(generatedSuggestionsKey(generation.videoId), generation),
+    writeJsonObject(LATEST_GENERATED_SUGGESTIONS_KEY, generation),
+  ]);
+  return generation;
 }
 
 export async function readPrivateShort(slug: string): Promise<ShortProject | null> {

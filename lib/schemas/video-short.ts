@@ -191,6 +191,68 @@ export const ShortSourceSchema = z.discriminatedUnion("type", [
   UploadedShortSourceSchema,
 ]);
 
+export const ShortClipSuggestionSchema = z.object({
+  startSeconds: z.number().finite().min(0),
+  endSeconds: z.number().finite().min(0),
+  title: z.string().trim().min(1).max(100),
+  hook: z.string().trim().min(1).max(240),
+  reason: z.string().trim().min(1).max(400),
+}).strict().refine((suggestion) => suggestion.endSeconds > suggestion.startSeconds, {
+  message: "Suggestion end must be after its start.",
+  path: ["endSeconds"],
+}).refine(
+  (suggestion) => suggestion.endSeconds - suggestion.startSeconds <= MAX_SHORT_DURATION_SECONDS,
+  { message: "Suggested clips cannot exceed 3 minutes.", path: ["endSeconds"] },
+);
+
+export const GeneratedShortSuggestionsSchema = z.object({
+  videoId: z.string().regex(/^[A-Za-z0-9_-]{11}$/),
+  videoTitle: z.string().trim().min(1).max(200),
+  generatedAt: z.string().datetime(),
+  videoStartSeconds: z.number().finite().min(0),
+  videoEndSeconds: z.number().finite().min(0),
+  sermonStartSeconds: z.number().finite().min(0).nullable(),
+  sermonEndSeconds: z.number().finite().min(0).nullable(),
+  suggestions: z.array(ShortClipSuggestionSchema).min(1).max(12),
+}).strict().superRefine((generation, context) => {
+  if (generation.videoEndSeconds <= generation.videoStartSeconds) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["videoEndSeconds"],
+      message: "Video end must be after its start.",
+    });
+  }
+  if ((generation.sermonStartSeconds === null) !== (generation.sermonEndSeconds === null)) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["sermonEndSeconds"],
+      message: "Sermon boundaries must include both a start and an end.",
+    });
+  } else if (
+    generation.sermonStartSeconds !== null
+    && generation.sermonEndSeconds !== null
+    && generation.sermonEndSeconds <= generation.sermonStartSeconds
+  ) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["sermonEndSeconds"],
+      message: "Sermon end must be after its start.",
+    });
+  }
+  generation.suggestions.forEach((suggestion, index) => {
+    if (
+      suggestion.startSeconds < generation.videoStartSeconds
+      || suggestion.endSeconds > generation.videoEndSeconds
+    ) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["suggestions", index],
+        message: "Suggestions must remain inside the source video's time range.",
+      });
+    }
+  });
+});
+
 export const ShortProjectSchema = z.object({
   slug: z.string().regex(/^[a-z0-9][a-z0-9-]{0,79}$/),
   title: z.string().trim().min(1).max(120),
@@ -380,6 +442,8 @@ export type ShortTranscriptWordTiming = z.infer<typeof ShortTranscriptWordTiming
 export type ShortPauseCut = z.infer<typeof ShortPauseCutSchema>;
 export type ShortOverlayPreset = z.infer<typeof ShortOverlayPresetSchema>;
 export type ShortOverlayPresetLayer = z.infer<typeof ShortOverlayPresetLayerSchema>;
+export type ShortClipSuggestion = z.infer<typeof ShortClipSuggestionSchema>;
+export type GeneratedShortSuggestions = z.infer<typeof GeneratedShortSuggestionsSchema>;
 export type ShortSummary = z.infer<typeof ShortSummarySchema>;
 export type ShortProjectVersion = z.infer<typeof ShortProjectVersionSchema>;
 export type ShortBrollClip = z.infer<typeof ShortBrollClipSchema>;
