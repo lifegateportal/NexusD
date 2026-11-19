@@ -13,11 +13,13 @@ import {
   writeShortCaptureHeartbeat,
   writeShortCaptureJob,
 } from "../lib/short-capture-jobs.mjs";
+import { resolveShortCaptureBrowserOrigin } from "../lib/short-capture-browser-origin.mjs";
 
 const WorkerEnvSchema = z.object({
   SHORT_CAPTURE_JOB_DIR: z.string().trim().min(1),
   SHORT_CAPTURE_R2_BUCKET: z.string().trim().min(1),
   SHORT_CAPTURE_APP_ORIGIN: z.string().url(),
+  SHORT_CAPTURE_BROWSER_ORIGIN: z.string().url().optional(),
   SHORT_CAPTURE_CHROMIUM_PATH: z.string().trim().min(1),
   SHORT_CAPTURE_FFMPEG_PATH: z.string().trim().min(1),
   SHORT_CAPTURE_XVFB_PATH: z.string().trim().min(1),
@@ -34,6 +36,7 @@ const WorkerEnv = WorkerEnvSchema.parse({
   SHORT_CAPTURE_JOB_DIR: process.env.SHORT_CAPTURE_JOB_DIR,
   SHORT_CAPTURE_R2_BUCKET: process.env.SHORT_CAPTURE_R2_BUCKET,
   SHORT_CAPTURE_APP_ORIGIN: process.env.SHORT_CAPTURE_APP_ORIGIN,
+  SHORT_CAPTURE_BROWSER_ORIGIN: process.env.SHORT_CAPTURE_BROWSER_ORIGIN,
   SHORT_CAPTURE_CHROMIUM_PATH: process.env.SHORT_CAPTURE_CHROMIUM_PATH ?? "/usr/bin/chromium",
   SHORT_CAPTURE_FFMPEG_PATH: process.env.SHORT_CAPTURE_FFMPEG_PATH ?? "ffmpeg",
   SHORT_CAPTURE_XVFB_PATH: process.env.SHORT_CAPTURE_XVFB_PATH ?? "Xvfb",
@@ -46,10 +49,10 @@ const WorkerEnv = WorkerEnvSchema.parse({
   AUTH_COOKIE_SECRET: process.env.AUTH_COOKIE_SECRET,
 });
 
-const appUrl = new URL(WorkerEnv.SHORT_CAPTURE_APP_ORIGIN);
-if (!["127.0.0.1", "localhost"].includes(appUrl.hostname)) {
-  throw new Error("SHORT_CAPTURE_APP_ORIGIN must use localhost or 127.0.0.1.");
-}
+const browserOrigin = resolveShortCaptureBrowserOrigin(
+  WorkerEnv.SHORT_CAPTURE_APP_ORIGIN,
+  WorkerEnv.SHORT_CAPTURE_BROWSER_ORIGIN,
+);
 
 const captureClient = new S3Client({
   region: "auto",
@@ -281,14 +284,14 @@ async function processJob(job) {
     await context.addCookies([{
       name: "nexus_session",
       value: sessionCookieValue(),
-      url: WorkerEnv.SHORT_CAPTURE_APP_ORIGIN,
+      url: browserOrigin,
       httpOnly: true,
       sameSite: "Lax",
     }]);
     const page = await context.newPage();
     page.setDefaultTimeout(60_000);
     await page.goto(
-      `${WorkerEnv.SHORT_CAPTURE_APP_ORIGIN}/ebook/videos/capture/${job.id}`,
+      `${browserOrigin}/ebook/videos/capture/${job.id}`,
       { waitUntil: "domcontentloaded", timeout: 60_000 },
     );
     await page.waitForFunction(

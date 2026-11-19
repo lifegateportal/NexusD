@@ -36,6 +36,13 @@ The worker also supports `SHORT_CAPTURE_CHROMIUM_PATH`,
 `SHORT_CAPTURE_PULSE_SINK`, and `SHORT_CAPTURE_DISPLAY`. Defaults are
 `/usr/bin/chromium`, `ffmpeg`, `Xvfb`, `nexus_capture`, and `:99`.
 
+If YouTube playback works in the normal editor but fails in capture, set
+`SHORT_CAPTURE_BROWSER_ORIGIN` to the trusted public HTTPS origin for this
+Nexus deployment (for example, `https://nexusdirector.example`). The worker
+uses this origin only for its browser page and session cookie; keep
+`SHORT_CAPTURE_APP_ORIGIN` pointed at localhost. Do not set the browser origin
+to a host you do not control.
+
 Create the job directory and grant access to the same service account that
 runs Nexus and PM2:
 

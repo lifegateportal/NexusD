@@ -340,7 +340,9 @@ export default function ShortsPlayer({
           },
           onApiChange: () => youtubePlayerRef.current?.unloadModule("captions"),
           onStateChange: () => youtubePlayerRef.current?.unloadModule("captions"),
-          onError: () => setPlayerError("YouTube could not play this video in an embedded player."),
+          onError: (event: { data: number }) => setPlayerError(
+            `YouTube could not play this video in an embedded player (error ${event.data}).`,
+          ),
         },
       });
     }).catch((error: unknown) => {

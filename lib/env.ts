@@ -36,6 +36,7 @@ const EnvironmentSchema = z.object({
   SHORT_CAPTURE_JOB_DIR: z.string().optional(),
   SHORT_CAPTURE_R2_BUCKET: z.string().optional(),
   SHORT_CAPTURE_APP_ORIGIN: z.string().url().optional(),
+  SHORT_CAPTURE_BROWSER_ORIGIN: z.string().url().optional(),
   SHORT_CAPTURE_CHROMIUM_PATH: z.string().optional(),
   SHORT_CAPTURE_FFMPEG_PATH: z.string().optional(),
   SHORT_CAPTURE_XVFB_PATH: z.string().optional(),
