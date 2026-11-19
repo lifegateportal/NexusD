@@ -21,7 +21,15 @@ import {
   type ShortOverlayPresetLayer,
   type ShortProject,
   type ShortSummary,
+  type ShortTranscriptCut,
 } from "@/lib/schemas/video-short";
+import {
+  getDeletedTranscriptWordIndexes,
+  getEditedTranscriptText,
+  getRemovedTranscriptWordIndexes,
+  getTranscriptWordTimeRange,
+  getTranscriptWords,
+} from "@/lib/short-transcript-edits";
 import { DirectorVideoCatalogSchema } from "@/lib/schemas/library-video";
 import {
   ShortBrollSuggestionsResponseSchema,
@@ -284,6 +292,7 @@ export default function ShortsStudio() {
   const [agentInstructions, setAgentInstructions] = useState("");
   const [overlayPresets, setOverlayPresets] = useState<ShortOverlayPreset[]>([]);
   const [overlayBrief, setOverlayBrief] = useState("");
+  const [captionDrafts, setCaptionDrafts] = useState<Record<number, string>>({});
   const [sermonBoundaryDrafts, setSermonBoundaryDrafts] = useState<Record<string, { start: string; end: string }>>({});
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -317,6 +326,10 @@ export default function ShortsStudio() {
     : 0;
   const activeSlot = project?.frameSlots[activeSlotIndex];
   const framePosition = activeSlot ? getFramePosition(activeSlot, currentTime) : null;
+  const removedTranscriptWords = useMemo(
+    () => getRemovedTranscriptWordIndexes(project?.transcriptCuts ?? []),
+    [project?.transcriptCuts],
+  );
 
   useEffect(() => {
     let active = true;
@@ -354,6 +367,10 @@ export default function ShortsStudio() {
     editorRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
     setScrollEditorOnUpdate(false);
   }, [project, scrollEditorOnUpdate]);
+
+  useEffect(() => {
+    setCaptionDrafts({});
+  }, [project?.slug]);
 
   async function refreshShorts(): Promise<void> {
     const body = await requestJson("/api/ebook/shorts", { cache: "no-store" });
@@ -919,6 +936,137 @@ export default function ShortsStudio() {
     });
   }
 
+  function toggleTranscriptWord(segmentIndex: number, wordIndex: number) {
+    if (!project) return;
+    const existingCut = project.transcriptCuts.find((cut) =>
+      cut.segmentIndex === segmentIndex && cut.wordIndex === wordIndex,
+    );
+    if (existingCut) {
+      updateProject({
+        transcriptCuts: project.transcriptCuts.filter((cut) => cut.id !== existingCut.id),
+      });
+      setNotice(`Restored “${existingCut.wordText}” to the short.`);
+      setError("");
+      return;
+    }
+
+    if (project.transcriptCuts.length >= 5000) {
+      setError("This short has reached the 5,000 word-cut limit.");
+      return;
+    }
+    const caption = project.captions[segmentIndex];
+    const word = caption ? getTranscriptWords(caption.text)[wordIndex] : undefined;
+    const range = caption
+      ? getTranscriptWordTimeRange(caption, wordIndex, project.startSeconds, project.endSeconds)
+      : null;
+    if (!caption || !word || !range) {
+      setError("Could not determine a usable time range for that transcript word.");
+      return;
+    }
+    const cut: ShortTranscriptCut = {
+      id: crypto.randomUUID(),
+      segmentIndex,
+      wordIndex,
+      wordText: word.text,
+      ...range,
+    };
+    updateProject({ transcriptCuts: [...project.transcriptCuts, cut] });
+    setNotice(
+      `Removed “${word.text}” from the transcript and preview. Its time is estimated from the caption range; fine-tune the cut below.`,
+    );
+    setError("");
+  }
+
+  function updateTranscriptCutRange(
+    cutId: string,
+    field: "startSeconds" | "endSeconds",
+    value: string,
+  ) {
+    const cut = project?.transcriptCuts.find((item) => item.id === cutId);
+    const caption = cut && project?.captions[cut.segmentIndex];
+    const next = Number(value);
+    if (!project || !cut || !caption || !Number.isFinite(next)) return;
+    const minimum = Math.max(project.startSeconds, caption.startSeconds);
+    const maximum = Math.min(project.endSeconds, caption.endSeconds);
+    if (
+      next < minimum
+      || next > maximum
+      || (field === "startSeconds" && next >= cut.endSeconds)
+      || (field === "endSeconds" && next <= cut.startSeconds)
+    ) {
+      setError("Keep each word cut inside its caption range and make its end later than its start.");
+      return;
+    }
+    updateProject({
+      transcriptCuts: project.transcriptCuts.map((item) =>
+        item.id === cutId ? { ...item, [field]: next } : item,
+      ),
+    });
+    setError("");
+  }
+
+  function updateCaptionText(segmentIndex: number, text: string) {
+    if (!project) return;
+    const caption = project.captions[segmentIndex];
+    if (!caption) return;
+    const currentText = getEditedTranscriptText(caption.text, segmentIndex, removedTranscriptWords);
+    if (currentText === text) return;
+
+    const deletedVisibleWordIndexes = getDeletedTranscriptWordIndexes(currentText, text);
+    if (deletedVisibleWordIndexes && deletedVisibleWordIndexes.length > 0) {
+      if (project.transcriptCuts.length + deletedVisibleWordIndexes.length > 5000) {
+        setError("This short has reached the 5,000 word-cut limit.");
+        return;
+      }
+      const visibleSourceWords = getTranscriptWords(caption.text).filter(
+        (word) => !removedTranscriptWords.get(segmentIndex)?.has(word.index),
+      );
+      const newCuts = deletedVisibleWordIndexes.flatMap((visibleIndex) => {
+        const word = visibleSourceWords[visibleIndex];
+        const range = word
+          ? getTranscriptWordTimeRange(caption, word.index, project.startSeconds, project.endSeconds)
+          : null;
+        return word && range ? [{
+          id: crypto.randomUUID(),
+          segmentIndex,
+          wordIndex: word.index,
+          wordText: word.text,
+          ...range,
+        }] : [];
+      });
+      if (newCuts.length !== deletedVisibleWordIndexes.length) {
+        setError("Could not determine safe cut timing for every deleted word.");
+        return;
+      }
+      updateProject({ transcriptCuts: [...project.transcriptCuts, ...newCuts] });
+      setNotice(
+        `Deleted ${newCuts.length} transcript word${newCuts.length === 1 ? "" : "s"} and added matching video cuts. Fine-tune the estimated cut times below.`,
+      );
+      setError("");
+      return;
+    }
+
+    updateProject({
+      captions: project.captions.map((caption, index) =>
+        index === segmentIndex ? { ...caption, text } : caption,
+      ),
+      transcriptCuts: project.transcriptCuts.filter((cut) => cut.segmentIndex !== segmentIndex),
+    });
+    setNotice("Caption text updated. Existing word cuts in this line were cleared because the transcript alignment changed.");
+    setError("");
+  }
+
+  function commitCaptionDraft(segmentIndex: number) {
+    const draft = captionDrafts[segmentIndex];
+    if (draft === undefined) return;
+    setCaptionDrafts((current) => {
+      const next = { ...current };
+      delete next[segmentIndex];
+      return next;
+    });
+    updateCaptionText(segmentIndex, draft);
+  }
+
   function setImageOverlayPlacement(id: string, edge: "intro" | "outro") {
     if (!project) return;
     const overlay = project.overlays.find((item) => item.id === id);
@@ -1154,10 +1302,25 @@ export default function ShortsStudio() {
         ? [{ ...track, startSeconds: trackStart, endSeconds: trackEnd }]
         : [];
     });
+    const captions = filterCaptions(selectedVideo, startSeconds, endSeconds);
+    const transcriptCuts = project.transcriptCuts.flatMap((cut) => {
+      const sourceCaption = project.captions[cut.segmentIndex];
+      if (!sourceCaption) return [];
+      const segmentIndex = captions.findIndex((caption) =>
+        caption.startSeconds === sourceCaption.startSeconds
+        && caption.endSeconds === sourceCaption.endSeconds
+        && caption.text === sourceCaption.text,
+      );
+      if (segmentIndex < 0) return [];
+      const cutStart = Math.max(cut.startSeconds, startSeconds);
+      const cutEnd = Math.min(cut.endSeconds, endSeconds);
+      return cutEnd > cutStart ? [{ ...cut, segmentIndex, startSeconds: cutStart, endSeconds: cutEnd }] : [];
+    });
     updateProject({
       [field]: nextValue,
       frameSlots,
-      captions: filterCaptions(selectedVideo, startSeconds, endSeconds),
+      captions,
+      transcriptCuts,
       overlays,
       brollClips,
       musicTracks,
@@ -2496,26 +2659,91 @@ export default function ShortsStudio() {
                   <p className="text-xs leading-relaxed text-slate-500">
                     Long transcript timestamps are split into timed phrases. Captions are capped at two lines on screen. Background controls apply to Bold box and Pill styles.
                   </p>
+                  <p className="text-xs leading-relaxed text-amber-200">
+                    Delete a word in the transcript or tap it to cut its video moment. Tap a crossed-out word to restore it. Word timing is estimated within each timestamped line; fine-tune each cut below.
+                  </p>
                   {project.captions.length === 0 ? (
                     <p className="text-xs text-slate-400">No transcript captions fall inside this clip range.</p>
                   ) : (
                     <div className="max-h-72 space-y-2 overflow-y-auto">
                       {project.captions.map((caption, index) => (
-                        <label key={`${caption.startSeconds}-${index}`} className="block text-xs text-slate-400">
+                        <div key={`${caption.startSeconds}-${index}`} className="space-y-2 rounded-lg border border-slate-800 bg-slate-950/60 p-3 text-xs text-slate-400">
                           {formatTime(caption.startSeconds)}–{formatTime(caption.endSeconds)}
-                          <textarea
-                            rows={2}
-                            maxLength={2000}
-                            value={caption.text}
-                            onChange={(event) => {
-                              const captions = project.captions.map((item, itemIndex) =>
-                                itemIndex === index ? { ...item, text: event.target.value } : item,
+                          <div className="flex flex-wrap gap-1">
+                            {getTranscriptWords(caption.text).map((word) => {
+                              const cut = project.transcriptCuts.find((item) =>
+                                item.segmentIndex === index && item.wordIndex === word.index,
                               );
-                              updateProject({ captions });
-                            }}
-                            className="mt-1 min-h-12 w-full rounded-lg border border-slate-700 bg-slate-900 p-2 text-base text-white"
-                          />
-                        </label>
+                              return (
+                                <button
+                                  key={`${word.index}-${word.text}`}
+                                  type="button"
+                                  onClick={() => toggleTranscriptWord(index, word.index)}
+                                  aria-pressed={Boolean(cut)}
+                                  aria-label={cut
+                                    ? `Restore removed word ${word.text}`
+                                    : `Remove word ${word.text} from video`}
+                                  className={`min-h-12 rounded-lg border px-2 text-sm font-medium ${
+                                    cut
+                                      ? "border-rose-700 bg-rose-950/60 text-rose-200 line-through"
+                                      : "border-slate-700 bg-slate-900 text-slate-100"
+                                  }`}
+                                >
+                                  {word.text}
+                                </button>
+                              );
+                            })}
+                          </div>
+                          <label className="block text-xs text-slate-400">
+                            Edited caption text
+                            <textarea
+                              rows={2}
+                              maxLength={2000}
+                              value={captionDrafts[index] ?? getEditedTranscriptText(caption.text, index, removedTranscriptWords)}
+                              onChange={(event) => setCaptionDrafts((current) => ({
+                                ...current,
+                                [index]: event.target.value,
+                              }))}
+                              onBlur={() => commitCaptionDraft(index)}
+                              className="mt-1 min-h-12 w-full rounded-lg border border-slate-700 bg-slate-900 p-2 text-base text-white"
+                            />
+                          </label>
+                          {project.transcriptCuts.filter((cut) => cut.segmentIndex === index).map((cut) => (
+                            <div key={cut.id} className="grid gap-2 rounded-lg border border-rose-900/70 bg-rose-950/20 p-2 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] sm:items-end">
+                              <label className="text-xs text-rose-200">
+                                Cut “{cut.wordText}” from
+                                <input
+                                  type="number"
+                                  min={Math.max(project.startSeconds, caption.startSeconds)}
+                                  max={Math.min(project.endSeconds, caption.endSeconds)}
+                                  step="0.05"
+                                  value={cut.startSeconds}
+                                  onChange={(event) => updateTranscriptCutRange(cut.id, "startSeconds", event.target.value)}
+                                  className="mt-1 min-h-12 w-full rounded-lg border border-rose-900 bg-slate-950 px-3 text-base text-white"
+                                />
+                              </label>
+                              <label className="text-xs text-rose-200">
+                                Until
+                                <input
+                                  type="number"
+                                  min={Math.max(project.startSeconds, caption.startSeconds)}
+                                  max={Math.min(project.endSeconds, caption.endSeconds)}
+                                  step="0.05"
+                                  value={cut.endSeconds}
+                                  onChange={(event) => updateTranscriptCutRange(cut.id, "endSeconds", event.target.value)}
+                                  className="mt-1 min-h-12 w-full rounded-lg border border-rose-900 bg-slate-950 px-3 text-base text-white"
+                                />
+                              </label>
+                              <button
+                                type="button"
+                                onClick={() => toggleTranscriptWord(index, cut.wordIndex)}
+                                className="min-h-12 rounded-lg border border-rose-800 px-3 text-xs font-semibold text-rose-100"
+                              >
+                                Restore word
+                              </button>
+                            </div>
+                          ))}
+                        </div>
                       ))}
                     </div>
                   )}

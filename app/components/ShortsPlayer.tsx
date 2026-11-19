@@ -4,6 +4,10 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, PointerEvent } from "react";
 import type { ShortProject, ShortCropKeyframe, ShortFrameSlot, ShortOverlay } from "@/lib/schemas/video-short";
 import { buildTimedCaptionCues } from "@/lib/short-caption-cues";
+import {
+  getRemovedTranscriptWordIndexes,
+  getTranscriptCutAtTime,
+} from "@/lib/short-transcript-edits";
 
 type YouTubePlayerInstance = {
   destroy(): void;
@@ -132,6 +136,8 @@ export default function ShortsPlayer({
   const brollVideoRefs = useRef(new Map<string, HTMLVideoElement>());
   const musicTrackRefs = useRef(new Map<string, HTMLAudioElement>());
   const musicTrackIdsRef = useRef(new Set(project.musicTracks.map((track) => track.id)));
+  const transcriptCutsRef = useRef(project.transcriptCuts);
+  const lastSkippedCutIdRef = useRef<string | null>(null);
   const requireUserPlayAfterMusicAddRef = useRef(false);
   const overlayDragRef = useRef<{
     id: string;
@@ -159,6 +165,7 @@ export default function ShortsPlayer({
   const [shareError, setShareError] = useState("");
 
   timeCallbackRef.current = onTimeChange;
+  transcriptCutsRef.current = project.transcriptCuts;
 
   const activeSlot = project.frameSlots.find((slot) =>
     currentTime >= slot.startSeconds && currentTime <= slot.endSeconds,
@@ -171,7 +178,14 @@ export default function ShortsPlayer({
   const sourceIdentity = project.source.type === "youtube"
     ? project.source.videoId
     : project.source.sourceUrl ?? "";
-  const timedCaptions = useMemo(() => buildTimedCaptionCues(project.captions), [project.captions]);
+  const removedWordIndexes = useMemo(
+    () => getRemovedTranscriptWordIndexes(project.transcriptCuts),
+    [project.transcriptCuts],
+  );
+  const timedCaptions = useMemo(
+    () => buildTimedCaptionCues(project.captions, removedWordIndexes),
+    [project.captions, removedWordIndexes],
+  );
   const activeTimedCaption = timedCaptions.find((caption) =>
     currentTime >= caption.startSeconds && currentTime < caption.endSeconds,
   );
@@ -256,6 +270,17 @@ export default function ShortsPlayer({
               if (!player) return;
               const time = player.getCurrentTime();
               if (!Number.isFinite(time)) return;
+              const transcriptCut = getTranscriptCutAtTime(transcriptCutsRef.current, time);
+              if (transcriptCut) {
+                if (lastSkippedCutIdRef.current !== transcriptCut.id) {
+                  lastSkippedCutIdRef.current = transcriptCut.id;
+                  player.seekTo(transcriptCut.endSeconds, true);
+                }
+                setCurrentTime(transcriptCut.endSeconds);
+                timeCallbackRef.current?.(transcriptCut.endSeconds);
+                return;
+              }
+              lastSkippedCutIdRef.current = null;
               setCurrentTime(time);
               timeCallbackRef.current?.(time);
               if (time >= endSeconds) {
@@ -264,7 +289,7 @@ export default function ShortsPlayer({
               } else {
                 setPlaying(player.getPlayerState() === window.YT?.PlayerState.PLAYING);
               }
-            }, 200);
+            }, 80);
           },
           onApiChange: () => youtubePlayerRef.current?.unloadModule("captions"),
           onStateChange: () => youtubePlayerRef.current?.unloadModule("captions"),
@@ -287,6 +312,13 @@ export default function ShortsPlayer({
     const video = videoRef.current;
     if (!video) return;
     const onTimeUpdate = () => {
+      const transcriptCut = getTranscriptCutAtTime(transcriptCutsRef.current, video.currentTime);
+      if (transcriptCut) {
+        video.currentTime = transcriptCut.endSeconds;
+        setCurrentTime(transcriptCut.endSeconds);
+        timeCallbackRef.current?.(transcriptCut.endSeconds);
+        return;
+      }
       setCurrentTime(video.currentTime);
       timeCallbackRef.current?.(video.currentTime);
       if (video.currentTime >= project.endSeconds) {
@@ -387,7 +419,8 @@ export default function ShortsPlayer({
   }, [project.startSeconds, videoUrl]);
 
   function seek(seconds: number) {
-    const bounded = Math.max(project.startSeconds, Math.min(project.endSeconds, seconds));
+    const requested = Math.max(project.startSeconds, Math.min(project.endSeconds, seconds));
+    const bounded = getTranscriptCutAtTime(transcriptCutsRef.current, requested)?.endSeconds ?? requested;
     setCurrentTime(bounded);
     syncAuxiliaryMedia(bounded, playing);
     if (project.source.type === "youtube") youtubePlayerRef.current?.seekTo(bounded, true);

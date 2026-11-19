@@ -11,50 +11,72 @@ function splitLongWord(word: string): string[] {
   return parts;
 }
 
-function splitCaptionText(text: string): string[] {
-  const words = text.trim().split(/\s+/).flatMap((word) =>
-    word.length > MAX_CAPTION_CHARACTERS ? splitLongWord(word) : [word],
+type TimedWord = { text: string; wordIndex: number };
+
+function splitCaptionWords(text: string): TimedWord[] {
+  return text.trim().split(/\s+/).flatMap((word, wordIndex) =>
+    (word.length > MAX_CAPTION_CHARACTERS ? splitLongWord(word) : [word])
+      .map((textPart) => ({ text: textPart, wordIndex })),
   );
-  const chunks: string[] = [];
-  let chunk = "";
+}
+
+function splitCaptionChunks(text: string): TimedWord[][] {
+  const words = splitCaptionWords(text);
+  const chunks: TimedWord[][] = [];
+  let chunk: TimedWord[] = [];
 
   for (const word of words) {
-    const candidate = chunk ? `${chunk} ${word}` : word;
-    if (chunk && candidate.length > MAX_CAPTION_CHARACTERS) {
+    const candidate = chunk.length
+      ? `${chunk.map((part) => part.text).join(" ")} ${word.text}`
+      : word.text;
+    if (chunk.length > 0 && candidate.length > MAX_CAPTION_CHARACTERS) {
       chunks.push(chunk);
-      chunk = word;
+      chunk = [word];
     } else {
-      chunk = candidate;
+      chunk = [...chunk, word];
     }
 
-    if (/[.!?;:,]$/.test(chunk) && chunk.length >= MAX_CAPTION_CHARACTERS * 0.55) {
+    const chunkText = chunk.map((part) => part.text).join(" ");
+    if (/[.!?;:,]$/.test(chunkText) && chunkText.length >= MAX_CAPTION_CHARACTERS * 0.55) {
       chunks.push(chunk);
-      chunk = "";
+      chunk = [];
     }
   }
 
-  if (chunk) chunks.push(chunk);
-  return chunks.length > 0 ? chunks : [text];
+  if (chunk.length > 0) chunks.push(chunk);
+  return chunks.length > 0 ? chunks : [[{ text, wordIndex: 0 }]];
 }
 
 export function buildTimedCaptionCues(
   captions: LibraryVideoSegment[],
+  removedWords: ReadonlyMap<number, ReadonlySet<number>> = new Map(),
 ): LibraryVideoSegment[] {
-  return captions.flatMap((caption) => {
-    const chunks = splitCaptionText(caption.text);
-    if (chunks.length === 1) return [caption];
+  return captions.flatMap((caption, captionIndex) => {
+    const chunks = splitCaptionChunks(caption.text);
+    const removedWordIndexes = removedWords.get(captionIndex);
+    if (chunks.length === 1) {
+      const text = chunks[0]
+        .filter((word) => !removedWordIndexes?.has(word.wordIndex))
+        .map((word) => word.text)
+        .join(" ");
+      return text ? [{ ...caption, text }] : [];
+    }
 
-    const totalWords = chunks.reduce((total, chunk) => total + chunk.split(/\s+/).length, 0);
+    const totalWords = chunks.reduce((total, chunk) => total + chunk.length, 0);
     let elapsedWords = 0;
-    return chunks.map((text, index) => {
+    return chunks.flatMap((chunk, index) => {
       const startSeconds = caption.startSeconds
         + (caption.endSeconds - caption.startSeconds) * elapsedWords / totalWords;
-      elapsedWords += text.split(/\s+/).length;
+      elapsedWords += chunk.length;
       const endSeconds = index === chunks.length - 1
         ? caption.endSeconds
         : caption.startSeconds
           + (caption.endSeconds - caption.startSeconds) * elapsedWords / totalWords;
-      return { startSeconds, endSeconds, text };
+      const text = chunk
+        .filter((word) => !removedWordIndexes?.has(word.wordIndex))
+        .map((word) => word.text)
+        .join(" ");
+      return text ? [{ startSeconds, endSeconds, text }] : [];
     });
   });
 }

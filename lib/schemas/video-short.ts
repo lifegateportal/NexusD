@@ -140,6 +140,18 @@ export const ShortMusicTrackSchema = z.object({
   path: ["endSeconds"],
 });
 
+export const ShortTranscriptCutSchema = z.object({
+  id: z.string().uuid(),
+  segmentIndex: z.number().int().min(0).max(4999),
+  wordIndex: z.number().int().min(0).max(49999),
+  wordText: z.string().trim().min(1).max(200),
+  startSeconds: z.number().finite().min(0),
+  endSeconds: z.number().finite().min(0),
+}).strict().refine((cut) => cut.endSeconds > cut.startSeconds, {
+  message: "Transcript cut end must be after its start.",
+  path: ["endSeconds"],
+});
+
 const YouTubeShortSourceSchema = z.object({
   type: z.literal("youtube"),
   videoId: z.string().regex(/^[A-Za-z0-9_-]{11}$/),
@@ -168,6 +180,7 @@ export const ShortProjectSchema = z.object({
   endSeconds: z.number().finite().min(0),
   frameSlots: z.array(ShortFrameSlotSchema).min(1).max(100),
   captions: z.array(LibraryVideoSegmentSchema).max(5000),
+  transcriptCuts: z.array(ShortTranscriptCutSchema).max(5000).default([]),
   overlays: z.array(ShortOverlaySchema).max(20).default([]),
   brollClips: z.array(ShortBrollClipSchema).max(10).default([]),
   musicTracks: z.array(ShortMusicTrackSchema).max(5).default([]),
@@ -198,6 +211,18 @@ export const ShortProjectSchema = z.object({
     (overlay) => overlay.startSeconds >= project.startSeconds && overlay.endSeconds <= project.endSeconds,
   ),
   { message: "Overlays must be inside the short's time range.", path: ["overlays"] },
+).refine(
+  (project) => project.transcriptCuts.every((cut) => {
+    const caption = project.captions[cut.segmentIndex];
+    const words = caption?.text.match(/\S+/g) ?? [];
+    return cut.startSeconds >= project.startSeconds
+      && cut.endSeconds <= project.endSeconds
+      && Boolean(caption)
+      && cut.startSeconds >= (caption?.startSeconds ?? 0)
+      && cut.endSeconds <= (caption?.endSeconds ?? 0)
+      && words[cut.wordIndex] === cut.wordText;
+  }),
+  { message: "Transcript cuts must match words and timestamps inside their caption.", path: ["transcriptCuts"] },
 ).refine(
   (project) => project.brollClips.every(
     (clip) => clip.startSeconds >= project.startSeconds && clip.endSeconds <= project.endSeconds,
@@ -293,6 +318,7 @@ export type ShortProject = z.infer<typeof ShortProjectSchema>;
 export type ShortFrameSlot = z.infer<typeof ShortFrameSlotSchema>;
 export type ShortCropKeyframe = z.infer<typeof ShortCropKeyframeSchema>;
 export type ShortOverlay = z.infer<typeof ShortOverlaySchema>;
+export type ShortTranscriptCut = z.infer<typeof ShortTranscriptCutSchema>;
 export type ShortOverlayPreset = z.infer<typeof ShortOverlayPresetSchema>;
 export type ShortOverlayPresetLayer = z.infer<typeof ShortOverlayPresetLayerSchema>;
 export type ShortSummary = z.infer<typeof ShortSummarySchema>;

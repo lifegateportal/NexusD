@@ -100,18 +100,43 @@ export default function LibraryVideoManager() {
         <ul className="grid gap-5 sm:grid-cols-2 xl:grid-cols-3">
           {filteredVideos.map((video) => {
             const isPlaying = activeVideoId === video.videoId;
+            const hasSermonBoundary = video.sermonStartSeconds !== undefined
+              || video.sermonEndSeconds !== undefined;
+            const playerParams = new URLSearchParams({ autoplay: "1", rel: "0" });
+            if (hasSermonBoundary) {
+              playerParams.set("controls", "0");
+              playerParams.set("disablekb", "1");
+            }
+            if (video.sermonStartSeconds !== undefined) {
+              playerParams.set("start", String(Math.floor(video.sermonStartSeconds)));
+            }
+            if (video.sermonEndSeconds !== undefined) {
+              playerParams.set("end", String(Math.ceil(video.sermonEndSeconds)));
+            }
             return (
               <li key={video.videoId} className="overflow-hidden rounded-2xl border border-slate-800 bg-slate-900/50">
-                <div className="aspect-video bg-slate-950">
+                <div className="relative aspect-video bg-slate-950">
                   {isPlaying ? (
-                    <iframe
-                      className="h-full w-full"
-                      src={`https://www.youtube-nocookie.com/embed/${encodeURIComponent(video.videoId)}?autoplay=1&rel=0`}
-                      title={video.title}
-                      allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
-                      referrerPolicy="strict-origin-when-cross-origin"
-                      allowFullScreen
-                    />
+                    <>
+                      <iframe
+                        className="h-full w-full"
+                        src={`https://www.youtube-nocookie.com/embed/${encodeURIComponent(video.videoId)}?${playerParams.toString()}`}
+                        title={video.title}
+                        allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+                        referrerPolicy="strict-origin-when-cross-origin"
+                        allowFullScreen
+                      />
+                      {hasSermonBoundary && (
+                        <button
+                          type="button"
+                          onClick={() => setActiveVideoId(null)}
+                          aria-label={`Close ${video.title} sermon player`}
+                          className="absolute right-2 top-2 flex min-h-12 min-w-12 items-center justify-center rounded-lg bg-black/80 px-3 text-xs font-semibold text-white"
+                        >
+                          Close
+                        </button>
+                      )}
+                    </>
                   ) : (
                     <button
                       type="button"
@@ -139,7 +164,9 @@ export default function LibraryVideoManager() {
                     <span className="text-xs text-slate-500">
                       {[
                         ...video.playlists,
-                        ...(video.sermonStartSeconds !== undefined ? [`Sermon at ${formatTime(video.sermonStartSeconds)}`] : []),
+                        ...(video.sermonStartSeconds !== undefined || video.sermonEndSeconds !== undefined
+                          ? [`Sermon ${video.sermonStartSeconds === undefined ? "start" : formatTime(video.sermonStartSeconds)}–${video.sermonEndSeconds === undefined ? "video end" : formatTime(video.sermonEndSeconds)}`]
+                          : []),
                       ].join(" · ") || "Approved for transcript search"}
                     </span>
                     <a

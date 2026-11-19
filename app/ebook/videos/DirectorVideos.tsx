@@ -437,6 +437,9 @@ export default function DirectorVideos() {
                       <summary className="flex min-h-12 cursor-pointer items-center text-sm font-semibold text-cyan-300">
                         Edit playlist and sermon boundaries
                       </summary>
+                      <p className="mt-2 text-xs leading-relaxed text-slate-400">
+                        When published, the Library player starts at the sermon start and stops at the sermon end. Leave either blank to use the video’s beginning or end.
+                      </p>
                       <div className="grid gap-3 sm:grid-cols-2">
                         <label className="block text-sm font-medium text-slate-300">
                           Playlists (comma-separated)
