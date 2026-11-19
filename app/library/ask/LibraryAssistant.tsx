@@ -25,6 +25,7 @@ const MessageSchema = z.object({
   content: z.string(),
   sources: z.array(SourceSchema).optional(),
   outline: z.boolean().optional(),
+  transcript: z.boolean().optional(),
   artifactTitle: z.string().min(1).max(300).optional(),
 }).strict();
 
@@ -544,7 +545,10 @@ export default function LibraryAssistant() {
           content: parsed.data.answer,
           sources: parsed.data.sources,
           outline: isOutline,
-          ...(isOutline ? {
+          ...(purpose === "video-transcript" ? {
+            transcript: true,
+            artifactTitle: `${libraryVideos.find((video) => video.videoId === videoId)?.title ?? "Video"} - Sermon Transcript`,
+          } : isOutline ? {
             artifactTitle: purpose === "video-teaching-outline"
               ? `${libraryVideos.find((video) => video.videoId === videoId)?.title ?? "Video"} - Teaching Outline`
               : requestChapter
@@ -585,7 +589,7 @@ export default function LibraryAssistant() {
       setError("Choose a published video first.");
       return;
     }
-    void sendMessage(`Extract the full transcript from “${video.title}” as readable text without timestamps.`, "video-transcript", video.videoId);
+    void sendMessage(`Extract only the sermon transcript from “${video.title}” as readable text without timestamps.`, "video-transcript", video.videoId);
   }
 
   function createVideoTeachingOutline() {
@@ -594,7 +598,7 @@ export default function LibraryAssistant() {
       setError("Choose a published video first.");
       return;
     }
-    void sendMessage(`Create a detailed teaching outline from the full transcript of “${video.title}”.`, "video-teaching-outline", video.videoId);
+    void sendMessage(`Create a detailed teaching outline from only the sermon transcript of “${video.title}”.`, "video-teaching-outline", video.videoId);
   }
 
   async function downloadOutline(message: Message, messageIndex: number, format: "docx" | "pdf") {
@@ -642,6 +646,31 @@ export default function LibraryAssistant() {
       setError(exportError instanceof Error ? exportError.message : `The ${format.toUpperCase()} export failed.`);
     } finally {
       setExportingOutline(null);
+    }
+  }
+
+  function downloadTranscript(message: Message) {
+    if (!message.transcript || !message.artifactTitle || !message.content.trim()) {
+      setError("This response does not contain a downloadable sermon transcript.");
+      return;
+    }
+    setError("");
+    try {
+      const filename = message.artifactTitle
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, "-")
+        .replace(/^-|-$/g, "")
+        .slice(0, 80) || "sermon-transcript";
+      const url = URL.createObjectURL(new Blob([message.content], { type: "text/plain;charset=utf-8" }));
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = `${filename}.txt`;
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      window.setTimeout(() => URL.revokeObjectURL(url), 1_000);
+    } catch (downloadError) {
+      setError(downloadError instanceof Error ? downloadError.message : "The sermon transcript download failed.");
     }
   }
 
@@ -738,7 +767,7 @@ export default function LibraryAssistant() {
             aria-expanded={videoToolsOpen}
             className="min-h-12 rounded-xl border border-cyan-800 px-4 text-sm font-semibold text-cyan-200"
           >
-            Video transcript & outline
+            Video sermon transcript & outline
           </button>
         </div>
         {mobileToolsOpen && (
@@ -770,7 +799,7 @@ export default function LibraryAssistant() {
                 aria-expanded={videoToolsOpen}
                 className="col-span-2 min-h-12 rounded-xl border border-cyan-800 px-3 text-sm font-semibold text-cyan-200"
               >
-                Video transcript & outline
+                Video sermon transcript & outline
               </button>
             </div>
           </div>
@@ -799,7 +828,7 @@ export default function LibraryAssistant() {
               disabled={busy || !selectedVideoId || videoCatalogLoading}
               className="min-h-12 rounded-xl border border-slate-700 px-4 text-sm font-semibold text-slate-200 disabled:opacity-50"
             >
-              Extract full transcript
+              Extract sermon transcript
             </button>
             <button
               type="button"
@@ -980,6 +1009,17 @@ export default function LibraryAssistant() {
                     </button>
                   );
                 })}
+              </div>
+            )}
+            {message.role === "assistant" && message.transcript && message.artifactTitle && (
+              <div className="mt-2 flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={() => downloadTranscript(message)}
+                  className="min-h-12 rounded-xl border border-cyan-800 px-4 text-sm font-semibold text-cyan-200"
+                >
+                  Download sermon transcript (.txt)
+                </button>
               </div>
             )}
             {message.sources && message.sources.length > 0 && (
