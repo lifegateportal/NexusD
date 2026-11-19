@@ -138,7 +138,9 @@ export default function ShortsPlayer({
   const brollVideoRefs = useRef(new Map<string, HTMLVideoElement>());
   const musicTrackRefs = useRef(new Map<string, HTMLAudioElement>());
   const musicTrackIdsRef = useRef(new Set(project.musicTracks.map((track) => track.id)));
-  const transcriptCutsRef = useRef([...project.transcriptCuts, ...project.pauseCuts]);
+  const transcriptCutsRef = useRef(
+    project.source.type === "upload" ? [...project.transcriptCuts, ...project.pauseCuts] : [],
+  );
   const lastSkippedCutIdRef = useRef<string | null>(null);
   const requireUserPlayAfterMusicAddRef = useRef(false);
   const overlayDragRef = useRef<{
@@ -167,7 +169,9 @@ export default function ShortsPlayer({
   const [shareError, setShareError] = useState("");
 
   timeCallbackRef.current = onTimeChange;
-  transcriptCutsRef.current = [...project.transcriptCuts, ...project.pauseCuts];
+  transcriptCutsRef.current = project.source.type === "upload"
+    ? [...project.transcriptCuts, ...project.pauseCuts]
+    : [];
 
   const activeSlot = project.frameSlots.find((slot) =>
     currentTime >= slot.startSeconds && currentTime <= slot.endSeconds,
@@ -181,8 +185,8 @@ export default function ShortsPlayer({
     ? project.source.videoId
     : project.source.sourceUrl ?? "";
   const removedWordIndexes = useMemo(
-    () => getRemovedTranscriptWordIndexes(project.transcriptCuts),
-    [project.transcriptCuts],
+    () => getRemovedTranscriptWordIndexes(project.source.type === "upload" ? project.transcriptCuts : []),
+    [project.source.type, project.transcriptCuts],
   );
   const timedCaptions = useMemo(
     () => buildTimedCaptionCues(project.captions, removedWordIndexes),

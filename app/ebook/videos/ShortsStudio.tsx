@@ -375,7 +375,7 @@ export default function ShortsStudio() {
         endSeconds: caption.endSeconds,
         editable: false,
       })),
-      ...project.transcriptCuts.map((cut) => ({
+      ...(project.source.type === "upload" ? project.transcriptCuts : []).map((cut) => ({
         id: cut.id,
         kind: "cut" as const,
         label: `Cut: ${cut.wordText}`,
@@ -383,7 +383,7 @@ export default function ShortsStudio() {
         endSeconds: cut.endSeconds,
         editable: true,
       })),
-      ...project.pauseCuts.map((cut) => ({
+      ...(project.source.type === "upload" ? project.pauseCuts : []).map((cut) => ({
         id: cut.id,
         kind: "pause" as const,
         label: cut.reason,
@@ -418,7 +418,7 @@ export default function ShortsStudio() {
     ];
   }, [project]);
   const pauseSuggestions = useMemo<PauseSuggestion[]>(() => {
-    if (!project) return [];
+    if (!project || project.source.type !== "upload") return [];
     const captions = [...project.captions].sort((a, b) => a.startSeconds - b.startSeconds);
     return captions.slice(1).flatMap((caption, index) => {
       const previous = captions[index];
@@ -1247,6 +1247,26 @@ export default function ShortsStudio() {
       setError("This cleanup suggestion no longer matches the transcript. Request fresh suggestions.");
       return;
     }
+    if (project?.source.type === "youtube" && caption) {
+      updateProject({
+        captions: project.captions.map((item, index) =>
+          index === suggestion.segmentIndex
+            ? {
+              ...item,
+              text: getTranscriptWords(item.text)
+                .filter((entry) => entry.index !== suggestion.wordIndex)
+                .map((entry) => entry.text)
+                .join(" "),
+            }
+            : item,
+        ),
+      });
+      setCleanupSuggestions((current) => current.filter((entry) =>
+        entry.segmentIndex !== suggestion.segmentIndex || entry.wordIndex !== suggestion.wordIndex,
+      ));
+      setNotice("Caption word removed. YouTube playback remains unchanged; upload the authorized source to cut video moments.");
+      return;
+    }
     toggleTranscriptWord(suggestion.segmentIndex, suggestion.wordIndex);
     setCleanupSuggestions((current) => current.filter((entry) =>
       entry.segmentIndex !== suggestion.segmentIndex || entry.wordIndex !== suggestion.wordIndex,
@@ -1277,6 +1297,10 @@ export default function ShortsStudio() {
 
   function toggleTranscriptWord(segmentIndex: number, wordIndex: number) {
     if (!project) return;
+    if (project.source.type === "youtube") {
+      setError("YouTube link projects support caption text edits only. Upload the authorized source to cut video moments.");
+      return;
+    }
     const existingCut = project.transcriptCuts.find((cut) =>
       cut.segmentIndex === segmentIndex && cut.wordIndex === wordIndex,
     );
@@ -1351,6 +1375,19 @@ export default function ShortsStudio() {
     if (!project) return;
     const caption = project.captions[segmentIndex];
     if (!caption) return;
+    if (project.source.type === "youtube") {
+      if (caption.text === text) return;
+      updateProject({
+        captions: project.captions.map((item, index) =>
+          index === segmentIndex ? { ...item, text } : item,
+        ),
+        transcriptCuts: project.transcriptCuts.filter((cut) => cut.segmentIndex !== segmentIndex),
+        wordTimings: project.wordTimings.filter((timing) => timing.segmentIndex !== segmentIndex),
+      });
+      setNotice("Caption text updated. YouTube playback is unchanged; upload the authorized source to cut video moments.");
+      setError("");
+      return;
+    }
     const currentText = getEditedTranscriptText(caption.text, segmentIndex, removedTranscriptWords);
     if (currentText === text) return;
 
@@ -3240,7 +3277,9 @@ export default function ShortsStudio() {
                   </p>
                   <div className="space-y-2 rounded-lg border border-amber-900/70 bg-amber-950/20 p-3">
                     <p className="text-xs leading-relaxed text-amber-100">
-                      Delete a word in the transcript or tap it to cut its video moment. Source-aligned words use audio timestamps; unmatched words use an estimate. Fine-tune any cut below.
+                      {project.source.type === "youtube"
+                        ? "YouTube link projects use text-only caption edits to avoid playback buffering. Upload the authorized source video to enable word and pause cuts."
+                        : "Delete a word in the transcript or tap it to cut its video moment. Source-aligned words use audio timestamps; unmatched words use an estimate. Fine-tune any cut below."}
                     </p>
                     <button
                       type="button"
@@ -3267,10 +3306,10 @@ export default function ShortsStudio() {
                       <button
                         type="button"
                         onClick={() => void findCleanupSuggestions()}
-                        disabled={busy || project.captions.length === 0}
+                        disabled={busy || project.captions.length === 0 || project.source.type !== "upload"}
                         className="min-h-12 rounded-lg border border-cyan-700 px-3 text-xs font-semibold text-cyan-100 disabled:opacity-50"
                       >
-                        {busy ? "Reviewing…" : "Find cleanup suggestions"}
+                        {busy ? "Reviewing…" : "Find cleanup suggestions (source upload)"}
                       </button>
                     </div>
                     {(cleanupSuggestions.length > 0 || pauseSuggestions.length > 0) && (
@@ -3286,7 +3325,7 @@ export default function ShortsStudio() {
                               disabled={busy}
                               className="min-h-12 rounded-lg border border-cyan-700 px-3 text-xs font-semibold text-cyan-100 disabled:opacity-50"
                             >
-                              Apply word cut
+                              {project.source.type === "youtube" ? "Edit caption" : "Apply word cut"}
                             </button>
                           </li>
                         ))}
@@ -3334,6 +3373,16 @@ export default function ShortsStudio() {
                           {formatTime(caption.startSeconds)}–{formatTime(caption.endSeconds)}
                           <div className="flex flex-wrap gap-1">
                             {getTranscriptWords(caption.text).map((word) => {
+                              if (project.source.type === "youtube") {
+                                return (
+                                  <span
+                                    key={`${word.index}-${word.text}`}
+                                    className="rounded px-1 text-sm font-medium text-slate-100"
+                                  >
+                                    {word.text}
+                                  </span>
+                                );
+                              }
                               const cut = project.transcriptCuts.find((item) =>
                                 item.segmentIndex === index && item.wordIndex === word.index,
                               );
@@ -3358,11 +3407,15 @@ export default function ShortsStudio() {
                             })}
                           </div>
                           <label className="block text-xs text-slate-400">
-                            Edited caption text
+                            {project.source.type === "youtube" ? "Caption text" : "Edited caption text"}
                             <textarea
                               rows={2}
                               maxLength={2000}
-                              value={captionDrafts[index] ?? getEditedTranscriptText(caption.text, index, removedTranscriptWords)}
+                              value={captionDrafts[index] ?? (
+                                project.source.type === "youtube"
+                                  ? caption.text
+                                  : getEditedTranscriptText(caption.text, index, removedTranscriptWords)
+                              )}
                               onChange={(event) => setCaptionDrafts((current) => ({
                                 ...current,
                                 [index]: event.target.value,
@@ -3371,7 +3424,7 @@ export default function ShortsStudio() {
                               className="mt-1 min-h-12 w-full rounded-lg border border-slate-700 bg-slate-900 p-2 text-base text-white"
                             />
                           </label>
-                          {project.transcriptCuts.filter((cut) => cut.segmentIndex === index).map((cut) => (
+                          {project.source.type === "upload" && project.transcriptCuts.filter((cut) => cut.segmentIndex === index).map((cut) => (
                             <div key={cut.id} className="grid gap-2 rounded-lg border border-rose-900/70 bg-rose-950/20 p-2 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] sm:items-end">
                               <label className="text-xs text-rose-200">
                                 Cut “{cut.wordText}” from
