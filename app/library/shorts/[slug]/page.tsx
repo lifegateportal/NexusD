@@ -6,6 +6,7 @@ import ShortsPlayer from "@/app/components/ShortsPlayer";
 import LibraryNav from "../../LibraryNav";
 import { readPublicShort } from "@/lib/shorts-store";
 import { getShortThumbnailUrl } from "@/lib/short-video-utils";
+import { ShortSlugSchema } from "@/lib/schemas/video-short";
 
 export const runtime = "nodejs";
 
@@ -33,7 +34,7 @@ async function getRequestOrigin(): Promise<string | undefined> {
 
 export async function generateMetadata({ params }: Props): Promise<Metadata> {
   const { slug } = await params;
-  if (!/^[a-z0-9][a-z0-9-]{0,79}$/.test(slug)) {
+  if (!ShortSlugSchema.safeParse(slug).success) {
     return { title: "Video Short | Nexus Library" };
   }
   const project = await readPublicShort(slug);
@@ -80,7 +81,7 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
 
 export default async function LibraryShortPage({ params }: Props) {
   const { slug } = await params;
-  if (!/^[a-z0-9][a-z0-9-]{0,79}$/.test(slug)) notFound();
+  if (!ShortSlugSchema.safeParse(slug).success) notFound();
   const project = await readPublicShort(slug);
   if (!project) notFound();
 

@@ -191,6 +191,8 @@ export const ShortSourceSchema = z.discriminatedUnion("type", [
   UploadedShortSourceSchema,
 ]);
 
+export const ShortSlugSchema = z.string().regex(/^[a-z0-9][a-z0-9_-]{0,79}$/);
+
 export const ShortClipSuggestionSchema = z.object({
   startSeconds: z.number().finite().min(0),
   endSeconds: z.number().finite().min(0),
@@ -254,7 +256,7 @@ export const GeneratedShortSuggestionsSchema = z.object({
 });
 
 export const ShortProjectSchema = z.object({
-  slug: z.string().regex(/^[a-z0-9][a-z0-9-]{0,79}$/),
+  slug: ShortSlugSchema,
   title: z.string().trim().min(1).max(120),
   description: z.string().trim().max(1000).default(""),
   thumbnailUrl: z.string().url().optional(),
@@ -377,7 +379,7 @@ export const PublishedShortProjectSchema = ShortProjectSchema.superRefine((proje
 });
 
 export const ShortSummarySchema = z.object({
-  slug: z.string().regex(/^[a-z0-9][a-z0-9-]{0,79}$/),
+  slug: ShortSlugSchema,
   title: z.string().trim().min(1).max(120),
   thumbnailUrl: z.string().url().optional(),
   sourceType: z.enum(["youtube", "upload"]),

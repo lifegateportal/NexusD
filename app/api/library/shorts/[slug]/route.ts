@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { readPublicShort } from "@/lib/shorts-store";
+import { ShortSlugSchema } from "@/lib/schemas/video-short";
 
 export const runtime = "nodejs";
 
@@ -8,7 +9,7 @@ export async function GET(
   { params }: { params: Promise<{ slug: string }> },
 ) {
   const { slug } = await params;
-  if (!/^[a-z0-9][a-z0-9-]{0,79}$/.test(slug)) {
+  if (!ShortSlugSchema.safeParse(slug).success) {
     return NextResponse.json({ error: "Invalid video short ID." }, { status: 400 });
   }
   try {

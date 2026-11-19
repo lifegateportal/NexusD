@@ -7,7 +7,7 @@ import {
   readShortCaptureHeartbeat,
   writeShortCaptureJob,
 } from "@/lib/short-capture-jobs.mjs";
-import { ShortProjectSchema } from "@/lib/schemas/video-short";
+import { ShortProjectSchema, ShortSlugSchema } from "@/lib/schemas/video-short";
 import {
   ShortCaptureJobStatusResponseSchema,
 } from "@/lib/schemas/short-capture";
@@ -15,7 +15,6 @@ import {
 export const runtime = "nodejs";
 
 const RequestSchema = z.object({ project: ShortProjectSchema }).strict();
-const SlugSchema = z.string().regex(/^[a-z0-9][a-z0-9-]{0,79}$/);
 const MAX_ACTIVE_JOBS = 3;
 const WORKER_HEARTBEAT_MAX_AGE_MS = 30_000;
 
@@ -45,7 +44,7 @@ export async function GET(request: NextRequest) {
   if (!env.SHORT_CAPTURE_JOB_DIR) {
     return NextResponse.json({ error: "Configure SHORT_CAPTURE_JOB_DIR for the capture worker." }, { status: 503 });
   }
-  const parsedSlug = SlugSchema.safeParse(request.nextUrl.searchParams.get("slug"));
+  const parsedSlug = ShortSlugSchema.safeParse(request.nextUrl.searchParams.get("slug"));
   if (!parsedSlug.success) {
     return NextResponse.json({ error: "Enter a valid Shorts project slug." }, { status: 400 });
   }

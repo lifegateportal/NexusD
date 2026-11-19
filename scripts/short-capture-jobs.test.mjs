@@ -26,7 +26,7 @@ test("persists validated jobs and worker heartbeat in the shared queue directory
   const timestamp = new Date().toISOString();
   const job = {
     id,
-    slug: "test-short",
+    slug: "test_short",
     title: "Test short",
     startSeconds: 10,
     endSeconds: 40,

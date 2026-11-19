@@ -22,7 +22,7 @@ export const ShortCaptureJobStatusResponseSchema = z.object({
   downloadUrl: z.string()
     .regex(/^\/api\/ebook\/shorts\/capture\/[0-9a-f-]{36}\/download$/)
     .nullable(),
-  fileName: z.string().regex(/^[a-z0-9][a-z0-9-]{0,79}\.mp4$/),
+  fileName: z.string().regex(/^[a-z0-9][a-z0-9_-]{0,79}\.mp4$/),
 }).strict();
 
 export type ShortCaptureJobStatusResponse = z.infer<typeof ShortCaptureJobStatusResponseSchema>;

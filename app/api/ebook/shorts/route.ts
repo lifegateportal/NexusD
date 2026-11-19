@@ -9,16 +9,15 @@ import {
   savePrivateShort,
   unpublishShort,
 } from "@/lib/shorts-store";
-import { ShortProjectSchema } from "@/lib/schemas/video-short";
+import { ShortProjectSchema, ShortSlugSchema } from "@/lib/schemas/video-short";
 
 export const runtime = "nodejs";
 
-const SlugSchema = z.string().regex(/^[a-z0-9][a-z0-9-]{0,79}$/);
 const ActionSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("save"), project: ShortProjectSchema }).strict(),
   z.object({ action: z.literal("publish"), project: ShortProjectSchema }).strict(),
-  z.object({ action: z.literal("unpublish"), slug: SlugSchema }).strict(),
-  z.object({ action: z.literal("delete"), slug: SlugSchema }).strict(),
+  z.object({ action: z.literal("unpublish"), slug: ShortSlugSchema }).strict(),
+  z.object({ action: z.literal("delete"), slug: ShortSlugSchema }).strict(),
 ]);
 
 function authConfigured(): boolean {

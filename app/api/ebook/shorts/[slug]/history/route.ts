@@ -1,10 +1,10 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
+import { ShortSlugSchema } from "@/lib/schemas/video-short";
 import { listPrivateShortVersions, readPrivateShortVersion } from "@/lib/shorts-store";
 
 export const runtime = "nodejs";
 
-const SlugSchema = z.string().regex(/^[a-z0-9][a-z0-9-]{0,79}$/);
 const VersionIdSchema = z.string().uuid();
 
 export async function GET(
@@ -12,7 +12,7 @@ export async function GET(
   { params }: { params: Promise<{ slug: string }> },
 ) {
   const { slug } = await params;
-  if (!SlugSchema.safeParse(slug).success) {
+  if (!ShortSlugSchema.safeParse(slug).success) {
     return NextResponse.json({ error: "Invalid video short ID." }, { status: 400 });
   }
   if (!process.env.AUTH_PASSWORD || !process.env.AUTH_COOKIE_SECRET) {
