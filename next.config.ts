@@ -17,6 +17,12 @@ const nextConfig: NextConfig = {
           { key: "Cross-Origin-Embedder-Policy", value: "unsafe-none" },
         ],
       },
+      {
+        source: "/ebook/videos/capture/:path*",
+        headers: [
+          { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
+        ],
+      },
     ];
   },
   serverExternalPackages: ["@deepgram/sdk", "epub-gen-memory", "pdfkit", "@sparticuz/chromium", "playwright-core"],

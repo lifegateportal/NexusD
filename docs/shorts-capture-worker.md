@@ -43,6 +43,10 @@ uses this origin only for its browser page and session cookie; keep
 `SHORT_CAPTURE_APP_ORIGIN` pointed at localhost. Do not set the browser origin
 to a host you do not control.
 
+The capture page sends YouTube's recommended
+`Referrer-Policy: strict-origin-when-cross-origin` header so the embedded
+player receives the site's origin without the private capture URL.
+
 Create the job directory and grant access to the same service account that
 runs Nexus and PM2:
 
