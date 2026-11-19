@@ -186,6 +186,43 @@ export default function ShortsPlayer({
   const sourceIdentity = project.source.type === "youtube"
     ? project.source.videoId
     : project.source.sourceUrl ?? "";
+  const playerEndSeconds = Math.max(project.startSeconds, Math.min(project.endSeconds, duration));
+  const playbackCuts = useMemo(
+    () => project.source.type === "upload"
+      ? mergeTimeRanges(
+        [...project.transcriptCuts, ...project.pauseCuts],
+        project.startSeconds,
+        playerEndSeconds,
+      )
+      : [],
+    [
+      playerEndSeconds,
+      project.pauseCuts,
+      project.source.type,
+      project.startSeconds,
+      project.transcriptCuts,
+    ],
+  );
+  const shortDurationSeconds = Math.max(
+    0,
+    playerEndSeconds - project.startSeconds
+      - playbackCuts.reduce((total, cut) => total + cut.endSeconds - cut.startSeconds, 0),
+  );
+  const currentShortTimeSeconds = Math.max(
+    0,
+    Math.min(
+      shortDurationSeconds,
+      Math.max(project.startSeconds, Math.min(currentTime, playerEndSeconds))
+        - project.startSeconds
+        - playbackCuts.reduce(
+          (total, cut) => total + Math.max(
+            0,
+            Math.min(currentTime, cut.endSeconds) - cut.startSeconds,
+          ),
+          0,
+        ),
+    ),
+  );
   const removedWordIndexes = useMemo(
     () => getRemovedTranscriptWordIndexes(project.source.type === "upload" ? project.transcriptCuts : []),
     [project.source.type, project.transcriptCuts],
@@ -999,14 +1036,16 @@ export default function ShortsPlayer({
         <input
           type="range"
           min={project.startSeconds}
-          max={Math.max(project.startSeconds + 0.1, Math.min(project.endSeconds, duration))}
+          max={Math.max(project.startSeconds + 0.1, playerEndSeconds)}
           step="0.1"
           value={Math.min(currentTime, project.endSeconds)}
           onChange={(event) => seek(Number(event.target.value))}
           className="min-h-12 min-w-0 flex-1 accent-cyan-400"
           aria-label="Seek preview"
         />
-        <span className="min-w-16 text-right text-xs tabular-nums text-slate-400">{formatTime(currentTime)}</span>
+        <span className="min-w-24 text-right text-xs tabular-nums text-slate-400">
+          {formatTime(currentShortTimeSeconds)} / {formatTime(shortDurationSeconds)}
+        </span>
       </div>
       {project.status === "published" && !compactPreview && !embedMode && (
         <div className="mt-2">
@@ -1097,4 +1136,28 @@ function formatTime(seconds: number): string {
   return hours > 0
     ? `${hours}:${String(minutes).padStart(2, "0")}:${String(remainder).padStart(2, "0")}`
     : `${minutes}:${String(remainder).padStart(2, "0")}`;
+}
+
+function mergeTimeRanges(
+  ranges: Array<{ startSeconds: number; endSeconds: number }>,
+  startSeconds: number,
+  endSeconds: number,
+): Array<{ startSeconds: number; endSeconds: number }> {
+  const sortedRanges = ranges
+    .map((range) => ({
+      startSeconds: Math.max(startSeconds, range.startSeconds),
+      endSeconds: Math.min(endSeconds, range.endSeconds),
+    }))
+    .filter((range) => range.endSeconds > range.startSeconds)
+    .sort((first, second) => first.startSeconds - second.startSeconds);
+  const mergedRanges: Array<{ startSeconds: number; endSeconds: number }> = [];
+  for (const range of sortedRanges) {
+    const previous = mergedRanges[mergedRanges.length - 1];
+    if (previous && range.startSeconds <= previous.endSeconds) {
+      previous.endSeconds = Math.max(previous.endSeconds, range.endSeconds);
+    } else {
+      mergedRanges.push(range);
+    }
+  }
+  return mergedRanges;
 }
