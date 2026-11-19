@@ -41,6 +41,7 @@ type Props = {
   editable?: boolean;
   compactPreview?: boolean;
   onTimeChange?: (seconds: number) => void;
+  seekRequestSeconds?: number | null;
   onCropChange?: (timeSeconds: number, x: number, y: number, zoom: number, fit: ShortCropKeyframe["fit"]) => void;
   onOverlayChange?: (id: string, patch: Partial<ShortOverlay>) => void;
   embedMode?: boolean;
@@ -124,6 +125,7 @@ export default function ShortsPlayer({
   editable = false,
   compactPreview = false,
   onTimeChange,
+  seekRequestSeconds,
   onCropChange,
   onOverlayChange,
   embedMode = false,
@@ -136,7 +138,7 @@ export default function ShortsPlayer({
   const brollVideoRefs = useRef(new Map<string, HTMLVideoElement>());
   const musicTrackRefs = useRef(new Map<string, HTMLAudioElement>());
   const musicTrackIdsRef = useRef(new Set(project.musicTracks.map((track) => track.id)));
-  const transcriptCutsRef = useRef(project.transcriptCuts);
+  const transcriptCutsRef = useRef([...project.transcriptCuts, ...project.pauseCuts]);
   const lastSkippedCutIdRef = useRef<string | null>(null);
   const requireUserPlayAfterMusicAddRef = useRef(false);
   const overlayDragRef = useRef<{
@@ -165,7 +167,7 @@ export default function ShortsPlayer({
   const [shareError, setShareError] = useState("");
 
   timeCallbackRef.current = onTimeChange;
-  transcriptCutsRef.current = project.transcriptCuts;
+  transcriptCutsRef.current = [...project.transcriptCuts, ...project.pauseCuts];
 
   const activeSlot = project.frameSlots.find((slot) =>
     currentTime >= slot.startSeconds && currentTime <= slot.endSeconds,
@@ -338,7 +340,22 @@ export default function ShortsPlayer({
     };
   }, [project.startSeconds, project.endSeconds, videoUrl]);
 
+  useEffect(() => {
+    if (seekRequestSeconds === undefined || seekRequestSeconds === null) return;
+    const timeSeconds = Math.max(
+      project.startSeconds,
+      Math.min(project.endSeconds, seekRequestSeconds),
+    );
+    if (videoRef.current) videoRef.current.currentTime = timeSeconds;
+    else youtubePlayerRef.current?.seekTo(timeSeconds, true);
+    setCurrentTime(timeSeconds);
+  }, [seekRequestSeconds, project.startSeconds, project.endSeconds]);
+
   const syncAuxiliaryMedia = useCallback((timeSeconds: number, shouldPlay: boolean) => {
+    const speechActive = project.captions.some((caption) =>
+      timeSeconds >= caption.startSeconds && timeSeconds < caption.endSeconds,
+    ) && !getTranscriptCutAtTime(transcriptCutsRef.current, timeSeconds);
+
     for (const clip of project.brollClips) {
       const video = brollVideoRefs.current.get(clip.id);
       if (!video) continue;
@@ -377,7 +394,8 @@ export default function ShortsPlayer({
       const fadeOutGain = track.fadeOutSeconds > 0
         ? Math.min(1, remaining / track.fadeOutSeconds)
         : 1;
-      audio.volume = Math.max(0, Math.min(1, track.volume * fadeInGain * fadeOutGain));
+      const speechGain = track.duckUnderSpeech && speechActive ? track.duckVolume : 1;
+      audio.volume = Math.max(0, Math.min(1, track.volume * fadeInGain * fadeOutGain * speechGain));
       if (audio.readyState >= 1 && Math.abs(audio.currentTime - elapsed) > 0.75) {
         audio.currentTime = elapsed;
       }
@@ -393,7 +411,7 @@ export default function ShortsPlayer({
         audio.pause();
       }
     }
-  }, [project.brollClips, project.musicTracks]);
+  }, [project.brollClips, project.captions, project.musicTracks]);
 
   useEffect(() => {
     const currentTrackIds = new Set(project.musicTracks.map((track) => track.id));

@@ -7,6 +7,7 @@ import {
   ShortAgentSettingsSchema,
   ShortCatalogSchema,
   ShortProjectSchema,
+  ShortProjectVersionIndexSchema,
   type ShortProject,
 } from "@/lib/schemas/video-short";
 import { getShortThumbnailUrl } from "@/lib/short-video-utils";
@@ -14,6 +15,15 @@ import { getShortThumbnailUrl } from "@/lib/short-video-utils";
 const PRIVATE_CATALOG_KEY = "director/shorts/index.json";
 const PUBLIC_CATALOG_KEY = "published/shorts/index.json";
 const AGENT_SETTINGS_KEY = "director/shorts/agent-settings.json";
+const MAX_PROJECT_VERSIONS = 20;
+
+function historyIndexKey(slug: string): string {
+  return `director/shorts/${slug}/history.json`;
+}
+
+function historyVersionKey(slug: string, versionId: string): string {
+  return `director/shorts/${slug}/history/${versionId}.json`;
+}
 
 function belongsToHttpsDomain(value: string | undefined, domain: string): boolean {
   if (!value) return false;
@@ -112,6 +122,36 @@ export async function readPrivateShort(slug: string): Promise<ShortProject | nul
   return raw ? ShortProjectSchema.parse(raw) : null;
 }
 
+export async function listPrivateShortVersions(slug: string) {
+  const raw = await readJsonObject(historyIndexKey(slug));
+  return ShortProjectVersionIndexSchema.parse(raw ?? { versions: [] });
+}
+
+export async function readPrivateShortVersion(slug: string, versionId: string): Promise<ShortProject | null> {
+  const index = await listPrivateShortVersions(slug);
+  if (!index.versions.some((version) => version.id === versionId)) return null;
+  const raw = await readJsonObject(historyVersionKey(slug, versionId));
+  return raw ? ShortProjectSchema.parse(raw) : null;
+}
+
+async function archivePrivateShortVersion(project: ShortProject): Promise<void> {
+  const index = await listPrivateShortVersions(project.slug);
+  const id = crypto.randomUUID();
+  const savedAt = new Date().toISOString();
+  await writeJsonObject(historyVersionKey(project.slug, id), project);
+  const versions = ShortProjectVersionIndexSchema.parse({
+    versions: [
+      { id, savedAt, title: project.title, status: project.status, updatedAt: project.updatedAt },
+      ...index.versions,
+    ].slice(0, MAX_PROJECT_VERSIONS),
+  });
+  await writeJsonObject(historyIndexKey(project.slug), versions);
+  const retained = new Set(versions.versions.map((version) => version.id));
+  await Promise.all(index.versions
+    .filter((version) => !retained.has(version.id))
+    .map((version) => deleteObject(historyVersionKey(project.slug, version.id))));
+}
+
 export async function savePrivateShort(
   projectInput: unknown,
   status: "draft" | "published" = "draft",
@@ -122,6 +162,14 @@ export async function savePrivateShort(
     throw new Error("The private Shorts Studio catalog has reached its 500-draft limit.");
   }
   const saved = ShortProjectSchema.parse({ ...project, status, updatedAt: new Date().toISOString() });
+  const previous = await readPrivateShort(saved.slug);
+  if (previous) {
+    const comparablePrevious = { ...previous, status: "draft", updatedAt: "" };
+    const comparableNext = { ...saved, status: "draft", updatedAt: "" };
+    if (JSON.stringify(comparablePrevious) !== JSON.stringify(comparableNext)) {
+      await archivePrivateShortVersion(previous);
+    }
+  }
   await writeJsonObject(`director/shorts/${saved.slug}.json`, saved);
   await writeJsonObject(PRIVATE_CATALOG_KEY, ShortCatalogSchema.parse({
     updatedAt: new Date().toISOString(),
@@ -255,7 +303,12 @@ export async function unpublishShort(slug: string): Promise<void> {
 
 export async function deletePrivateShort(slug: string): Promise<void> {
   const catalog = await listPrivateShorts();
+  const versions = await listPrivateShortVersions(slug);
   await deleteObject(`director/shorts/${slug}.json`);
+  await Promise.all([
+    deleteObject(historyIndexKey(slug)),
+    ...versions.versions.map((version) => deleteObject(historyVersionKey(slug, version.id))),
+  ]);
   await writeJsonObject(PRIVATE_CATALOG_KEY, ShortCatalogSchema.parse({
     updatedAt: new Date().toISOString(),
     shorts: catalog.shorts.filter((short) => short.slug !== slug),

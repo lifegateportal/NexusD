@@ -6,6 +6,19 @@ export type TranscriptWord = {
   index: number;
 };
 
+export type AudioWordTiming = {
+  text: string;
+  startSeconds: number;
+  endSeconds: number;
+};
+
+export type AlignedTranscriptWordTiming = {
+  segmentIndex: number;
+  wordIndex: number;
+  startSeconds: number;
+  endSeconds: number;
+};
+
 export function getTranscriptWords(text: string): TranscriptWord[] {
   return [...text.matchAll(/\S+/g)].map((match, index) => ({
     text: match[0],
@@ -38,11 +51,21 @@ export function getTranscriptWordTimeRange(
   wordIndex: number,
   clipStartSeconds: number,
   clipEndSeconds: number,
+  exactRange?: { startSeconds: number; endSeconds: number },
 ): { startSeconds: number; endSeconds: number } | null {
   const words = getTranscriptWords(segment.text);
   const word = words[wordIndex];
   const duration = segment.endSeconds - segment.startSeconds;
   if (!word || duration <= 0) return null;
+  if (
+    exactRange
+    && exactRange.startSeconds >= segment.startSeconds
+    && exactRange.endSeconds <= segment.endSeconds
+  ) {
+    const startSeconds = Math.max(exactRange.startSeconds, clipStartSeconds);
+    const endSeconds = Math.min(exactRange.endSeconds, clipEndSeconds);
+    if (endSeconds > startSeconds) return { startSeconds, endSeconds };
+  }
 
   const weights = words.map(({ text }) => Math.max(1, Array.from(text).length));
   const totalWeight = weights.reduce((sum, weight) => sum + weight, 0);
@@ -57,6 +80,65 @@ export function getTranscriptWordTimeRange(
   );
 
   return endSeconds > startSeconds ? { startSeconds, endSeconds } : null;
+}
+
+export function alignTranscriptWordTimings(
+  captions: LibraryVideoSegment[],
+  audioWords: AudioWordTiming[],
+  clipStartSeconds: number,
+  clipEndSeconds: number,
+): { wordTimings: AlignedTranscriptWordTiming[]; totalWords: number } {
+  const normalize = (value: string) => value.toLocaleLowerCase().replace(/[^\p{L}\p{N}]/gu, "");
+  const transcriptWords = captions.flatMap((caption, segmentIndex) =>
+    getTranscriptWords(caption.text).map((word) => ({
+      segmentIndex,
+      wordIndex: word.index,
+      normalized: normalize(word.text),
+      caption,
+    })),
+  );
+  const wordTimings: AlignedTranscriptWordTiming[] = [];
+  let transcriptIndex = 0;
+  let audioIndex = 0;
+  while (transcriptIndex < transcriptWords.length && audioIndex < audioWords.length) {
+    let match: { transcriptIndex: number; audioIndex: number; distance: number } | null = null;
+    for (let transcriptLookahead = transcriptIndex; transcriptLookahead < Math.min(transcriptIndex + 5, transcriptWords.length); transcriptLookahead += 1) {
+      const transcriptWord = transcriptWords[transcriptLookahead];
+      if (!transcriptWord.normalized) continue;
+      for (let audioLookahead = audioIndex; audioLookahead < Math.min(audioIndex + 7, audioWords.length); audioLookahead += 1) {
+        if (transcriptWord.normalized !== normalize(audioWords[audioLookahead].text)) continue;
+        const distance = transcriptLookahead - transcriptIndex + audioLookahead - audioIndex;
+        if (!match || distance < match.distance) {
+          match = { transcriptIndex: transcriptLookahead, audioIndex: audioLookahead, distance };
+        }
+      }
+    }
+    if (!match) {
+      transcriptIndex += 1;
+      audioIndex += 1;
+      continue;
+    }
+
+    const transcriptWord = transcriptWords[match.transcriptIndex];
+    const audioWord = audioWords[match.audioIndex];
+    if (
+      audioWord.startSeconds >= clipStartSeconds
+      && audioWord.endSeconds <= clipEndSeconds
+      && audioWord.startSeconds >= transcriptWord.caption.startSeconds
+      && audioWord.endSeconds <= transcriptWord.caption.endSeconds
+      && audioWord.endSeconds > audioWord.startSeconds
+    ) {
+      wordTimings.push({
+        segmentIndex: transcriptWord.segmentIndex,
+        wordIndex: transcriptWord.wordIndex,
+        startSeconds: audioWord.startSeconds,
+        endSeconds: audioWord.endSeconds,
+      });
+    }
+    transcriptIndex = match.transcriptIndex + 1;
+    audioIndex = match.audioIndex + 1;
+  }
+  return { wordTimings, totalWords: transcriptWords.length };
 }
 
 export function getRemovedTranscriptWordIndexes(
@@ -85,9 +167,9 @@ export function getEditedTranscriptText(
 }
 
 export function getTranscriptCutAtTime(
-  cuts: ShortTranscriptCut[],
+  cuts: ReadonlyArray<{ id: string; startSeconds: number; endSeconds: number }>,
   timeSeconds: number,
-): ShortTranscriptCut | undefined {
+): { id: string; startSeconds: number; endSeconds: number } | undefined {
   return cuts.find((cut) =>
     timeSeconds >= cut.startSeconds && timeSeconds < cut.endSeconds,
   );

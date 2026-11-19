@@ -117,6 +117,8 @@ export const ShortMusicTrackSchema = z.object({
   volume: z.number().finite().min(0).max(1).default(0.25),
   fadeInSeconds: z.number().finite().min(0).max(30).default(1),
   fadeOutSeconds: z.number().finite().min(0).max(30).default(2),
+  duckUnderSpeech: z.boolean().default(false),
+  duckVolume: z.number().finite().min(0).max(1).default(0.12),
   provider: z.enum(["upload", "jamendo"]).default("upload"),
   providerPageUrl: z.string().url().optional(),
   creatorName: z.string().trim().min(1).max(200).optional(),
@@ -152,6 +154,26 @@ export const ShortTranscriptCutSchema = z.object({
   path: ["endSeconds"],
 });
 
+export const ShortTranscriptWordTimingSchema = z.object({
+  segmentIndex: z.number().int().min(0).max(4999),
+  wordIndex: z.number().int().min(0).max(49999),
+  startSeconds: z.number().finite().min(0),
+  endSeconds: z.number().finite().min(0),
+}).strict().refine((timing) => timing.endSeconds > timing.startSeconds, {
+  message: "Word timing end must be after its start.",
+  path: ["endSeconds"],
+});
+
+export const ShortPauseCutSchema = z.object({
+  id: z.string().uuid(),
+  startSeconds: z.number().finite().min(0),
+  endSeconds: z.number().finite().min(0),
+  reason: z.string().trim().max(200).default("Long pause"),
+}).strict().refine((cut) => cut.endSeconds > cut.startSeconds, {
+  message: "Pause cut end must be after its start.",
+  path: ["endSeconds"],
+});
+
 const YouTubeShortSourceSchema = z.object({
   type: z.literal("youtube"),
   videoId: z.string().regex(/^[A-Za-z0-9_-]{11}$/),
@@ -181,6 +203,8 @@ export const ShortProjectSchema = z.object({
   frameSlots: z.array(ShortFrameSlotSchema).min(1).max(100),
   captions: z.array(LibraryVideoSegmentSchema).max(5000),
   transcriptCuts: z.array(ShortTranscriptCutSchema).max(5000).default([]),
+  wordTimings: z.array(ShortTranscriptWordTimingSchema).max(50000).default([]),
+  pauseCuts: z.array(ShortPauseCutSchema).max(500).default([]),
   overlays: z.array(ShortOverlaySchema).max(20).default([]),
   brollClips: z.array(ShortBrollClipSchema).max(10).default([]),
   musicTracks: z.array(ShortMusicTrackSchema).max(5).default([]),
@@ -223,6 +247,27 @@ export const ShortProjectSchema = z.object({
       && words[cut.wordIndex] === cut.wordText;
   }),
   { message: "Transcript cuts must match words and timestamps inside their caption.", path: ["transcriptCuts"] },
+).refine(
+  (project) => project.wordTimings.every((timing) => {
+    const caption = project.captions[timing.segmentIndex];
+    const words = caption?.text.match(/\S+/g) ?? [];
+    return Boolean(caption)
+      && timing.wordIndex < words.length
+      && timing.startSeconds >= project.startSeconds
+      && timing.endSeconds <= project.endSeconds
+      && timing.startSeconds >= (caption?.startSeconds ?? 0)
+      && timing.endSeconds <= (caption?.endSeconds ?? 0);
+  }),
+  { message: "Word timings must match captions and remain inside their transcript ranges.", path: ["wordTimings"] },
+).refine(
+  (project) => new Set(project.wordTimings.map(({ segmentIndex, wordIndex }) => `${segmentIndex}:${wordIndex}`)).size
+    === project.wordTimings.length,
+  { message: "Transcript words can only have one precise timing.", path: ["wordTimings"] },
+).refine(
+  (project) => project.pauseCuts.every((cut) =>
+    cut.startSeconds >= project.startSeconds && cut.endSeconds <= project.endSeconds,
+  ),
+  { message: "Pause cuts must remain inside the short range.", path: ["pauseCuts"] },
 ).refine(
   (project) => project.brollClips.every(
     (clip) => clip.startSeconds >= project.startSeconds && clip.endSeconds <= project.endSeconds,
@@ -284,6 +329,18 @@ export const ShortCatalogSchema = z.object({
   shorts: z.array(ShortSummarySchema).max(500),
 }).strict();
 
+export const ShortProjectVersionSchema = z.object({
+  id: z.string().uuid(),
+  savedAt: z.string().datetime(),
+  title: z.string().trim().min(1).max(120),
+  status: z.enum(["draft", "published"]),
+  updatedAt: z.string().datetime(),
+}).strict();
+
+export const ShortProjectVersionIndexSchema = z.object({
+  versions: z.array(ShortProjectVersionSchema).max(20),
+}).strict();
+
 export const PublicShortCatalogSchema = z.object({
   updatedAt: z.string().datetime(),
   shorts: z.array(ShortSummarySchema.omit({ status: true })).max(500),
@@ -319,8 +376,11 @@ export type ShortFrameSlot = z.infer<typeof ShortFrameSlotSchema>;
 export type ShortCropKeyframe = z.infer<typeof ShortCropKeyframeSchema>;
 export type ShortOverlay = z.infer<typeof ShortOverlaySchema>;
 export type ShortTranscriptCut = z.infer<typeof ShortTranscriptCutSchema>;
+export type ShortTranscriptWordTiming = z.infer<typeof ShortTranscriptWordTimingSchema>;
+export type ShortPauseCut = z.infer<typeof ShortPauseCutSchema>;
 export type ShortOverlayPreset = z.infer<typeof ShortOverlayPresetSchema>;
 export type ShortOverlayPresetLayer = z.infer<typeof ShortOverlayPresetLayerSchema>;
 export type ShortSummary = z.infer<typeof ShortSummarySchema>;
+export type ShortProjectVersion = z.infer<typeof ShortProjectVersionSchema>;
 export type ShortBrollClip = z.infer<typeof ShortBrollClipSchema>;
 export type ShortMusicTrack = z.infer<typeof ShortMusicTrackSchema>;

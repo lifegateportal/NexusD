@@ -4,7 +4,9 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { PointerEvent } from "react";
 import { z } from "zod";
 import ShortsPlayer from "@/app/components/ShortsPlayer";
+import ShortsTimeline, { type ShortsTimelineItem } from "@/app/components/ShortsTimeline";
 import { deleteShortSource, getShortSource, saveShortSource } from "@/lib/short-video-store";
+import { exportShortVideo } from "@/lib/short-video-export";
 import {
   ShortAgentSettingsSchema,
   ShortCatalogSchema,
@@ -12,6 +14,8 @@ import {
   ShortOverlayPresetResponseSchema,
   ShortOverlaySchema,
   ShortProjectSchema,
+  ShortProjectVersionIndexSchema,
+  ShortTranscriptWordTimingSchema,
   type ShortBrollClip,
   type ShortCropKeyframe,
   type ShortFrameSlot,
@@ -20,6 +24,7 @@ import {
   type ShortOverlayPreset,
   type ShortOverlayPresetLayer,
   type ShortProject,
+  type ShortProjectVersion,
   type ShortSummary,
   type ShortTranscriptCut,
 } from "@/lib/schemas/video-short";
@@ -52,6 +57,21 @@ const SuggestionResponseSchema = z.object({
     reason: z.string(),
   })),
 });
+const AlignmentResponseSchema = z.object({
+  wordTimings: z.array(ShortTranscriptWordTimingSchema).max(50000),
+  matchedWords: z.number().int().min(0),
+  totalWords: z.number().int().min(0),
+}).strict();
+const CleanupSuggestionsResponseSchema = z.object({
+  suggestions: z.array(z.object({
+    segmentIndex: z.number().int().min(0).max(4999),
+    wordIndex: z.number().int().min(0).max(49999),
+    wordText: z.string().trim().min(1).max(200),
+    reason: z.string().trim().min(1).max(200),
+  }).strict()).max(40),
+}).strict();
+type CleanupSuggestion = z.infer<typeof CleanupSuggestionsResponseSchema>["suggestions"][number];
+type PauseSuggestion = { id: string; startSeconds: number; endSeconds: number };
 const UploadResponseSchema = z.object({
   presignedUrl: z.string().url(),
   sourceUrl: z.string().url(),
@@ -282,9 +302,16 @@ export default function ShortsStudio() {
   const [project, setProject] = useState<ShortProject | null>(null);
   const [localVideoUrl, setLocalVideoUrl] = useState<string | null>(null);
   const [currentTime, setCurrentTime] = useState(0);
+  const [seekRequestSeconds, setSeekRequestSeconds] = useState<number | null>(null);
   const [suggestions, setSuggestions] = useState<Suggestion[]>([]);
   const [suggestionsVideoId, setSuggestionsVideoId] = useState("");
   const [suggestedBoundaries, setSuggestedBoundaries] = useState<SuggestedBoundaries | null>(null);
+  const [cleanupSuggestions, setCleanupSuggestions] = useState<CleanupSuggestion[]>([]);
+  const [savedVersions, setSavedVersions] = useState<ShortProjectVersion[]>([]);
+  const [selectedVersionId, setSelectedVersionId] = useState("");
+  const [undoProjects, setUndoProjects] = useState<ShortProject[]>([]);
+  const [redoProjects, setRedoProjects] = useState<ShortProject[]>([]);
+  const [hasPendingHistory, setHasPendingHistory] = useState(false);
   const [webBrollSuggestions, setWebBrollSuggestions] = useState<ShortBrollSuggestion[]>([]);
   const [webMusicSuggestions, setWebMusicSuggestions] = useState<ShortMusicSuggestion[]>([]);
   const [mediaSuggestionsProjectSlug, setMediaSuggestionsProjectSlug] = useState("");
@@ -296,12 +323,19 @@ export default function ShortsStudio() {
   const [sermonBoundaryDrafts, setSermonBoundaryDrafts] = useState<Record<string, { start: string; end: string }>>({});
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
+  const [exportProgress, setExportProgress] = useState<number | null>(null);
+  const [exportDownloadUrl, setExportDownloadUrl] = useState<string | null>(null);
+  const [exportFileName, setExportFileName] = useState("");
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [scrollEditorOnUpdate, setScrollEditorOnUpdate] = useState(false);
   const localFileRef = useRef<File | null>(null);
   const editorRef = useRef<HTMLElement>(null);
   const overlayTimelineDragRef = useRef<OverlayTimelineDrag | null>(null);
+  const lastHistoryProjectRef = useRef<ShortProject | null>(null);
+  const pendingHistoryProjectRef = useRef<ShortProject | null>(null);
+  const historyTimerRef = useRef<number | null>(null);
+  const skipHistoryRef = useRef(false);
 
   const selectedVideo = useMemo(
     () => videos.find((video) => video.videoId === (project?.sourceVideoId ?? selectedVideoId)),
@@ -330,6 +364,71 @@ export default function ShortsStudio() {
     () => getRemovedTranscriptWordIndexes(project?.transcriptCuts ?? []),
     [project?.transcriptCuts],
   );
+  const timelineItems = useMemo<ShortsTimelineItem[]>(() => {
+    if (!project) return [];
+    return [
+      ...project.captions.map((caption, index) => ({
+        id: `caption-${index}`,
+        kind: "caption" as const,
+        label: `Caption ${index + 1}`,
+        startSeconds: caption.startSeconds,
+        endSeconds: caption.endSeconds,
+        editable: false,
+      })),
+      ...project.transcriptCuts.map((cut) => ({
+        id: cut.id,
+        kind: "cut" as const,
+        label: `Cut: ${cut.wordText}`,
+        startSeconds: cut.startSeconds,
+        endSeconds: cut.endSeconds,
+        editable: true,
+      })),
+      ...project.pauseCuts.map((cut) => ({
+        id: cut.id,
+        kind: "pause" as const,
+        label: cut.reason,
+        startSeconds: cut.startSeconds,
+        endSeconds: cut.endSeconds,
+        editable: true,
+      })),
+      ...project.brollClips.map((clip, index) => ({
+        id: clip.id,
+        kind: "broll" as const,
+        label: `B-roll ${index + 1}`,
+        startSeconds: clip.startSeconds,
+        endSeconds: clip.endSeconds,
+        editable: true,
+      })),
+      ...project.musicTracks.map((track, index) => ({
+        id: track.id,
+        kind: "music" as const,
+        label: `Music ${index + 1}`,
+        startSeconds: track.startSeconds,
+        endSeconds: track.endSeconds,
+        editable: true,
+      })),
+      ...project.overlays.map((overlay, index) => ({
+        id: overlay.id,
+        kind: "overlay" as const,
+        label: `${overlay.type === "image" ? "Image" : overlay.type === "text" ? "Text" : "Frame"} ${index + 1}`,
+        startSeconds: overlay.startSeconds,
+        endSeconds: overlay.endSeconds,
+        editable: true,
+      })),
+    ];
+  }, [project]);
+  const pauseSuggestions = useMemo<PauseSuggestion[]>(() => {
+    if (!project) return [];
+    const captions = [...project.captions].sort((a, b) => a.startSeconds - b.startSeconds);
+    return captions.slice(1).flatMap((caption, index) => {
+      const previous = captions[index];
+      const startSeconds = Math.max(project.startSeconds, previous.endSeconds);
+      const endSeconds = Math.min(project.endSeconds, caption.startSeconds);
+      if (endSeconds - startSeconds < 1.25) return [];
+      if (project.pauseCuts.some((cut) => cut.startSeconds < endSeconds && cut.endSeconds > startSeconds)) return [];
+      return [{ id: `${previous.startSeconds}-${caption.startSeconds}`, startSeconds, endSeconds }];
+    });
+  }, [project]);
 
   useEffect(() => {
     let active = true;
@@ -368,15 +467,145 @@ export default function ShortsStudio() {
     setScrollEditorOnUpdate(false);
   }, [project, scrollEditorOnUpdate]);
 
+  useEffect(() => () => {
+    if (historyTimerRef.current !== null) window.clearTimeout(historyTimerRef.current);
+  }, []);
+
   useEffect(() => {
     setCaptionDrafts({});
+    setCleanupSuggestions([]);
+    setExportDownloadUrl(null);
   }, [project?.slug]);
+
+  useEffect(() => () => {
+    if (exportDownloadUrl) URL.revokeObjectURL(exportDownloadUrl);
+  }, [exportDownloadUrl]);
+
+  useEffect(() => {
+    const previous = lastHistoryProjectRef.current;
+    if (skipHistoryRef.current) {
+      skipHistoryRef.current = false;
+      if (historyTimerRef.current !== null) window.clearTimeout(historyTimerRef.current);
+      historyTimerRef.current = null;
+      pendingHistoryProjectRef.current = null;
+      setHasPendingHistory(false);
+      lastHistoryProjectRef.current = project;
+      if (!previous || previous.slug !== project?.slug) {
+        setUndoProjects([]);
+        setRedoProjects([]);
+      }
+      return;
+    }
+    if (!project || !previous || previous.slug !== project.slug) {
+      if (historyTimerRef.current !== null) window.clearTimeout(historyTimerRef.current);
+      historyTimerRef.current = null;
+      pendingHistoryProjectRef.current = null;
+      lastHistoryProjectRef.current = project;
+      setUndoProjects([]);
+      setRedoProjects([]);
+      setHasPendingHistory(false);
+      return;
+    }
+    if (previous === project) return;
+    lastHistoryProjectRef.current = project;
+    if (!pendingHistoryProjectRef.current) {
+      pendingHistoryProjectRef.current = previous;
+      setHasPendingHistory(true);
+    }
+    if (historyTimerRef.current !== null) window.clearTimeout(historyTimerRef.current);
+    historyTimerRef.current = window.setTimeout(() => {
+      const snapshot = pendingHistoryProjectRef.current;
+      pendingHistoryProjectRef.current = null;
+      historyTimerRef.current = null;
+      setHasPendingHistory(false);
+      if (!snapshot) return;
+      setUndoProjects((current) => [...current, snapshot].slice(-30));
+      setRedoProjects([]);
+    }, 350);
+  }, [project]);
 
   async function refreshShorts(): Promise<void> {
     const body = await requestJson("/api/ebook/shorts", { cache: "no-store" });
     const parsed = ShortCatalogSchema.safeParse(body);
     if (!parsed.success) throw new Error("Nexus Director returned an invalid Shorts catalog.");
     setShorts(parsed.data.shorts);
+  }
+
+  useEffect(() => {
+    let active = true;
+    const slug = project?.slug;
+    if (!slug || !shorts.some((short) => short.slug === slug)) {
+      setSavedVersions([]);
+      setSelectedVersionId("");
+      return () => { active = false; };
+    }
+    requestJson(`/api/ebook/shorts/${encodeURIComponent(slug)}/history`, { cache: "no-store" })
+      .then((body) => {
+        const parsed = ShortProjectVersionIndexSchema.safeParse(body);
+        if (!parsed.success) throw new Error("The saved short history has an invalid format.");
+        if (active) setSavedVersions(parsed.data.versions);
+      })
+      .catch((historyError: unknown) => {
+        if (active) setError(historyError instanceof Error ? historyError.message : "Could not load short history.");
+      });
+    return () => { active = false; };
+  }, [project?.slug, shorts]);
+
+  function undoProjectEdit() {
+    if (!project) return;
+    let snapshot: ShortProject | undefined;
+    const pending = pendingHistoryProjectRef.current;
+    if (pending) {
+      if (historyTimerRef.current !== null) window.clearTimeout(historyTimerRef.current);
+      historyTimerRef.current = null;
+      pendingHistoryProjectRef.current = null;
+      setHasPendingHistory(false);
+      snapshot = pending;
+    } else {
+      snapshot = undoProjects[undoProjects.length - 1];
+      if (!snapshot) return;
+      setUndoProjects((current) => current.slice(0, -1));
+    }
+    if (!snapshot) return;
+    setRedoProjects((current) => [...current, project].slice(-30));
+    skipHistoryRef.current = true;
+    lastHistoryProjectRef.current = snapshot;
+    setProject(snapshot);
+  }
+
+  function redoProjectEdit() {
+    if (!project || redoProjects.length === 0) return;
+    const snapshot = redoProjects[redoProjects.length - 1];
+    setRedoProjects((current) => current.slice(0, -1));
+    setUndoProjects((current) => [...current, project].slice(-30));
+    skipHistoryRef.current = true;
+    lastHistoryProjectRef.current = snapshot;
+    setProject(snapshot);
+  }
+
+  async function restoreSavedVersion() {
+    if (!project || !selectedVersionId) return;
+    setBusy(true);
+    setError("");
+    setNotice("");
+    try {
+      const body = await requestJson(
+        `/api/ebook/shorts/${encodeURIComponent(project.slug)}/history?version=${encodeURIComponent(selectedVersionId)}`,
+        { cache: "no-store" },
+      );
+      const parsed = z.object({ project: ShortProjectSchema }).strict().safeParse(body);
+      if (!parsed.success) throw new Error("The saved version has an invalid format.");
+      setProject({
+        ...parsed.data.project,
+        status: project.status,
+        updatedAt: new Date().toISOString(),
+      });
+      setNotice("Saved version restored into the editor. Save or publish to make this version current.");
+    } catch (restoreError) {
+      setError(restoreError instanceof Error ? restoreError.message : "Could not restore this saved version.");
+    } finally {
+      setBusy(false);
+    }
   }
 
   async function saveAgentInstructions() {
@@ -734,6 +963,8 @@ export default function ShortsStudio() {
         volume: 0.25,
         fadeInSeconds: Math.min(1, trackDuration / 2),
         fadeOutSeconds: Math.min(2, trackDuration / 2),
+        duckUnderSpeech: false,
+        duckVolume: 0.12,
         provider: "upload",
         commercialLicenseConfirmed: false,
       };
@@ -860,6 +1091,8 @@ export default function ShortsStudio() {
       volume: 0.25,
       fadeInSeconds: Math.min(1, trackDuration / 2),
       fadeOutSeconds: Math.min(2, trackDuration / 2),
+      duckUnderSpeech: false,
+      duckVolume: 0.12,
       provider: "jamendo",
       providerPageUrl: suggestion.providerPageUrl,
       creatorName: suggestion.artistName,
@@ -936,6 +1169,112 @@ export default function ShortsStudio() {
     });
   }
 
+  async function alignTranscriptToSource() {
+    if (!project || project.source.type !== "upload") return;
+    setBusy(true);
+    setError("");
+    setNotice("");
+    try {
+      let file = localFileRef.current;
+      if (!file) {
+        const blob = await getShortSource(project.slug);
+        if (blob) file = new File([blob], project.source.fileName, { type: blob.type });
+      }
+      if (!file) throw new Error("Re-select the authorized source video before aligning transcript timing.");
+      if (file.size > 100 * 1024 * 1024) {
+        throw new Error("Precise alignment supports source videos up to 100 MB. Larger files can keep using estimated timing.");
+      }
+      const form = new FormData();
+      form.append("file", file);
+      form.append("metadata", JSON.stringify({
+        captions: project.captions,
+        startSeconds: project.startSeconds,
+        endSeconds: project.endSeconds,
+      }));
+      const response = await fetch("/api/ebook/shorts/align", { method: "POST", body: form });
+      const body: unknown = await response.json();
+      if (!response.ok) {
+        const parsedError = ErrorSchema.safeParse(body);
+        throw new Error(parsedError.success ? parsedError.data.error : `Alignment failed (HTTP ${response.status}).`);
+      }
+      const aligned = AlignmentResponseSchema.safeParse(body);
+      if (!aligned.success) throw new Error("The transcript alignment service returned invalid timings.");
+      updateProject({ wordTimings: aligned.data.wordTimings });
+      setNotice(
+        `Aligned ${aligned.data.matchedWords} of ${aligned.data.totalWords} transcript words to the source audio. Unmatched words keep estimated timing; existing hand-tuned cuts were left unchanged.`,
+      );
+    } catch (alignmentError) {
+      setError(alignmentError instanceof Error ? alignmentError.message : "Could not align transcript timing.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function findCleanupSuggestions() {
+    if (!project || project.captions.length === 0) return;
+    setBusy(true);
+    setError("");
+    setNotice("");
+    setCleanupSuggestions([]);
+    try {
+      const body = await requestJson("/api/ebook/shorts/cleanup-suggestions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ segments: project.captions }),
+      });
+      const parsed = CleanupSuggestionsResponseSchema.safeParse(body);
+      if (!parsed.success) throw new Error("The cleanup agent returned invalid suggestions.");
+      const availableSuggestions = parsed.data.suggestions.filter((suggestion) =>
+        !project.transcriptCuts.some((cut) =>
+          cut.segmentIndex === suggestion.segmentIndex && cut.wordIndex === suggestion.wordIndex,
+        ),
+      );
+      setCleanupSuggestions(availableSuggestions);
+      setNotice(
+        `Found ${availableSuggestions.length} possible filler word${availableSuggestions.length === 1 ? "" : "s"} and ${pauseSuggestions.length} long transcript gap${pauseSuggestions.length === 1 ? "" : "s"}. Review each before applying.`,
+      );
+    } catch (suggestionError) {
+      setError(suggestionError instanceof Error ? suggestionError.message : "Could not suggest transcript cleanup.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function applyCleanupSuggestion(suggestion: CleanupSuggestion) {
+    const caption = project?.captions[suggestion.segmentIndex];
+    const word = caption && getTranscriptWords(caption.text)[suggestion.wordIndex];
+    if (!word || word.text !== suggestion.wordText) {
+      setError("This cleanup suggestion no longer matches the transcript. Request fresh suggestions.");
+      return;
+    }
+    toggleTranscriptWord(suggestion.segmentIndex, suggestion.wordIndex);
+    setCleanupSuggestions((current) => current.filter((entry) =>
+      entry.segmentIndex !== suggestion.segmentIndex || entry.wordIndex !== suggestion.wordIndex,
+    ));
+  }
+
+  function applyPauseSuggestion(suggestion: PauseSuggestion) {
+    if (!project || project.pauseCuts.length >= 500) {
+      setError("This short has reached the 500 pause-trim limit.");
+      return;
+    }
+    updateProject({
+      pauseCuts: [...project.pauseCuts, {
+        id: crypto.randomUUID(),
+        startSeconds: suggestion.startSeconds,
+        endSeconds: suggestion.endSeconds,
+        reason: "Long transcript gap",
+      }],
+    });
+    setNotice("Long transcript gap added as a reviewable video cut.");
+    setError("");
+  }
+
+  function removePauseCut(id: string) {
+    if (!project) return;
+    updateProject({ pauseCuts: project.pauseCuts.filter((cut) => cut.id !== id) });
+  }
+
   function toggleTranscriptWord(segmentIndex: number, wordIndex: number) {
     if (!project) return;
     const existingCut = project.transcriptCuts.find((cut) =>
@@ -956,8 +1295,11 @@ export default function ShortsStudio() {
     }
     const caption = project.captions[segmentIndex];
     const word = caption ? getTranscriptWords(caption.text)[wordIndex] : undefined;
+    const wordTiming = project.wordTimings.find((timing) =>
+      timing.segmentIndex === segmentIndex && timing.wordIndex === wordIndex,
+    );
     const range = caption
-      ? getTranscriptWordTimeRange(caption, wordIndex, project.startSeconds, project.endSeconds)
+      ? getTranscriptWordTimeRange(caption, wordIndex, project.startSeconds, project.endSeconds, wordTiming)
       : null;
     if (!caption || !word || !range) {
       setError("Could not determine a usable time range for that transcript word.");
@@ -971,9 +1313,9 @@ export default function ShortsStudio() {
       ...range,
     };
     updateProject({ transcriptCuts: [...project.transcriptCuts, cut] });
-    setNotice(
-      `Removed “${word.text}” from the transcript and preview. Its time is estimated from the caption range; fine-tune the cut below.`,
-    );
+    setNotice(wordTiming
+      ? `Removed “${word.text}” from the transcript and preview using its aligned source-audio time. Fine-tune the cut below if needed.`
+      : `Removed “${word.text}” from the transcript and preview. Its time is estimated from the caption range; fine-tune the cut below.`);
     setError("");
   }
 
@@ -1023,8 +1365,13 @@ export default function ShortsStudio() {
       );
       const newCuts = deletedVisibleWordIndexes.flatMap((visibleIndex) => {
         const word = visibleSourceWords[visibleIndex];
+        const wordTiming = word
+          ? project.wordTimings.find((timing) =>
+            timing.segmentIndex === segmentIndex && timing.wordIndex === word.index,
+          )
+          : undefined;
         const range = word
-          ? getTranscriptWordTimeRange(caption, word.index, project.startSeconds, project.endSeconds)
+          ? getTranscriptWordTimeRange(caption, word.index, project.startSeconds, project.endSeconds, wordTiming)
           : null;
         return word && range ? [{
           id: crypto.randomUUID(),
@@ -1040,7 +1387,7 @@ export default function ShortsStudio() {
       }
       updateProject({ transcriptCuts: [...project.transcriptCuts, ...newCuts] });
       setNotice(
-        `Deleted ${newCuts.length} transcript word${newCuts.length === 1 ? "" : "s"} and added matching video cuts. Fine-tune the estimated cut times below.`,
+        `Deleted ${newCuts.length} transcript word${newCuts.length === 1 ? "" : "s"} and added matching video cuts. Fine-tune the cut times below if needed.`,
       );
       setError("");
       return;
@@ -1051,6 +1398,7 @@ export default function ShortsStudio() {
         index === segmentIndex ? { ...caption, text } : caption,
       ),
       transcriptCuts: project.transcriptCuts.filter((cut) => cut.segmentIndex !== segmentIndex),
+      wordTimings: project.wordTimings.filter((timing) => timing.segmentIndex !== segmentIndex),
     });
     setNotice("Caption text updated. Existing word cuts in this line were cleared because the transcript alignment changed.");
     setError("");
@@ -1211,6 +1559,7 @@ export default function ShortsStudio() {
       return;
     }
     setProject(makeProject(video, startSeconds, endSeconds, `${video.title} Short`));
+    setSeekRequestSeconds(null);
     setLocalVideoUrl(null);
     localFileRef.current = null;
     setCurrentTime(startSeconds);
@@ -1229,7 +1578,9 @@ export default function ShortsStudio() {
       const body = await requestJson(`/api/ebook/shorts/${encodeURIComponent(slug)}`, { cache: "no-store" });
       const parsed = ShortProjectSchema.safeParse(body);
       if (!parsed.success) throw new Error("The saved short has an invalid format.");
+      skipHistoryRef.current = true;
       setProject(parsed.data);
+      setSeekRequestSeconds(null);
       if (parsed.data.sourceVideoId) setSelectedVideoId(parsed.data.sourceVideoId);
       setCurrentTime(parsed.data.startSeconds);
       setSuggestions([]);
@@ -1254,6 +1605,53 @@ export default function ShortsStudio() {
 
   function updateProject(patch: Partial<ShortProject>) {
     setProject((current) => current ? { ...current, ...patch } : current);
+  }
+
+  function seekTimeline(seconds: number) {
+    setSeekRequestSeconds(Math.max(0, seconds));
+  }
+
+  function updateTimelineRange(item: ShortsTimelineItem, startSeconds: number, endSeconds: number) {
+    if (!project) return;
+    if (item.kind === "cut") {
+      const cut = project.transcriptCuts.find((entry) => entry.id === item.id);
+      const caption = cut && project.captions[cut.segmentIndex];
+      if (!cut || !caption) return;
+      const minimum = Math.max(project.startSeconds, caption.startSeconds);
+      const maximum = Math.min(project.endSeconds, caption.endSeconds);
+      const minimumDuration = Math.min(0.1, (maximum - minimum) / 2);
+      const start = Math.max(minimum, Math.min(startSeconds, endSeconds - minimumDuration));
+      const end = Math.max(start + minimumDuration, Math.min(maximum, endSeconds));
+      updateProject({
+        transcriptCuts: project.transcriptCuts.map((entry) =>
+          entry.id === item.id ? { ...entry, startSeconds: start, endSeconds: end } : entry,
+        ),
+      });
+    } else if (item.kind === "pause") {
+      updateProject({
+        pauseCuts: project.pauseCuts.map((cut) =>
+          cut.id === item.id ? { ...cut, startSeconds, endSeconds } : cut,
+        ),
+      });
+    } else if (item.kind === "broll") {
+      updateProject({
+        brollClips: project.brollClips.map((clip) =>
+          clip.id === item.id
+            ? { ...clip, startSeconds, endSeconds: Math.min(endSeconds, startSeconds + clip.sourceDurationSeconds) }
+            : clip,
+        ),
+      });
+    } else if (item.kind === "music") {
+      updateProject({
+        musicTracks: project.musicTracks.map((track) =>
+          track.id === item.id
+            ? { ...track, startSeconds, endSeconds: Math.min(endSeconds, startSeconds + track.sourceDurationSeconds) }
+            : track,
+        ),
+      });
+    } else if (item.kind === "overlay") {
+      updateOverlay(item.id, { startSeconds, endSeconds });
+    }
   }
 
   function updateRange(field: "startSeconds" | "endSeconds", value: string) {
@@ -1316,11 +1714,32 @@ export default function ShortsStudio() {
       const cutEnd = Math.min(cut.endSeconds, endSeconds);
       return cutEnd > cutStart ? [{ ...cut, segmentIndex, startSeconds: cutStart, endSeconds: cutEnd }] : [];
     });
+    const wordTimings = project.wordTimings.flatMap((timing) => {
+      const sourceCaption = project.captions[timing.segmentIndex];
+      if (!sourceCaption) return [];
+      const segmentIndex = captions.findIndex((caption) =>
+        caption.startSeconds === sourceCaption.startSeconds
+        && caption.endSeconds === sourceCaption.endSeconds
+        && caption.text === sourceCaption.text,
+      );
+      return segmentIndex >= 0
+        && timing.startSeconds >= startSeconds
+        && timing.endSeconds <= endSeconds
+        ? [{ ...timing, segmentIndex }]
+        : [];
+    });
+    const pauseCuts = project.pauseCuts.flatMap((cut) => {
+      const start = Math.max(startSeconds, cut.startSeconds);
+      const end = Math.min(endSeconds, cut.endSeconds);
+      return end > start ? [{ ...cut, startSeconds: start, endSeconds: end }] : [];
+    });
     updateProject({
       [field]: nextValue,
       frameSlots,
       captions,
       transcriptCuts,
+      wordTimings,
+      pauseCuts,
       overlays,
       brollClips,
       musicTracks,
@@ -1444,6 +1863,7 @@ export default function ShortsStudio() {
     }
     try {
       setProject(makeProject(video, suggestion.startSeconds, suggestion.endSeconds, suggestion.title));
+      setSeekRequestSeconds(null);
       setSelectedVideoId(video.videoId);
       setLocalVideoUrl(null);
       localFileRef.current = null;
@@ -1469,6 +1889,7 @@ export default function ShortsStudio() {
       });
       const parsed = z.object({ project: ShortProjectSchema }).safeParse(body);
       if (!parsed.success) throw new Error("The saved short response is invalid.");
+      skipHistoryRef.current = true;
       setProject(parsed.data.project);
       await refreshShorts();
       setNotice("Short draft saved privately.");
@@ -1510,6 +1931,35 @@ export default function ShortsStudio() {
     };
   }
 
+  async function exportProject() {
+    if (!project) return;
+    setBusy(true);
+    setError("");
+    setNotice("");
+    setExportProgress(0);
+    setExportDownloadUrl(null);
+    try {
+      if (project.source.type !== "upload") {
+        throw new Error("YouTube-only projects are preview-only. Select an authorized source upload to export a video file.");
+      }
+      let file = localFileRef.current;
+      if (!file) {
+        const blob = await getShortSource(project.slug);
+        if (blob) file = new File([blob], project.source.fileName, { type: blob.type });
+      }
+      if (!file) throw new Error("Re-select the authorized source video before exporting this short.");
+      const result = await exportShortVideo(project, file, setExportProgress);
+      setExportDownloadUrl(URL.createObjectURL(result.blob));
+      setExportFileName(`${project.slug}.${result.extension}`);
+      setNotice("Export finished. Tap Download to save the video to your device.");
+    } catch (exportError) {
+      setError(exportError instanceof Error ? exportError.message : "Could not export this short.");
+    } finally {
+      setBusy(false);
+      setExportProgress(null);
+    }
+  }
+
   async function publishProject() {
     if (!project) return;
     setBusy(true);
@@ -1524,6 +1974,7 @@ export default function ShortsStudio() {
       });
       const parsed = z.object({ project: ShortProjectSchema }).safeParse(body);
       if (!parsed.success) throw new Error("The published short response is invalid.");
+      skipHistoryRef.current = true;
       setProject(parsed.data.project);
       await refreshShorts();
       setNotice("Short published. Its public page is ready to share.");
@@ -1548,6 +1999,7 @@ export default function ShortsStudio() {
       const body = await requestJson(`/api/ebook/shorts/${encodeURIComponent(project.slug)}`, { cache: "no-store" });
       const parsed = ShortProjectSchema.safeParse(body);
       if (!parsed.success) throw new Error("The unpublished short response is invalid.");
+      skipHistoryRef.current = true;
       setProject(parsed.data);
       await refreshShorts();
       setNotice("Short removed from the public Library; the private draft remains.");
@@ -1605,7 +2057,10 @@ export default function ShortsStudio() {
       const url = URL.createObjectURL(file);
       localFileRef.current = file;
       setLocalVideoUrl(url);
-      updateProject({ source: { type: "upload", fileName: file.name } });
+      updateProject({
+        source: { type: "upload", fileName: file.name },
+        wordTimings: [],
+      });
       setNotice("Source saved in this browser for editing. It will upload to R2 only when you publish.");
     } catch (sourceError) {
       setError(sourceError instanceof Error ? sourceError.message : "Could not keep this source in browser storage.");
@@ -1813,6 +2268,22 @@ export default function ShortsStudio() {
                 >
                   <span className="sm:hidden">Close</span><span className="hidden sm:inline">Close editor</span>
                 </button>
+                <button
+                  type="button"
+                  onClick={undoProjectEdit}
+                  disabled={!hasPendingHistory && undoProjects.length === 0}
+                  className="flex min-h-12 min-w-0 flex-1 items-center justify-center whitespace-nowrap rounded-xl border border-slate-700 px-2 text-xs font-semibold text-slate-200 disabled:opacity-40 sm:px-4 sm:text-sm lg:flex-none"
+                >
+                  Undo
+                </button>
+                <button
+                  type="button"
+                  onClick={redoProjectEdit}
+                  disabled={redoProjects.length === 0}
+                  className="flex min-h-12 min-w-0 flex-1 items-center justify-center whitespace-nowrap rounded-xl border border-slate-700 px-2 text-xs font-semibold text-slate-200 disabled:opacity-40 sm:px-4 sm:text-sm lg:flex-none"
+                >
+                  Redo
+                </button>
                 <button type="button" onClick={saveDraft} disabled={busy} className="flex min-h-12 min-w-0 flex-1 items-center justify-center whitespace-nowrap rounded-xl border border-slate-700 px-2 text-xs font-semibold text-white disabled:opacity-50 sm:px-4 sm:text-sm lg:flex-none">
                   <span className="sm:hidden">Save</span><span className="hidden sm:inline">Save draft</span>
                 </button>
@@ -1836,12 +2307,93 @@ export default function ShortsStudio() {
                   editable
                   compactPreview
                   onTimeChange={setCurrentTime}
+                  seekRequestSeconds={seekRequestSeconds}
                   onCropChange={setKeyframe}
                   onOverlayChange={updateOverlay}
                 />
               </div>
 
               <div className="min-h-0 flex-1 space-y-3 overflow-x-hidden overflow-y-auto overscroll-contain rounded-2xl border border-slate-800 bg-slate-900/60 p-3 [touch-action:pan-y] sm:p-4 lg:flex-none" style={{ WebkitOverflowScrolling: "touch" }}>
+                {savedVersions.length > 0 && (
+                  <section className="grid gap-2 rounded-xl border border-slate-700 bg-slate-950/70 p-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-end">
+                    <label className="block text-xs text-slate-300">
+                      Saved versions · {savedVersions.length} kept
+                      <select
+                        value={selectedVersionId}
+                        onChange={(event) => setSelectedVersionId(event.target.value)}
+                        className="mt-1 min-h-12 w-full rounded-lg border border-slate-700 bg-slate-900 px-3 text-base text-white"
+                      >
+                        <option value="">Choose a saved version…</option>
+                        {savedVersions.map((version) => (
+                          <option key={version.id} value={version.id}>
+                            {new Date(version.savedAt).toLocaleString()} · {version.title}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <button
+                      type="button"
+                      onClick={() => void restoreSavedVersion()}
+                      disabled={busy || !selectedVersionId}
+                      className="min-h-12 rounded-lg border border-cyan-800 px-3 text-xs font-semibold text-cyan-100 disabled:opacity-50"
+                    >
+                      Restore to editor
+                    </button>
+                  </section>
+                )}
+                <section className="space-y-2 rounded-xl border border-emerald-900/70 bg-emerald-950/20 p-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div className="min-w-0 flex-1">
+                      <h4 className="text-sm font-semibold text-emerald-100">Download video file</h4>
+                      <p className="mt-1 text-xs leading-relaxed text-slate-400">
+                        Renders locally in this tab from your authorized upload, including cuts, framing, captions, overlays, B-roll, and music. Keep the screen awake and this tab in the foreground.
+                      </p>
+                      {project.source.type === "youtube" && (
+                        <p className="mt-1 text-xs text-amber-200">YouTube-only projects can be previewed but cannot be rendered or downloaded.</p>
+                      )}
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => void exportProject()}
+                      disabled={busy || project.source.type !== "upload"}
+                      className="min-h-12 rounded-lg bg-emerald-400 px-4 text-sm font-bold text-slate-950 disabled:opacity-50"
+                    >
+                      {exportProgress === null ? "Render export" : `Rendering ${Math.round(exportProgress * 100)}%`}
+                    </button>
+                  </div>
+                  {exportProgress !== null && (
+                    <div
+                      role="progressbar"
+                      aria-label="Video export progress"
+                      aria-valuemin={0}
+                      aria-valuemax={100}
+                      aria-valuenow={Math.round(exportProgress * 100)}
+                      className="h-2 overflow-hidden rounded-full bg-slate-800"
+                    >
+                      <div className="h-full bg-emerald-400 transition-[width]" style={{ width: `${exportProgress * 100}%` }} />
+                    </div>
+                  )}
+                  {exportDownloadUrl && (
+                    <a
+                      href={exportDownloadUrl}
+                      download={exportFileName}
+                      className="flex min-h-12 w-full items-center justify-center rounded-lg border border-emerald-700 px-4 text-sm font-bold text-emerald-100 sm:w-auto"
+                    >
+                      Download {exportFileName}
+                    </a>
+                  )}
+                  <p className="text-[11px] leading-relaxed text-slate-500">
+                    Browser export records in real time at 720p. Short playback cuts are applied; mixed frame ratios are letterboxed to the first framing slot. Some remote media may be blocked by its host&apos;s CORS policy.
+                  </p>
+                </section>
+                <ShortsTimeline
+                  startSeconds={project.startSeconds}
+                  endSeconds={project.endSeconds}
+                  currentTime={currentTime}
+                  items={timelineItems}
+                  onSeek={seekTimeline}
+                  onRangeChange={updateTimelineRange}
+                />
                 <details open className="space-y-3 rounded-xl border border-slate-700 bg-slate-950/70 p-3">
                   <summary className="flex min-h-12 cursor-pointer items-center text-sm font-bold text-cyan-100">
                     Clip timing and framing
@@ -2417,6 +2969,33 @@ export default function ShortsStudio() {
                                 className="min-h-12 w-full accent-violet-400"
                               />
                             </label>
+                            <label className="flex min-h-12 items-center gap-3 rounded-lg border border-violet-900/70 bg-violet-950/20 px-3 text-xs text-violet-100">
+                              <input
+                                type="checkbox"
+                                checked={track.duckUnderSpeech}
+                                onChange={(event) => updateMusicTrack(track.id, {
+                                  duckUnderSpeech: event.target.checked,
+                                })}
+                                className="min-h-12 min-w-12 accent-violet-400"
+                              />
+                              Duck this music under transcript speech
+                            </label>
+                            {track.duckUnderSpeech && (
+                              <label className="block text-xs text-slate-400">
+                                Music under speech · {Math.round(track.duckVolume * 100)}% of track level
+                                <input
+                                  type="range"
+                                  min="0"
+                                  max="1"
+                                  step="0.05"
+                                  value={track.duckVolume}
+                                  onChange={(event) => updateMusicTrack(track.id, {
+                                    duckVolume: Number(event.target.value),
+                                  })}
+                                  className="min-h-12 w-full accent-violet-400"
+                                />
+                              </label>
+                            )}
                             <div className="grid gap-3 sm:grid-cols-2">
                               <label className="block text-xs text-slate-400">
                                 Fade in · {track.fadeInSeconds.toFixed(1)} sec
@@ -2659,9 +3238,93 @@ export default function ShortsStudio() {
                   <p className="text-xs leading-relaxed text-slate-500">
                     Long transcript timestamps are split into timed phrases. Captions are capped at two lines on screen. Background controls apply to Bold box and Pill styles.
                   </p>
-                  <p className="text-xs leading-relaxed text-amber-200">
-                    Delete a word in the transcript or tap it to cut its video moment. Tap a crossed-out word to restore it. Word timing is estimated within each timestamped line; fine-tune each cut below.
-                  </p>
+                  <div className="space-y-2 rounded-lg border border-amber-900/70 bg-amber-950/20 p-3">
+                    <p className="text-xs leading-relaxed text-amber-100">
+                      Delete a word in the transcript or tap it to cut its video moment. Source-aligned words use audio timestamps; unmatched words use an estimate. Fine-tune any cut below.
+                    </p>
+                    <button
+                      type="button"
+                      onClick={() => void alignTranscriptToSource()}
+                      disabled={busy || project.source.type !== "upload" || project.captions.length === 0}
+                      className="min-h-12 w-full rounded-lg border border-amber-700 px-3 text-sm font-semibold text-amber-100 disabled:opacity-50 sm:w-auto"
+                    >
+                      {busy ? "Aligning source…" : "Align words to uploaded source"}
+                    </button>
+                    {project.wordTimings.length > 0 && (
+                      <p className="text-xs text-emerald-200">
+                        {project.wordTimings.length} words have precise source timing. YouTube-only edits keep estimated timing.
+                      </p>
+                    )}
+                  </div>
+                  <section className="space-y-3 rounded-lg border border-cyan-900/70 bg-cyan-950/20 p-3">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div>
+                        <h4 className="text-sm font-semibold text-cyan-100">AI transcript cleanup</h4>
+                        <p className="mt-1 text-xs leading-relaxed text-slate-400">
+                          AI flags obvious filler words; long pauses are detected from timestamp gaps. Review and apply suggestions one at a time.
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => void findCleanupSuggestions()}
+                        disabled={busy || project.captions.length === 0}
+                        className="min-h-12 rounded-lg border border-cyan-700 px-3 text-xs font-semibold text-cyan-100 disabled:opacity-50"
+                      >
+                        {busy ? "Reviewing…" : "Find cleanup suggestions"}
+                      </button>
+                    </div>
+                    {(cleanupSuggestions.length > 0 || pauseSuggestions.length > 0) && (
+                      <ul className="space-y-2">
+                        {cleanupSuggestions.map((suggestion) => (
+                          <li key={`${suggestion.segmentIndex}-${suggestion.wordIndex}`} className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-slate-800 bg-slate-950/70 p-2">
+                            <p className="min-w-0 flex-1 text-xs text-slate-200">
+                              Remove “{suggestion.wordText}” · {suggestion.reason}
+                            </p>
+                            <button
+                              type="button"
+                              onClick={() => applyCleanupSuggestion(suggestion)}
+                              disabled={busy}
+                              className="min-h-12 rounded-lg border border-cyan-700 px-3 text-xs font-semibold text-cyan-100 disabled:opacity-50"
+                            >
+                              Apply word cut
+                            </button>
+                          </li>
+                        ))}
+                        {pauseSuggestions.map((suggestion) => (
+                          <li key={suggestion.id} className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-slate-800 bg-slate-950/70 p-2">
+                            <p className="min-w-0 flex-1 text-xs text-slate-200">
+                              Trim long pause · {formatTime(suggestion.startSeconds)}–{formatTime(suggestion.endSeconds)}
+                            </p>
+                            <button
+                              type="button"
+                              onClick={() => applyPauseSuggestion(suggestion)}
+                              disabled={busy}
+                              className="min-h-12 rounded-lg border border-orange-700 px-3 text-xs font-semibold text-orange-100 disabled:opacity-50"
+                            >
+                              Apply pause trim
+                            </button>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                    {project.pauseCuts.length > 0 && (
+                      <div className="space-y-2">
+                        <p className="text-xs font-semibold text-orange-100">Applied pause trims</p>
+                        {project.pauseCuts.map((cut) => (
+                          <div key={cut.id} className="flex min-h-12 items-center justify-between gap-2 rounded-lg border border-orange-900/70 px-2">
+                            <span className="text-xs text-slate-300">{formatTime(cut.startSeconds)}–{formatTime(cut.endSeconds)}</span>
+                            <button
+                              type="button"
+                              onClick={() => removePauseCut(cut.id)}
+                              className="min-h-12 min-w-12 rounded-lg border border-rose-900 px-2 text-xs font-semibold text-rose-100"
+                            >
+                              Restore
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </section>
                   {project.captions.length === 0 ? (
                     <p className="text-xs text-slate-400">No transcript captions fall inside this clip range.</p>
                   ) : (
