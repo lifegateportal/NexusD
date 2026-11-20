@@ -168,7 +168,6 @@ export default function ShortsPlayer({
   const [youtubeReady, setYoutubeReady] = useState(false);
   const [playerError, setPlayerError] = useState("");
   const [isFullscreen, setIsFullscreen] = useState(false);
-  const [fullscreenControlsVisible, setFullscreenControlsVisible] = useState(true);
   const [shareStatus, setShareStatus] = useState("");
   const [shareError, setShareError] = useState("");
 
@@ -252,23 +251,12 @@ export default function ShortsPlayer({
   useEffect(() => {
     const updateFullscreen = () => {
       setIsFullscreen(document.fullscreenElement === fullscreenContainerRef.current);
-      setFullscreenControlsVisible(true);
     };
     document.addEventListener("fullscreenchange", updateFullscreen);
     return () => {
       document.removeEventListener("fullscreenchange", updateFullscreen);
     };
   }, []);
-
-  useEffect(() => {
-    if (!isFullscreen || !playing) {
-      setFullscreenControlsVisible(true);
-      return;
-    }
-    if (!fullscreenControlsVisible) return;
-    const timer = window.setTimeout(() => setFullscreenControlsVisible(false), 2500);
-    return () => window.clearTimeout(timer);
-  }, [fullscreenControlsVisible, isFullscreen, playing]);
 
   useEffect(() => {
     setYoutubeReady(false);
@@ -524,7 +512,6 @@ export default function ShortsPlayer({
 
   async function toggleFullscreen() {
     if (isFullscreen) {
-      setFullscreenControlsVisible(true);
       if (!document.fullscreenElement) {
         setIsFullscreen(false);
         return;
@@ -537,7 +524,7 @@ export default function ShortsPlayer({
       return;
     }
 
-    setFullscreenControlsVisible(true);
+    if (!playing && sourceReady) togglePlayback();
     const container = fullscreenContainerRef.current;
     if (container?.requestFullscreen) {
       try {
@@ -977,7 +964,7 @@ export default function ShortsPlayer({
               </div>
             );
           })}
-          {!editable && !hasStarted && (project.thumbnailUrl || captureMode) && (
+          {!isFullscreen && !editable && !hasStarted && (project.thumbnailUrl || captureMode) && (
             <button
               type="button"
               onPointerDown={(event) => event.stopPropagation()}
@@ -995,47 +982,35 @@ export default function ShortsPlayer({
               </span>
             </button>
           )}
-          {isFullscreen && !fullscreenControlsVisible && (
+          {!captureMode && isFullscreen && (
             <button
               type="button"
-              onPointerDown={(event) => event.stopPropagation()}
-              onClick={() => setFullscreenControlsVisible(true)}
-              aria-label="Show clean-view controls"
-              className="absolute inset-0 z-[180] bg-transparent"
+              onClick={(event) => {
+                event.stopPropagation();
+                void toggleFullscreen();
+              }}
+              aria-label="Tap to exit fullscreen"
+              className="absolute inset-0 z-[180] cursor-default bg-transparent"
             />
           )}
-          {!captureMode && (!isFullscreen || fullscreenControlsVisible) && (
+          {!captureMode && !isFullscreen && (
             <button
               type="button"
+              disabled={!sourceReady}
               onPointerDown={(event) => event.stopPropagation()}
               onClick={(event) => {
                 event.stopPropagation();
                 void toggleFullscreen();
               }}
-              aria-label={isFullscreen ? "Exit clean view" : editable ? "Open clean recording view" : "Expand video to fullscreen"}
-              title={isFullscreen ? "Exit clean view" : editable ? "Clean recording view" : "Expand video"}
-              className="absolute right-2 top-2 z-[200] flex min-h-12 min-w-12 items-center justify-center rounded-lg bg-black/75 px-3 text-xs font-semibold text-white"
+              aria-label={editable ? "Open clean recording view" : "Expand video to fullscreen"}
+              title={editable ? "Clean recording view" : "Expand video"}
+              className="absolute right-2 top-2 z-[200] flex min-h-12 min-w-12 items-center justify-center rounded-lg bg-black/75 px-3 text-xs font-semibold text-white disabled:opacity-40"
             >
-              {isFullscreen ? "Exit" : editable ? "Clean view" : "Expand"}
+              {editable ? "Clean view" : "Expand"}
             </button>
           )}
-          {!captureMode && isFullscreen && fullscreenControlsVisible && (
-            <div className="absolute inset-x-0 bottom-0 z-[190] flex items-center gap-3 bg-gradient-to-t from-black/85 to-transparent px-3 pb-[max(env(safe-area-inset-bottom),_1rem)] pt-8">
-              <button
-                type="button"
-                onPointerDown={(event) => event.stopPropagation()}
-                onClick={togglePlayback}
-                disabled={!sourceReady}
-                aria-label={playing ? "Pause preview" : "Play preview"}
-                className="min-h-12 min-w-12 rounded-lg bg-black/75 px-3 text-sm font-bold text-white disabled:opacity-40"
-              >
-                {playing ? "Pause" : "Play"}
-              </button>
-              <p className="text-xs text-white/80">Controls hide while playing. Tap the video to show them.</p>
-            </div>
-          )}
-          {showErrors && playerError && (!isFullscreen || fullscreenControlsVisible) && (
-            <p role="alert" className="absolute inset-x-2 top-14 z-[210] rounded-lg bg-rose-950/90 p-2 text-xs text-rose-100">
+          {showErrors && playerError && (
+            <p role="alert" className="pointer-events-none absolute inset-x-2 top-14 z-[210] rounded-lg bg-rose-950/90 p-2 text-xs text-rose-100">
               {playerError}
             </p>
           )}
