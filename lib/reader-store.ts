@@ -90,7 +90,7 @@ export function removeBookmark(slug: string, id: string): void {
 // ── Settings ──────────────────────────────────────────────────────────────────
 
 const DEFAULT_SETTINGS: ReaderSettings = {
-  theme:      "night",
+  theme:      "paper",
   fontSize:   3,
   lineHeight: 2,
   fontFamily: "serif",

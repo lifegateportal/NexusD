@@ -17,6 +17,8 @@ type EbookProjectsPanelProps = {
   projects: EbookProject[];
   folders: ProjectFolder[];
   suggestedName: string;
+  activeProjectId?: string | null;
+  activeManifest?: EbookManifest | null;
   canSave: boolean;
   onSave: (name: string, folderId?: string) => void;
   onLoad: (id: string) => void;
@@ -81,6 +83,8 @@ export function EbookProjectsPanel({
   projects,
   folders,
   suggestedName,
+  activeProjectId,
+  activeManifest,
   canSave,
   onSave,
   onLoad,
@@ -178,7 +182,10 @@ export function EbookProjectsPanel({
     
     try {
       const sourceProject = onLoadFull ? await onLoadFull(p.id) ?? p : p;
-      const manifest = buildManifest(sourceProject);
+      const manifest = sourceProject.id === activeProjectId
+        && activeManifest?.jobId === sourceProject.jobState.jobId
+        ? activeManifest
+        : buildManifest(sourceProject);
 
       const exportRes = await fetch("/api/ebook/export", {
         method: "POST",

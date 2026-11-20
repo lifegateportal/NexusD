@@ -945,12 +945,33 @@ function EbookPageClient() {
       setStatusMsg({ type: "error", text: "Book must be complete before publishing." });
       return null;
     }
-    const manifest: EbookManifest = buildManifestFromCompletedJob(job, {
-      fallbackTitle: fullProject.bookTitle || fullProject.name,
-      coverImageUrl: fullProject.coverImageUrl ?? null,
-      authorImageUrl: fullProject.authorImageUrl ?? null,
-      narrationUrls: readNarrationUrls(job.jobId),
-    });
+    const currentManifest = project.id === currentProjectId && ebookManifest?.jobId === job.jobId
+      ? ebookManifest
+      : null;
+    const manifest: EbookManifest = currentManifest
+      ? {
+          ...currentManifest,
+          coverImageUrl: fullProject.coverImageUrl ?? currentManifest.coverImageUrl ?? null,
+          authorImageUrl: fullProject.authorImageUrl ?? currentManifest.authorImageUrl ?? null,
+          narrationUrls: readNarrationUrls(job.jobId),
+        }
+      : buildManifestFromCompletedJob(job, {
+          fallbackTitle: fullProject.bookTitle || fullProject.name,
+          coverImageUrl: fullProject.coverImageUrl ?? null,
+          authorImageUrl: fullProject.authorImageUrl ?? null,
+          narrationUrls: readNarrationUrls(job.jobId),
+        });
+    const publishJob = currentManifest && job.architecture
+      ? {
+          ...job,
+          architecture: {
+            ...job.architecture,
+            bookTitle: currentManifest.bookTitle,
+            subtitle: currentManifest.subtitle,
+            authorName: currentManifest.authorName,
+          },
+        }
+      : job;
     try {
       const res = await fetch("/api/ebook/publish", {
         method:  "POST",
@@ -963,7 +984,12 @@ function EbookPageClient() {
         return null;
       }
       const { slug } = await res.json() as { slug: string };
-      const updated: EbookProject = { ...fullProject, publishedSlug: slug };
+      const updated: EbookProject = {
+        ...fullProject,
+        bookTitle: manifest.bookTitle,
+        jobState: publishJob,
+        publishedSlug: slug,
+      };
       await saveEbookProject(updated);
       setProjects(await listEbookProjectSummaries());
       setStatusMsg({ type: "success", text: `"${fullProject.name}" published to /library/${slug}` });
@@ -972,7 +998,7 @@ function EbookPageClient() {
       setStatusMsg({ type: "error", text: err instanceof Error ? err.message : "Publish failed." });
       return null;
     }
-  }, [loadFullEbookProject, readNarrationUrls]);
+  }, [currentProjectId, ebookManifest, loadFullEbookProject, readNarrationUrls]);
 
   const handleUpdateImages = useCallback(async (
     id: string,
@@ -1327,6 +1353,8 @@ function EbookPageClient() {
                   projects={projects}
                   folders={folders}
                   suggestedName={suggestedName}
+                  activeProjectId={currentProjectId}
+                  activeManifest={ebookManifest}
                   canSave
                   onSave={handleSaveProject}
                   onLoad={handleLoadProject}
