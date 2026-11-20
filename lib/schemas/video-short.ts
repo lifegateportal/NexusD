@@ -2,7 +2,6 @@ import { z } from "zod";
 import { LibraryVideoSegmentSchema } from "@/lib/schemas/library-video";
 
 export const ShortAspectRatioSchema = z.enum(["9:16", "4:5", "1:1", "16:9"]);
-export const MAX_SHORT_DURATION_SECONDS = 3 * 60;
 export const ShortCaptionFontFamilySchema = z.enum(["sans", "condensed", "rounded", "serif"]);
 export const ShortCaptionStyleSchema = z.enum(["bold-box", "clean", "outline", "pill", "minimal"]);
 export const ShortOverlayPresetStyleSchema = z.enum([
@@ -202,10 +201,7 @@ export const ShortClipSuggestionSchema = z.object({
 }).strict().refine((suggestion) => suggestion.endSeconds > suggestion.startSeconds, {
   message: "Suggestion end must be after its start.",
   path: ["endSeconds"],
-}).refine(
-  (suggestion) => suggestion.endSeconds - suggestion.startSeconds <= MAX_SHORT_DURATION_SECONDS,
-  { message: "Suggested clips cannot exceed 3 minutes.", path: ["endSeconds"] },
-);
+});
 
 export const GeneratedShortSuggestionsSchema = z.object({
   videoId: z.string().regex(/^[A-Za-z0-9_-]{11}$/),
@@ -285,9 +281,6 @@ export const ShortProjectSchema = z.object({
   updatedAt: z.string().datetime(),
 }).strict().refine((project) => project.endSeconds > project.startSeconds, {
   message: "Short end must be after its start.",
-  path: ["endSeconds"],
-}).refine((project) => project.endSeconds - project.startSeconds <= MAX_SHORT_DURATION_SECONDS, {
-  message: "Shorts can be up to 3 minutes long.",
   path: ["endSeconds"],
 }).refine(
   (project) => project.frameSlots.every(

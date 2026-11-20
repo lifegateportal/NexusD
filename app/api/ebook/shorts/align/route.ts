@@ -13,9 +13,8 @@ const RequestSchema = z.object({
   startSeconds: z.number().finite().min(0),
   endSeconds: z.number().finite().positive(),
 }).strict().refine(
-  (request) => request.endSeconds > request.startSeconds
-    && request.endSeconds - request.startSeconds <= 180,
-  { message: "The short range must be between 0 and 180 seconds.", path: ["endSeconds"] },
+  (request) => request.endSeconds > request.startSeconds,
+  { message: "The short end must be after its start.", path: ["endSeconds"] },
 );
 
 const DeepgramResponseSchema = z.object({

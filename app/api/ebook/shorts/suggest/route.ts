@@ -3,10 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { deepSeekModel } from "@/lib/ai-providers";
 import { LibraryVideoSegmentSchema } from "@/lib/schemas/library-video";
-import {
-  GeneratedShortSuggestionsSchema,
-  MAX_SHORT_DURATION_SECONDS,
-} from "@/lib/schemas/video-short";
+import { GeneratedShortSuggestionsSchema } from "@/lib/schemas/video-short";
 import {
   hasShortStorageConfiguration,
   readGeneratedShortSuggestions,
@@ -59,7 +56,7 @@ type ClipCandidate = {
 };
 
 function buildClipCandidates(segments: z.infer<typeof LibraryVideoSegmentSchema>[]): ClipCandidate[] {
-  const targets = [20, 35, 50, 70, 90, 120, 150, MAX_SHORT_DURATION_SECONDS];
+  const targets = [20, 35, 50, 70, 90, 120, 150, 180, 300, 600];
   const candidates = new Map<string, Omit<ClipCandidate, "id">>();
   const anchorCount = Math.min(120, segments.length);
   const anchors = Array.from({ length: anchorCount }, (_, index) =>
@@ -80,7 +77,7 @@ function buildClipCandidates(segments: z.infer<typeof LibraryVideoSegmentSchema>
 
       const endSeconds = segments[endIndex].endSeconds;
       const duration = endSeconds - startSeconds;
-      if (duration < 15 || duration > MAX_SHORT_DURATION_SECONDS) continue;
+      if (duration < 15) continue;
 
       const key = `${startIndex}:${endIndex}`;
       if (!candidates.has(key)) {

@@ -302,9 +302,15 @@ async function processJob(job) {
     const playButton = page.getByRole("button", { name: `Play ${job.title}`, exact: true });
     await playButton.waitFor({ state: "visible", timeout: 30_000 });
 
+    await playButton.click();
+    await page.waitForFunction(
+      (startSeconds) => typeof window.__NEXUS_CAPTURE_TIME__ === "number"
+        && window.__NEXUS_CAPTURE_TIME__ > startSeconds + 0.15,
+      job.startSeconds,
+      { timeout: 30_000 },
+    );
     recorder = startRecording(outputPath, job.endSeconds - job.startSeconds, job.width, job.height);
     await recorder.started;
-    await playButton.click();
     job = await updateJob(job, { status: "capturing", progress: 0.08 });
 
     const duration = job.endSeconds - job.startSeconds;

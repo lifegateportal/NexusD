@@ -4,7 +4,7 @@ import { z } from "zod";
 import { deepSeekModel } from "@/lib/ai-providers";
 import { env } from "@/lib/env";
 import { LibraryVideoSegmentSchema } from "@/lib/schemas/library-video";
-import { MAX_SHORT_DURATION_SECONDS, ShortAspectRatioSchema } from "@/lib/schemas/video-short";
+import { ShortAspectRatioSchema } from "@/lib/schemas/video-short";
 import {
   ShortBrollSuggestionsResponseSchema,
   ShortMusicSuggestionsResponseSchema,
@@ -28,9 +28,6 @@ const RequestSchema = z.object({
 }).strict().superRefine((input, context) => {
   if (input.endSeconds <= input.startSeconds) {
     context.addIssue({ code: z.ZodIssueCode.custom, path: ["endSeconds"], message: "Short end must be after its start." });
-  }
-  if (input.endSeconds - input.startSeconds > MAX_SHORT_DURATION_SECONDS) {
-    context.addIssue({ code: z.ZodIssueCode.custom, path: ["endSeconds"], message: "Shorts can be up to 3 minutes long." });
   }
   if (input.captions.some((caption) =>
     caption.endSeconds <= caption.startSeconds

@@ -11,7 +11,6 @@ import {
   ShortAgentSettingsSchema,
   ShortCatalogSchema,
   GeneratedShortSuggestionsSchema,
-  MAX_SHORT_DURATION_SECONDS,
   ShortOverlayPresetResponseSchema,
   ShortOverlaySchema,
   ShortProjectSchema,
@@ -305,6 +304,7 @@ export default function ShortsStudio() {
   const [shorts, setShorts] = useState<ShortSummary[]>([]);
   const [selectedVideoId, setSelectedVideoId] = useState("");
   const [project, setProject] = useState<ShortProject | null>(null);
+  const [rangeDraft, setRangeDraft] = useState<{ startSeconds: number; endSeconds: number } | null>(null);
   const [localVideoUrl, setLocalVideoUrl] = useState<string | null>(null);
   const [currentTime, setCurrentTime] = useState(0);
   const [seekRequestSeconds, setSeekRequestSeconds] = useState<number | null>(null);
@@ -336,12 +336,18 @@ export default function ShortsStudio() {
   const [notice, setNotice] = useState("");
   const [scrollEditorOnUpdate, setScrollEditorOnUpdate] = useState(false);
   const localFileRef = useRef<File | null>(null);
+  const rangeDraftRef = useRef<{ startSeconds: number; endSeconds: number } | null>(null);
   const editorRef = useRef<HTMLElement>(null);
   const overlayTimelineDragRef = useRef<OverlayTimelineDrag | null>(null);
   const lastHistoryProjectRef = useRef<ShortProject | null>(null);
   const pendingHistoryProjectRef = useRef<ShortProject | null>(null);
   const historyTimerRef = useRef<number | null>(null);
   const skipHistoryRef = useRef(false);
+
+  useEffect(() => {
+    rangeDraftRef.current = null;
+    setRangeDraft(null);
+  }, [project?.slug, project?.startSeconds, project?.endSeconds]);
 
   const selectedVideo = useMemo(
     () => videos.find((video) => video.videoId === (project?.sourceVideoId ?? selectedVideoId)),
@@ -358,6 +364,10 @@ export default function ShortsStudio() {
       end: selectedVideo.segments[selectedVideo.segments.length - 1].endSeconds,
     }
     : null;
+  const displayedRange = {
+    startSeconds: rangeDraft?.startSeconds ?? project?.startSeconds ?? 0,
+    endSeconds: rangeDraft?.endSeconds ?? project?.endSeconds ?? 0,
+  };
   const sermonBoundaryDraft = selectedVideo
     ? sermonBoundaryDrafts[selectedVideo.videoId] ?? {
       start: selectedVideo.sermonStartSeconds?.toString() ?? "",
@@ -1741,6 +1751,35 @@ export default function ShortsStudio() {
     setProject((current) => current ? { ...current, ...patch } : current);
   }
 
+  function beginRangeDraft() {
+    if (!project) return;
+    const initial = { startSeconds: project.startSeconds, endSeconds: project.endSeconds };
+    rangeDraftRef.current = initial;
+    setRangeDraft(initial);
+  }
+
+  function changeRangeDraft(field: "startSeconds" | "endSeconds", value: string) {
+    if (!project) return;
+    const nextValue = Number(value);
+    if (!Number.isFinite(nextValue)) return;
+    const current = rangeDraftRef.current ?? {
+      startSeconds: project.startSeconds,
+      endSeconds: project.endSeconds,
+    };
+    const next = { ...current, [field]: nextValue };
+    rangeDraftRef.current = next;
+    setRangeDraft(next);
+  }
+
+  function commitRangeDraft(field: "startSeconds" | "endSeconds", value: string) {
+    if (!rangeDraftRef.current) return;
+    const nextValue = Number(value);
+    const currentValue = project?.[field];
+    rangeDraftRef.current = null;
+    setRangeDraft(null);
+    if (Number.isFinite(nextValue) && nextValue !== currentValue) updateRange(field, String(nextValue));
+  }
+
   function seekTimeline(seconds: number) {
     setSeekRequestSeconds(Math.max(0, seconds));
   }
@@ -1795,10 +1834,6 @@ export default function ShortsStudio() {
     const endSeconds = field === "endSeconds" ? nextValue : project.endSeconds;
     if (!Number.isFinite(nextValue) || startSeconds < 0 || endSeconds <= startSeconds) {
       setError("Enter a valid start and end time; the end must be after the start.");
-      return;
-    }
-    if (endSeconds - startSeconds > MAX_SHORT_DURATION_SECONDS) {
-      setError("Shorts can be up to 3 minutes long.");
       return;
     }
     if (sourceVideoBounds && (
@@ -1881,7 +1916,7 @@ export default function ShortsStudio() {
     setWebBrollSuggestions([]);
     setWebMusicSuggestions([]);
     setMediaSuggestionsProjectSlug("");
-    setCurrentTime(startSeconds);
+    setCurrentTime((time) => Math.max(startSeconds, Math.min(endSeconds, time)));
     if (
       overlays.length !== project.overlays.length
       || brollClips.length !== project.brollClips.length
@@ -1898,6 +1933,7 @@ export default function ShortsStudio() {
     y: number,
     zoom: number,
     fit?: ShortCropKeyframe["fit"],
+    persistFit = false,
   ) {
     if (!project) return;
     const index = project.frameSlots.findIndex((slot) =>
@@ -1912,12 +1948,24 @@ export default function ShortsStudio() {
       fit: fit ?? getFramePosition(project.frameSlots[index], timeSeconds).fit,
     };
     const frameSlots = project.frameSlots.map((slot, slotIndex) => {
-      if (slotIndex !== index) return slot;
+      if (slotIndex < index) return slot;
+      if (slotIndex > index) {
+        return persistFit
+          ? {
+            ...slot,
+            fit: frame.fit ?? slot.fit,
+            keyframes: slot.keyframes.map((keyframe) => ({
+              ...keyframe,
+              fit: frame.fit ?? slot.fit,
+            })),
+          }
+          : slot;
+      }
       const keyframes = [
         ...slot.keyframes.filter((item) => item.timeSeconds < timeSeconds - 0.1),
         frame,
       ].sort((a, b) => a.timeSeconds - b.timeSeconds);
-      return { ...slot, keyframes };
+      return { ...slot, ...(persistFit ? { fit: frame.fit ?? slot.fit } : {}), keyframes };
     });
     updateProject({ frameSlots });
   }
@@ -2599,7 +2647,7 @@ export default function ShortsStudio() {
                     <input
                       type="number"
                       min={sourceVideoBounds?.start ?? 0}
-                      max={Math.max(sourceVideoBounds?.start ?? 0, project.endSeconds - 0.1)}
+                      max={Math.max(sourceVideoBounds?.start ?? 0, displayedRange.endSeconds - 0.1)}
                       step="0.1"
                       value={project.startSeconds}
                       onChange={(event) => updateRange("startSeconds", event.target.value)}
@@ -2611,10 +2659,7 @@ export default function ShortsStudio() {
                     <input
                       type="number"
                       min={project.startSeconds + 0.1}
-                      max={Math.min(
-                        sourceVideoBounds?.end ?? project.startSeconds + MAX_SHORT_DURATION_SECONDS,
-                        project.startSeconds + MAX_SHORT_DURATION_SECONDS,
-                      )}
+                      max={sourceVideoBounds?.end}
                       step="0.1"
                       value={project.endSeconds}
                       onChange={(event) => updateRange("endSeconds", event.target.value)}
@@ -2624,38 +2669,51 @@ export default function ShortsStudio() {
                 </div>
                 <div className="grid gap-3 sm:grid-cols-2">
                   <label className="block text-xs text-slate-400">
-                    Trim start · {formatTime(project.startSeconds)}
+                    Trim start · {formatTime(displayedRange.startSeconds)}
                     <input
                       type="range"
-                      min={sourceVideoBounds?.start ?? 0}
-                      max={Math.max(sourceVideoBounds?.start ?? 0, project.endSeconds - 0.1)}
+                      min={Math.max(sourceVideoBounds?.start ?? 0, project.startSeconds - 30)}
+                      max={Math.max(
+                        Math.max(sourceVideoBounds?.start ?? 0, project.startSeconds - 30),
+                        Math.min(project.endSeconds - 0.1, project.startSeconds + 30),
+                      )}
                       step="0.1"
-                      value={project.startSeconds}
-                      onChange={(event) => updateRange("startSeconds", event.target.value)}
+                      value={displayedRange.startSeconds}
+                      onPointerDown={beginRangeDraft}
+                      onPointerUp={(event) => commitRangeDraft("startSeconds", event.currentTarget.value)}
+                      onPointerCancel={(event) => commitRangeDraft("startSeconds", event.currentTarget.value)}
+                      onKeyUp={(event) => commitRangeDraft("startSeconds", event.currentTarget.value)}
+                      onBlur={(event) => commitRangeDraft("startSeconds", event.currentTarget.value)}
+                      onChange={(event) => changeRangeDraft("startSeconds", event.target.value)}
                       className="min-h-12 w-full accent-cyan-400"
                     />
                   </label>
                   <label className="block text-xs text-slate-400">
-                    Trim end · {formatTime(project.endSeconds)}
+                    Trim end · {formatTime(displayedRange.endSeconds)}
                     <input
                       type="range"
-                      min={project.startSeconds + 0.1}
+                      min={Math.max(project.startSeconds + 0.1, project.endSeconds - 30)}
                       max={Math.max(
-                        project.startSeconds + 0.1,
-                        Math.min(
-                          sourceVideoBounds?.end ?? project.startSeconds + MAX_SHORT_DURATION_SECONDS,
-                          project.startSeconds + MAX_SHORT_DURATION_SECONDS,
-                        ),
+                        Math.max(project.startSeconds + 0.1, project.endSeconds - 30),
+                        Math.min(sourceVideoBounds?.end ?? project.endSeconds + 30, project.endSeconds + 30),
                       )}
                       step="0.1"
-                      value={project.endSeconds}
-                      onChange={(event) => updateRange("endSeconds", event.target.value)}
+                      value={displayedRange.endSeconds}
+                      onPointerDown={beginRangeDraft}
+                      onPointerUp={(event) => commitRangeDraft("endSeconds", event.currentTarget.value)}
+                      onPointerCancel={(event) => commitRangeDraft("endSeconds", event.currentTarget.value)}
+                      onKeyUp={(event) => commitRangeDraft("endSeconds", event.currentTarget.value)}
+                      onBlur={(event) => commitRangeDraft("endSeconds", event.currentTarget.value)}
+                      onChange={(event) => changeRangeDraft("endSeconds", event.target.value)}
                       className="min-h-12 w-full accent-cyan-400"
                     />
                   </label>
                 </div>
                 <p className="text-xs text-slate-400">
-                  Clip length: {formatTime(project.endSeconds - project.startSeconds)} · maximum 3:00
+                  Clip length: {formatTime(project.endSeconds - project.startSeconds)} · limited by available source video
+                </p>
+                <p className="text-xs text-slate-500">
+                  Sliders fine-tune within 30 seconds; use the seconds fields for larger jumps.
                 </p>
                 <div className="flex flex-wrap items-center gap-2">
                   <button
@@ -3262,7 +3320,7 @@ export default function ShortsStudio() {
                         <button
                           type="button"
                           aria-pressed={framePosition.fit === "contain"}
-                          onClick={() => setKeyframe(currentTime, framePosition.x, framePosition.y, framePosition.zoom, "contain")}
+                          onClick={() => setKeyframe(currentTime, framePosition.x, framePosition.y, framePosition.zoom, "contain", true)}
                           className={`min-h-12 rounded-lg border px-3 text-sm font-semibold ${
                             framePosition.fit === "contain"
                               ? "border-cyan-400 bg-cyan-950 text-cyan-100"
@@ -3274,7 +3332,7 @@ export default function ShortsStudio() {
                         <button
                           type="button"
                           aria-pressed={framePosition.fit === "cover"}
-                          onClick={() => setKeyframe(currentTime, framePosition.x, framePosition.y, framePosition.zoom, "cover")}
+                          onClick={() => setKeyframe(currentTime, framePosition.x, framePosition.y, framePosition.zoom, "cover", true)}
                           className={`min-h-12 rounded-lg border px-3 text-sm font-semibold ${
                             framePosition.fit === "cover"
                               ? "border-cyan-400 bg-cyan-950 text-cyan-100"

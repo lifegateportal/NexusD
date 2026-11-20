@@ -80,6 +80,8 @@ latest capture for a project when it is reopened. Job records and output
 objects are retained until manually removed; monitor bucket usage. The capture takes
 approximately the selected playback duration, and output quality depends on
 the YouTube playback resolution and the Shorts preview crop.
+The worker starts recording after the embedded video is confirmed to be playing,
+so its initial paused-player screen is not included in the MP4.
 
 For the first run, use an owned public or unlisted video that plays in the
 embedded player. A private, age-restricted, or non-embeddable video may require

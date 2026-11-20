@@ -170,6 +170,16 @@ export default function ShortsPlayer({
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [shareStatus, setShareStatus] = useState("");
   const [shareError, setShareError] = useState("");
+  const currentTimeRef = useRef(currentTime);
+  currentTimeRef.current = currentTime;
+  const projectBoundsRef = useRef({
+    startSeconds: project.startSeconds,
+    endSeconds: project.endSeconds,
+  });
+  projectBoundsRef.current = {
+    startSeconds: project.startSeconds,
+    endSeconds: project.endSeconds,
+  };
 
   timeCallbackRef.current = onTimeChange;
   transcriptCutsRef.current = project.source.type === "upload"
@@ -240,9 +250,16 @@ export default function ShortsPlayer({
   ).sort((first, second) => first.zIndex - second.zIndex);
 
   useEffect(() => {
-    setCurrentTime(project.startSeconds);
     setDuration(project.endSeconds);
-  }, [project.startSeconds, project.endSeconds]);
+    const current = currentTimeRef.current;
+    const bounded = Math.max(project.startSeconds, Math.min(project.endSeconds, current));
+    currentTimeRef.current = bounded;
+    setCurrentTime(bounded);
+    if (bounded !== current) {
+      if (project.source.type === "youtube") youtubePlayerRef.current?.seekTo(bounded, true);
+      else if (videoRef.current?.readyState) videoRef.current.currentTime = bounded;
+    }
+  }, [project.endSeconds, project.source.type, project.startSeconds]);
 
   useEffect(() => {
     setHasStarted(false);
@@ -264,9 +281,6 @@ export default function ShortsPlayer({
     let timer: number | undefined;
     let disposed = false;
     const videoId = project.source.videoId;
-    const startSeconds = project.startSeconds;
-    const endSeconds = project.endSeconds;
-
     loadYouTubeApi().then(() => {
       if (disposed || !youtubeHostRef.current || !window.YT) return;
       youtubePlayerRef.current = new window.YT.Player(youtubeHostRef.current, {
@@ -281,7 +295,7 @@ export default function ShortsPlayer({
           fs: 1,
           playsinline: 1,
           rel: 0,
-          start: Math.floor(startSeconds),
+          start: Math.floor(projectBoundsRef.current.startSeconds),
           origin: window.location.origin,
         },
         events: {
@@ -298,7 +312,7 @@ export default function ShortsPlayer({
               iframe.style.maxWidth = "none";
               iframe.style.border = "0";
               player.unloadModule("captions");
-              player.seekTo(startSeconds, true);
+              player.seekTo(projectBoundsRef.current.startSeconds, true);
             }
             timer = window.setInterval(() => {
               const player = youtubePlayerRef.current;
@@ -318,7 +332,7 @@ export default function ShortsPlayer({
               lastSkippedCutIdRef.current = null;
               setCurrentTime(time);
               timeCallbackRef.current?.(time);
-              if (time >= endSeconds) {
+              if (time >= projectBoundsRef.current.endSeconds) {
                 player.pauseVideo();
                 setPlaying(false);
               } else {
@@ -343,7 +357,7 @@ export default function ShortsPlayer({
       youtubePlayerRef.current?.destroy();
       youtubePlayerRef.current = null;
     };
-  }, [project.source, project.startSeconds, project.endSeconds]);
+  }, [project.source]);
 
   useEffect(() => {
     const video = videoRef.current;
@@ -365,7 +379,7 @@ export default function ShortsPlayer({
     };
     const onLoadedMetadata = () => {
       setDuration(Number.isFinite(video.duration) ? video.duration : project.endSeconds);
-      video.currentTime = project.startSeconds;
+      video.currentTime = projectBoundsRef.current.startSeconds;
     };
     video.addEventListener("timeupdate", onTimeUpdate);
     video.addEventListener("loadedmetadata", onLoadedMetadata);
@@ -465,11 +479,6 @@ export default function ShortsPlayer({
     const shouldPlay = playing && !requireUserPlayAfterMusicAddRef.current;
     syncAuxiliaryMedia(currentTime, shouldPlay);
   }, [currentTime, playing, syncAuxiliaryMedia]);
-
-  useEffect(() => {
-    const video = videoRef.current;
-    if (video && video.readyState >= 1) video.currentTime = project.startSeconds;
-  }, [project.startSeconds, videoUrl]);
 
   function seek(seconds: number) {
     const requested = Math.max(project.startSeconds, Math.min(project.endSeconds, seconds));
