@@ -341,6 +341,9 @@ function findSimilarPairs(segments: SegmentMeta[], vectors: SparseVec[]): Simila
     for (let j = i + 1; j < segments.length; j++) {
       const a = segments[i];
       const b = segments[j];
+      const isStructuredBackMatter = (location: string) =>
+        /^Back Matter\s*[–-]\s*(?:Glossary:|Study Questions:|Scripture Index|Recommended Resource)/i.test(location);
+      if (isStructuredBackMatter(a.location) || isStructuredBackMatter(b.location)) continue;
 
       // Only flag cross-chapter pairs (intra-chapter similarity is expected)
       const isCrossChapter = a.chapterNumber !== b.chapterNumber;
@@ -681,6 +684,7 @@ SECTION TYPE RULES — apply these when deciding recommendations:
 - BODY SECTIONS (location format "Ch X § Y: Heading") are the PRIMARY HOME for a concept. When a concept is fully developed in a body section, that section is PROTECTED — do not recommend cutting it.
 - FRAME SECTIONS ("Front Matter – Preface", "Front Matter – Introduction", "Front Matter – Conclusion", "Ch N intro", "Ch N conclusion") must only briefly mention/summarise a concept — they are NOT the place for full development. If a frame section duplicates content that already has a full treatment in a body section, the frame section is the CUT TARGET, not the body section.
 - When a concept appears in both a body section and a frame section, the recommendation must always be: trim the frame section to a one-sentence mention and keep the body section intact.
+- Do not flag generated glossary entries, study questions, Scripture indexes, or resource listings as duplicate prose. Those structured back-matter entries are expected to refer to concepts taught in the chapters.
 
 Your tasks:
 1. CONCEPT DUPLICATES: Identify every case where the same concept, example, story, illustration, argument, or extended passage appears in multiple sections. Be specific — name the example/concept. Flag both MINOR duplicates (a point briefly touched twice) and MAJOR ones (a full example or teaching repeated). Apply the SECTION TYPE RULES above to all recommendations.

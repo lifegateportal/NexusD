@@ -104,6 +104,7 @@ type PendingEdit = {
   selectedPaths: string[];
   manifestVersion: string;
   libraryPatch?: LibraryPatch;
+  auditFindingKey?: string;
 };
 type AuditConceptDuplicate = {
   type: string;
@@ -113,19 +114,53 @@ type AuditConceptDuplicate = {
   locations: Array<{ location: string; excerpt: string }>;
   recommendation: string;
 };
-type AuditSimilarPair = { locationA: string; locationB: string; similarity: number };
-type AuditRepetition = { phrase: string; count: number; reason: string | null; alternatives: string[] };
+type AuditSimilarPair = {
+  locationA: string;
+  locationB: string;
+  similarity: number;
+  excerptA: string;
+  excerptB: string;
+};
+type AuditRepetition = {
+  phrase: string;
+  count: number;
+  reason: string | null;
+  alternatives: string[];
+  occurrences: Array<{ location: string; context: string }>;
+};
 type AuditOverusedWord = { word: string; count: number; frequency: string; alternatives: string[] };
+type AuditStyleViolation = { location: string; ruleType: string; match: string; context: string; suggestion: string };
+type AuditScriptureIssue = { location: string; issueType: string; reference: string; excerpt: string; recommendation: string };
+type AuditContradiction = {
+  type: string;
+  description: string;
+  locationA: string;
+  excerptA: string;
+  locationB: string;
+  excerptB: string;
+  severity: "minor" | "major";
+  recommendation: string;
+};
 type BookAuditReport = {
   conceptDuplicates: AuditConceptDuplicate[];
   similarPairs: AuditSimilarPair[];
   repetitions: AuditRepetition[];
   overusedWords: AuditOverusedWord[];
+  styleViolations: AuditStyleViolation[];
+  scriptureIssues: AuditScriptureIssue[];
+  contradictions: AuditContradiction[];
+  readabilityMetrics: { overallFleschGrade: number; overallAvgSentenceLength: number };
+  auditWarnings: string[];
   totalConceptDuplicates: number;
   totalSimilarPairs: number;
   totalRepetitionPhrases: number;
   totalOverusedWords: number;
+  totalStyleViolations: number;
+  totalScriptureIssues: number;
+  totalContradictions: number;
 };
+
+type AuditRepairStatus = "preparing" | "proposed" | "applied" | "no-change" | "error";
 
 function cleanAssistantLine(line: string): string {
   return sanitizeNexusLMText(line);
@@ -190,7 +225,13 @@ function isAuditIntent(text: string): boolean {
 }
 
 function formatAuditReport(report: BookAuditReport): string {
-  const total = report.totalConceptDuplicates + report.totalSimilarPairs + report.totalRepetitionPhrases;
+  const total = report.totalConceptDuplicates
+    + report.totalSimilarPairs
+    + report.totalRepetitionPhrases
+    + report.totalOverusedWords
+    + report.totalStyleViolations
+    + report.totalScriptureIssues
+    + report.totalContradictions;
   const lines = [
     "BOOK AUDIT COMPLETE",
     total === 0 ? "No significant issues found." : `${total} significant issue${total === 1 ? "" : "s"} flagged.`,
@@ -220,6 +261,18 @@ function formatAuditReport(report: BookAuditReport): string {
       lines.push(`• "${word.word}" ×${word.count} (${word.frequency})`);
     }
   }
+  if (report.styleViolations.length > 0) lines.push("", `STYLE ISSUES (${report.styleViolations.length})`);
+  if (report.scriptureIssues.length > 0) lines.push("", `SCRIPTURE ISSUES (${report.scriptureIssues.length})`);
+  if (report.contradictions.length > 0) {
+    lines.push("", `CONTRADICTIONS (${report.contradictions.length})`);
+    for (const issue of report.contradictions.slice(0, 8)) {
+      lines.push(`• ${issue.description}`);
+      lines.push(`  ${issue.locationA} ↔ ${issue.locationB}`);
+      lines.push(`  Recommended fix: ${issue.recommendation}`);
+    }
+  }
+  lines.push("", `Readability: grade ${report.readabilityMetrics.overallFleschGrade}, average sentence ${report.readabilityMetrics.overallAvgSentenceLength} words.`);
+  for (const warning of report.auditWarnings) lines.push("", `PARTIAL AUDIT: ${warning}`);
   return lines.join("\n");
 }
 
@@ -766,6 +819,7 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
   const [pendingDraftSourceLabel, setPendingDraftSourceLabel] = useState<string | null>(null);
   const [pendingMatter, setPendingMatter] = useState<PendingMatter | null>(null);
   const [auditReport, setAuditReport] = useState<BookAuditReport | null>(null);
+  const [auditRepairStatuses, setAuditRepairStatuses] = useState<Record<string, AuditRepairStatus>>({});
   const [undoSnapshot, setUndoSnapshot] = useState<EbookUndoSnapshot | null>(null);
   const [showProposalDiff, setShowProposalDiff] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
@@ -1724,6 +1778,7 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
 
     try {
       if (requestUsesBook && manifest && isAuditIntent(instruction)) {
+        setAuditRepairStatuses({});
         const res = await fetch("/api/ebook/audit", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -2202,9 +2257,108 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
     });
   }
 
+  async function proposeAuditRepair(findingKey: string, findingTitle: string): Promise<void> {
+    if (!manifest || !auditReport || loading) return;
+    setAuditRepairStatuses((current) => ({ ...current, [findingKey]: "preparing" }));
+    setLoading(true);
+    try {
+      const base = EbookManifestSchema.safeParse(manifest);
+      if (!base.success) throw new Error("The current manuscript is invalid and cannot be repaired.");
+      const baseManifest = base.data;
+      const res = await fetch("/api/ebook/apply-audit", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          manifest: baseManifest,
+          report: auditReport,
+          appliedKeys: [findingKey],
+          voiceDNA: manifest.voiceDNA ?? null,
+        }),
+      });
+      const json = await res.json() as {
+        proposedChapters?: unknown;
+        proposedFrontMatter?: unknown;
+        proposedBackMatter?: unknown;
+        manifestVersion?: string;
+        error?: string;
+      };
+      if (!res.ok || json.error) throw new Error(json.error ?? `Request failed (${res.status})`);
+      if (!json.manifestVersion) throw new Error("The audit proposal did not include a manuscript version.");
+      const parsed = EbookManifestSchema.safeParse({
+        ...baseManifest,
+        chapters: json.proposedChapters,
+        frontMatter: json.proposedFrontMatter,
+        backMatter: json.proposedBackMatter,
+      });
+      if (!parsed.success) throw new Error("The audit returned an invalid proposed manuscript.");
+      const changes = buildManifestChangeEntries(baseManifest, parsed.data);
+      if (changes.length === 0) {
+        setAuditRepairStatuses((current) => ({ ...current, [findingKey]: "no-change" }));
+        setMessages((current) => [...current, {
+          role: "assistant",
+          content: `No safe manuscript change could be prepared for “${findingTitle}”. The finding remains unchanged.`,
+        }]);
+        return;
+      }
+
+      const instruction = `Apply exact audit repair for finding ${findingKey}: ${findingTitle}`;
+      setPendingEdit({
+        instruction,
+        summary: `Review proposed audit repair: ${findingTitle}`,
+        confidence: "high",
+        scope: "focused",
+        transcriptLabel: selectedTranscript?.label,
+        baseManifest,
+        proposedManifest: parsed.data,
+        changes,
+        selectedPaths: changes.map((change) => change.path),
+        manifestVersion: json.manifestVersion,
+        auditFindingKey: findingKey,
+      });
+      setAuditRepairStatuses((current) => ({ ...current, [findingKey]: "proposed" }));
+      setMessages((current) => [...current, {
+        role: "assistant",
+        content: `An exact repair proposal for “${findingTitle}” is ready. Review the before/after changes below and apply the selected change to update the manuscript.`,
+      }]);
+    } catch (error) {
+      setAuditRepairStatuses((current) => ({ ...current, [findingKey]: "error" }));
+      setMessages((current) => [...current, { role: "assistant", content: readableError(error) }]);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  function auditRepairButton(findingKey: string, findingTitle: string, toneClass: string): ReactNode {
+    const status = auditRepairStatuses[findingKey];
+    const label = status === "applied"
+      ? "✓ Applied to manuscript"
+      : status === "preparing"
+        ? "Preparing exact fix…"
+        : status === "proposed"
+          ? "Proposal ready — review below"
+          : status === "no-change"
+            ? "No safe change — retry"
+            : status === "error"
+              ? "Retry exact fix"
+              : "Propose exact fix";
+    return (
+      <button
+        type="button"
+        onClick={() => void proposeAuditRepair(findingKey, findingTitle)}
+        disabled={loading || status === "preparing" || status === "proposed" || status === "applied"}
+        aria-live="polite"
+        className={`mt-2 min-h-12 rounded-xl px-3 text-xs font-bold disabled:cursor-not-allowed disabled:opacity-70 ${toneClass}`}
+      >
+        {label}
+      </button>
+    );
+  }
+
   async function applyPendingEdit(paths = pendingEdit?.selectedPaths ?? []): Promise<void> {
     if (!manifest || !pendingEdit || paths.length === 0 || loading) return;
+    const auditFindingKey = pendingEdit.auditFindingKey;
     if (buildManifestChangeEntries(pendingEdit.baseManifest, manifest).length > 0) {
+      if (auditFindingKey) setAuditRepairStatuses((current) => ({ ...current, [auditFindingKey]: "error" }));
       setPendingEdit(null);
       setMessages((current) => [...current, {
         role: "assistant",
@@ -2219,7 +2373,7 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          manifest: manifest,
+          manifest: pendingEdit.baseManifest,
           proposedManifest: pendingEdit.proposedManifest,
           selectedPaths: paths,
           manifestVersion: pendingEdit.manifestVersion,
@@ -2229,6 +2383,7 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
       });
       const json = await res.json() as { manifest?: unknown; summary?: string; error?: string; manifestVersion?: string };
       if (res.status === 409) {
+        if (auditFindingKey) setAuditRepairStatuses((current) => ({ ...current, [auditFindingKey]: "error" }));
         setMessages((current) => [...current, {
           role: "assistant",
           content: "Edit conflict: the manuscript changed while this proposal was open. Generate a new NexusLM preview.",
@@ -2250,6 +2405,7 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
       const nextManifest = json.manifestVersion ? { ...parsed.data, __version: json.manifestVersion } : parsed.data;
       onManifestChange(nextManifest as EbookManifest, json.summary ?? "Manuscript updated.");
       setUndoSnapshot(snapshot);
+      if (auditFindingKey) setAuditRepairStatuses((current) => ({ ...current, [auditFindingKey]: "applied" }));
 
       if (pendingEdit.libraryPatch) {
         const catalogRes = await fetch("/api/ebook/publish", {
@@ -2272,6 +2428,18 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
     } finally {
       setLoading(false);
     }
+  }
+
+  function rejectPendingEdit(): void {
+    const findingKey = pendingEdit?.auditFindingKey;
+    if (findingKey) {
+      setAuditRepairStatuses((current) => {
+        const next = { ...current };
+        delete next[findingKey];
+        return next;
+      });
+    }
+    setPendingEdit(null);
   }
 
   function undoLastEdit(): void {
@@ -2582,7 +2750,7 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
                   <button type="button" onClick={() => void applyPendingEdit(pendingEdit.changes.map((change) => change.path))} disabled={loading} className="min-h-12 rounded-xl border border-emerald-500/40 bg-emerald-500/10 px-4 text-sm font-bold text-emerald-200 disabled:opacity-40">
                     Apply all
                   </button>
-                  <button type="button" onClick={() => setPendingEdit(null)} disabled={loading} className="min-h-12 rounded-xl border border-slate-700 px-4 text-sm font-semibold text-slate-300 disabled:opacity-40">
+                  <button type="button" onClick={rejectPendingEdit} disabled={loading} className="min-h-12 rounded-xl border border-slate-700 px-4 text-sm font-semibold text-slate-300 disabled:opacity-40">
                     Reject
                   </button>
                 </div>
@@ -2600,39 +2768,71 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
                   </button>
                 </div>
                 <div className="mt-3 space-y-2">
-                  {auditReport.conceptDuplicates.slice(0, 6).map((duplicate, index) => (
+                  {auditReport.conceptDuplicates.map((duplicate, index) => (
                     <div key={`duplicate-${index}`} className="rounded-xl border border-rose-500/25 bg-rose-950/20 p-3">
                       <p className="text-xs font-semibold text-rose-200">{duplicate.title}</p>
                       <p className="mt-1 text-[11px] text-slate-400">{duplicate.locations.map((location) => location.location).join(" · ")}</p>
-                      <button type="button" onClick={() => void send(`Fix the concept duplicate "${duplicate.title}" in ${duplicate.locations.map((location) => location.location).join(" and ")} while preserving each section's unique teaching.`, "edit")} className="mt-2 min-h-12 rounded-xl bg-rose-400/15 px-3 text-xs font-bold text-rose-200">
-                        Fix automatically
-                      </button>
+                      <p className="mt-2 text-xs text-slate-300">{duplicate.description}</p>
+                      <p className="mt-2 text-xs text-emerald-200">Recommendation: {duplicate.recommendation}</p>
+                      {auditRepairButton(`c-${index}`, duplicate.title, "bg-rose-400/15 text-rose-200")}
                     </div>
                   ))}
-                  {auditReport.similarPairs.slice(0, 4).map((pair, index) => (
+                  {auditReport.similarPairs.map((pair, index) => (
                     <div key={`similar-${index}`} className="rounded-xl border border-amber-500/25 bg-amber-950/20 p-3">
                       <p className="text-xs font-semibold text-amber-200">Similar sections · {Math.round(pair.similarity * 100)}%</p>
                       <p className="mt-1 text-[11px] text-slate-400">{pair.locationA} · {pair.locationB}</p>
-                      <button type="button" onClick={() => void send(`Rewrite ${pair.locationA} and ${pair.locationB} to remove structural similarity while preserving their distinct teaching.`, "edit")} className="mt-2 min-h-12 rounded-xl bg-amber-400/15 px-3 text-xs font-bold text-amber-200">
-                        Fix automatically
-                      </button>
+                      <p className="mt-2 text-xs text-slate-400">{pair.excerptA}</p>
+                      <p className="mt-1 text-xs text-slate-400">{pair.excerptB}</p>
+                      {auditRepairButton(`p-${index}`, `${pair.locationA} and ${pair.locationB}`, "bg-amber-400/15 text-amber-200")}
                     </div>
                   ))}
-                  {auditReport.repetitions.slice(0, 5).map((repetition, index) => (
+                  {auditReport.repetitions.map((repetition, index) => (
                     <div key={`repetition-${index}`} className="rounded-xl border border-cyan-500/25 bg-cyan-950/20 p-3">
                       <p className="text-xs font-semibold text-cyan-200">Repeated phrase · “{repetition.phrase}” ×{repetition.count}</p>
-                      <button type="button" onClick={() => void send(`Reduce unnecessary repetition of the phrase "${repetition.phrase}" throughout the book. Keep intentional uses and vary the rest.`, "edit")} className="mt-2 min-h-12 rounded-xl bg-cyan-400/15 px-3 text-xs font-bold text-cyan-200">
-                        Fix automatically
-                      </button>
+                      {repetition.reason && <p className="mt-1 text-xs text-slate-400">{repetition.reason}</p>}
+                      {repetition.occurrences.map((occurrence, occurrenceIndex) => (
+                        <p key={occurrenceIndex} className="mt-1 text-xs text-slate-400">{occurrence.location}: {occurrence.context}</p>
+                      ))}
+                      {auditRepairButton(`r-${index}`, `Repeated phrase “${repetition.phrase}”`, "bg-cyan-400/15 text-cyan-200")}
                     </div>
                   ))}
-                  {auditReport.overusedWords.slice(0, 5).map((word, index) => (
+                  {auditReport.overusedWords.map((word, index) => (
                     <div key={`word-${index}`} className="rounded-xl border border-violet-500/25 bg-violet-950/20 p-3">
                       <p className="text-xs font-semibold text-violet-200">Overused word · “{word.word}” ×{word.count}</p>
-                      <button type="button" onClick={() => void send(`Review the overused word "${word.word}" across the book and replace unnecessary repetitions with context-appropriate alternatives.`, "edit")} className="mt-2 min-h-12 rounded-xl bg-violet-400/15 px-3 text-xs font-bold text-violet-200">
-                        Fix automatically
-                      </button>
+                      <p className="mt-1 text-xs text-slate-400">Try: {word.alternatives.join(" · ") || "context-specific alternatives"}</p>
+                      {auditRepairButton(`w-${index}`, `Overused word “${word.word}”`, "bg-violet-400/15 text-violet-200")}
                     </div>
+                  ))}
+                  {auditReport.contradictions.map((issue, index) => (
+                    <div key={`contradiction-${index}`} className="rounded-xl border border-red-500/25 bg-red-950/20 p-3">
+                      <p className="text-xs font-semibold text-red-200">{issue.type} contradiction · {issue.severity}</p>
+                      <p className="mt-1 text-xs text-slate-300">{issue.description}</p>
+                      <p className="mt-1 text-xs text-slate-400">{issue.locationA} · {issue.excerptA}</p>
+                      <p className="mt-1 text-xs text-slate-400">{issue.locationB} · {issue.excerptB}</p>
+                      <p className="mt-1 text-xs text-emerald-200">Recommendation: {issue.recommendation}</p>
+                      {auditRepairButton(`d-${index}`, issue.description, "bg-red-400/15 text-red-200")}
+                    </div>
+                  ))}
+                  {auditReport.scriptureIssues.map((issue, index) => (
+                    <div key={`scripture-${index}`} className="rounded-xl border border-blue-500/25 bg-blue-950/20 p-3">
+                      <p className="text-xs font-semibold text-blue-200">{issue.issueType} · {issue.reference}</p>
+                      <p className="mt-1 text-xs text-slate-400">{issue.location}: {issue.excerpt}</p>
+                      <p className="mt-1 text-xs text-emerald-200">Recommendation: {issue.recommendation}</p>
+                      {auditRepairButton(`q-${index}`, `${issue.issueType}: ${issue.reference}`, "bg-blue-400/15 text-blue-200")}
+                    </div>
+                  ))}
+                  {auditReport.styleViolations.map((issue, index) => (
+                    <div key={`style-${index}`} className="rounded-xl border border-slate-600/50 bg-slate-900/70 p-3">
+                      <p className="text-xs font-semibold text-slate-200">{issue.ruleType}: “{issue.match}”</p>
+                      <p className="mt-1 text-xs text-slate-400">{issue.location}: {issue.context}</p>
+                      <p className="mt-1 text-xs text-emerald-200">Suggestion: {issue.suggestion}</p>
+                      {auditRepairButton(`s-${index}`, `Style issue “${issue.match}”`, "border border-slate-600 text-slate-200")}
+                    </div>
+                  ))}
+                  {auditReport.auditWarnings.map((warning, index) => (
+                    <p key={`audit-warning-${index}`} role="alert" className="rounded-xl border border-amber-500/30 bg-amber-950/30 p-3 text-xs text-amber-100">
+                      Partial audit: {warning}
+                    </p>
                   ))}
                 </div>
               </div>

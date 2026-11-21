@@ -2,7 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { generateText } from "ai";
 import { deepSeekModel, deepSeekReasonerModel } from "@/lib/ai-providers";
 import { z } from "zod";
-import { BackMatterSchema, FrontBackMatterSchema, VoiceDNASchema } from "@/lib/schemas/ebook";
+import { BackMatterSchema, ChapterDraftSchema, FrontBackMatterSchema, VoiceDNASchema } from "@/lib/schemas/ebook";
+import { computeEbookManifestVersion } from "@/lib/ebook-manifest-version";
 import { SOURCE_LOCK_RULES, PROSE_MASTERY_RULES, PREMIUM_BOOK_STYLE_RULES, READER_NORMALIZATION_RULES } from "@/lib/editorial-style-bible";
 import { SCRIPTURE_FORMATTING_RULES } from "@/lib/scripture-formatter";
 
@@ -27,28 +28,12 @@ export const maxDuration = 120;
 
 // ─── Input Schemas ────────────────────────────────────────────────────────────
 
-const SectionSchema = z.object({
-  sectionNumber: z.number(),
-  heading: z.string(),
-  body: z.string().default(""),
-  wordCount: z.number().default(0),
-  status: z.string().default("complete"),
-});
-
-const ChapterSchema = z.object({
-  number: z.number(),
-  title: z.string().default(""),
-  intro: z.string().default(""),
-  sections: z.array(SectionSchema),
-  keyTakeaways: z.array(z.string()).default([]),
-  reflectionQuestions: z.array(z.string()).default([]),
-  totalWordCount: z.number().default(0),
-  status: z.string().default("complete"),
-});
-
 const RequestSchema = z.object({
   manifest: z.object({
-    chapters: z.array(ChapterSchema),
+    bookTitle: z.string().optional(),
+    subtitle: z.string().optional(),
+    authorName: z.string().optional(),
+    chapters: z.array(ChapterDraftSchema),
     frontMatter: FrontBackMatterSchema,
     backMatter: BackMatterSchema.nullable().optional(),
   }),
@@ -112,7 +97,7 @@ const RequestSchema = z.object({
   voiceDNA: VoiceDNASchema.optional().nullable(),
 });
 
-type ChapterInput = z.infer<typeof ChapterSchema>;
+type ChapterInput = z.infer<typeof ChapterDraftSchema>;
 type ReportInput = z.infer<typeof RequestSchema>["report"];
 
 // ─── Location parser ──────────────────────────────────────────────────────────
@@ -403,6 +388,7 @@ function resolveMatterTarget(
         body: frontMatter[field] ?? "",
       };
     }
+
     const additionalSectionIndex = (frontMatter.additionalSections ?? [])
       .findIndex((section) => section.title.trim().toLowerCase() === label.toLowerCase());
     if (additionalSectionIndex >= 0) {
@@ -429,6 +415,19 @@ function resolveMatterTarget(
     heading: section.title,
     body: section.content,
   };
+}
+
+function frontMatterRoleInstruction(location: string): string {
+  if (/Front Matter\s*[–-]\s*Preface/i.test(location)) {
+    return "This target is the Preface: keep it to author motivation and relevant personal context; remove book promises, roadmaps, and teaching that belong elsewhere.";
+  }
+  if (/Front Matter\s*[–-]\s*Introduction/i.test(location)) {
+    return "This target is the Introduction: focus on the reader's need, the book's promise, scope, and a brief roadmap; remove personal author context and examples fully taught in chapters.";
+  }
+  if (/Front Matter\s*[–-]\s*Conclusion/i.test(location)) {
+    return "This target is the Conclusion: focus on synthesis, implications, and next steps; remove the introduction's promise and chapter-by-chapter retelling.";
+  }
+  return "";
 }
 
 type RewrittenLocation = {
@@ -572,12 +571,14 @@ export const POST = async (req: NextRequest): Promise<Response> => {
   }
 
   const { manifest, report, appliedKeys, voiceDNA } = parsed.data;
+  const manifestVersion = computeEbookManifestVersion(manifest);
 
   if (appliedKeys.length === 0) {
     return NextResponse.json({
       proposedChapters: manifest.chapters,
       proposedFrontMatter: manifest.frontMatter,
       proposedBackMatter: manifest.backMatter,
+      manifestVersion,
     }, { status: 200 });
   }
 
@@ -684,11 +685,18 @@ export const POST = async (req: NextRequest): Promise<Response> => {
     if (key.startsWith("p-")) {
       const pair = report.similarPairs[Number(key.slice(2))];
       if (!pair) continue;
-      const targetLocation = resolveMatterTarget(pair.locationA, frontMatter, backMatter)
+      const locationAIsMatter = Boolean(resolveMatterTarget(pair.locationA, frontMatter, backMatter));
+      const locationBIsMatter = Boolean(resolveMatterTarget(pair.locationB, frontMatter, backMatter));
+      const targetLocation = locationAIsMatter
         ? pair.locationA
-        : pair.locationB;
+        : locationBIsMatter
+          ? pair.locationB
+          : pair.locationB;
       const protectedLocation = targetLocation === pair.locationA ? pair.locationB : pair.locationA;
-      queueRepair(targetLocation, `This location overlaps ${protectedLocation} (${Math.round(pair.similarity * 100)}% lexical similarity). Keep the protected section's distinct teaching intact and revise this target only to remove repeated material while preserving its unique point.\nProtected excerpt: ${targetLocation === pair.locationA ? pair.excerptB : pair.excerptA}\nTarget excerpt: ${targetLocation === pair.locationA ? pair.excerptA : pair.excerptB}`);
+      const targetExcerpt = targetLocation === pair.locationA ? pair.excerptA : pair.excerptB;
+      const protectedExcerpt = targetLocation === pair.locationA ? pair.excerptB : pair.excerptA;
+      const roleInstruction = frontMatterRoleInstruction(targetLocation);
+      queueRepair(targetLocation, `This location overlaps ${protectedLocation} (${Math.round(pair.similarity * 100)}% lexical similarity). Change only the target passage; keep the protected location intact. Preserve every unique point, and remove only genuinely duplicated material. ${roleInstruction}\nProtected excerpt: ${protectedExcerpt}\nTarget excerpt: ${targetExcerpt}`);
     }
 
     if (key.startsWith("s-")) {
@@ -788,5 +796,6 @@ export const POST = async (req: NextRequest): Promise<Response> => {
     proposedChapters: chapters,
     proposedFrontMatter: frontMatter,
     proposedBackMatter: backMatter,
+    manifestVersion,
   }, { status: 200 });
 }

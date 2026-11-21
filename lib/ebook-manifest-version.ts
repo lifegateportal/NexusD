@@ -1,7 +1,10 @@
 import { createHash } from "crypto";
 import type { EbookManifest } from "@/lib/schemas/ebook";
 
-export function computeEbookManifestVersion(manifest: EbookManifest): string {
+type ManifestVersionInput = Pick<EbookManifest, "chapters" | "frontMatter">
+  & Partial<Pick<EbookManifest, "bookTitle" | "subtitle" | "authorName" | "backMatter">>;
+
+export function computeEbookManifestVersion(manifest: ManifestVersionInput): string {
   return createHash("sha256")
     .update(JSON.stringify({
       bookTitle: manifest.bookTitle,
