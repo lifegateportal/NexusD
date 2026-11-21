@@ -38,6 +38,7 @@ const FRONT_MATTER_FIELDS = [
   ["aboutAuthor", "About the Author"],
   ["resourcesList", "Resources"],
   ["scriptureIndex", "Scripture Index"],
+  ["additionalSections", "Additional Sections"],
 ] as const;
 
 const CHAPTER_FIELDS = [
@@ -54,6 +55,7 @@ const BACK_MATTER_FIELDS = [
   ["readingGroupGuide", "Reading Group Guide"],
   ["scriptureIndex", "Scripture Index"],
   ["recommendedResources", "Recommended Resources"],
+  ["additionalSections", "Additional Sections"],
 ] as const;
 
 type ChapterField = (typeof CHAPTER_FIELDS)[number][0];

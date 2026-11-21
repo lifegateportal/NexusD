@@ -285,7 +285,7 @@ export const FrontBackMatterSchema = z.object({
   scriptureIndex: z.array(z.string()).default([]), // sorted list of all scripture references used
   additionalSections: z.array(z.object({
     title: z.string().trim().min(1).max(200),
-    content: z.string().min(1).max(600_000),
+    content: z.string().max(600_000),
   }).strict()).optional(),
 });
 
@@ -310,7 +310,7 @@ export const BackMatterSchema = z.object({
   recommendedResources: z.array(z.string()).default([]),
   additionalSections: z.array(z.object({
     title: z.string().trim().min(1).max(200),
-    content: z.string().min(1).max(600_000),
+    content: z.string().max(600_000),
   }).strict()).optional(),
 });
 

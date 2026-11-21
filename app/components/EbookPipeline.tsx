@@ -13,6 +13,11 @@ import {
   newJobId,
 } from "@/lib/ebook-job-store";
 import { harmonizeBookManifest } from "@/lib/editorial-style-bible";
+import {
+  applySelectedManifestChanges,
+  buildManifestChangeEntries,
+  type EbookChangeEntry,
+} from "@/lib/ebook-change-control";
 import { BOOK_TEMPLATES, BOOK_TEMPLATE_IDS } from "@/lib/book-templates";
 import type { BookTemplateId } from "@/lib/book-templates";
 import type {
@@ -1493,15 +1498,56 @@ type OverusedWord = {
   alternatives: string[];
 };
 
+type AuditStyleViolation = {
+  location: string;
+  ruleType: string;
+  match: string;
+  context: string;
+  suggestion: string;
+};
+
+type AuditScriptureIssue = {
+  location: string;
+  issueType: string;
+  reference: string;
+  excerpt: string;
+  recommendation: string;
+};
+
+type AuditContradiction = {
+  type: string;
+  description: string;
+  locationA: string;
+  excerptA: string;
+  locationB: string;
+  excerptB: string;
+  severity: "minor" | "major";
+  recommendation: string;
+};
+
 type AuditReport = {
   conceptDuplicates: ConceptDuplicate[];
   similarPairs: SimilarPair[];
   repetitions: RepetitionEntry[];
   overusedWords: OverusedWord[];
+  styleViolations: AuditStyleViolation[];
+  scriptureIssues: AuditScriptureIssue[];
+  contradictions: AuditContradiction[];
+  readabilityMetrics: { overallFleschGrade: number; overallAvgSentenceLength: number };
+  auditWarnings: string[];
   totalConceptDuplicates: number;
   totalSimilarPairs: number;
   totalRepetitionPhrases: number;
   totalOverusedWords: number;
+  totalStyleViolations: number;
+  totalScriptureIssues: number;
+  totalContradictions: number;
+};
+
+type PendingAuditProposal = {
+  baseManifest: EbookManifest;
+  proposedManifest: EbookManifest;
+  changes: EbookChangeEntry[];
 };
 
 const TYPE_LABELS: Record<ConceptDuplicate["type"], string> = {
@@ -1515,11 +1561,21 @@ const TYPE_LABELS: Record<ConceptDuplicate["type"], string> = {
 
 function AuditPanel({
   report,
-  onApplyToManuscript,
+  proposal,
+  undoAvailable,
+  onProposeFixes,
+  onApproveProposal,
+  onRejectProposal,
+  onUndo,
   applyingAudit,
 }: {
   report: AuditReport;
-  onApplyToManuscript?: (appliedKeys: string[]) => void;
+  proposal: PendingAuditProposal | null;
+  undoAvailable: boolean;
+  onProposeFixes?: (appliedKeys: string[]) => void;
+  onApproveProposal?: (paths: string[]) => void;
+  onRejectProposal?: () => void;
+  onUndo?: () => void;
   applyingAudit?: boolean;
 }) {
   const [openConceptKey, setOpenConceptKey] = useState<string | null>(null);
@@ -1529,6 +1585,18 @@ function AuditPanel({
   const [showWords, setShowWords] = useState(false);
   const [applied, setApplied] = useState<Set<string>>(new Set());
   const [dismissed, setDismissed] = useState<Set<string>>(new Set());
+  const [selectedChangePaths, setSelectedChangePaths] = useState<string[]>([]);
+
+  useEffect(() => {
+    setSelectedChangePaths(proposal?.changes.map((change) => change.path) ?? []);
+  }, [proposal]);
+
+  useEffect(() => {
+    setApplied(new Set());
+    setDismissed(new Set());
+    setOpenConceptKey(null);
+    setOpenPhraseKey(null);
+  }, [report]);
 
   const applyItem = (key: string) => setApplied(s => new Set([...s, key]));
   const applyAll = () => {
@@ -1537,6 +1605,9 @@ function AuditPanel({
       ...report.similarPairs.map((_, i) => `p-${i}`),
       ...report.repetitions.map((_, i) => `r-${i}`),
       ...report.overusedWords.map((_, i) => `w-${i}`),
+      ...report.styleViolations.map((_, i) => `s-${i}`),
+      ...report.scriptureIssues.map((_, i) => `q-${i}`),
+      ...report.contradictions.map((_, i) => `d-${i}`),
     ].filter(k => !dismissed.has(k));
     setApplied(s => new Set([...s, ...allKeys]));
   };
@@ -1551,20 +1622,32 @@ function AuditPanel({
   const activePairs = report.similarPairs.map((item, i) => ({ item, k: `p-${i}` })).filter(e => !dismissed.has(e.k));
   const activeRepetitions = report.repetitions.map((item, i) => ({ item, k: `r-${i}` })).filter(e => !dismissed.has(e.k));
   const activeWords = report.overusedWords.map((item, i) => ({ item, k: `w-${i}` })).filter(e => !dismissed.has(e.k));
+  const activeStyleViolations = report.styleViolations.map((item, i) => ({ item, k: `s-${i}` })).filter(e => !dismissed.has(e.k));
+  const activeScriptureIssues = report.scriptureIssues.map((item, i) => ({ item, k: `q-${i}` })).filter(e => !dismissed.has(e.k));
+  const activeContradictions = report.contradictions.map((item, i) => ({ item, k: `d-${i}` })).filter(e => !dismissed.has(e.k));
 
-  const totalIssues = activeConcepts.length + activePairs.length + activeRepetitions.length + activeWords.length;
+  const totalIssues = activeConcepts.length + activePairs.length + activeRepetitions.length + activeWords.length
+    + activeStyleViolations.length + activeScriptureIssues.length + activeContradictions.length;
 
-  if (totalIssues === 0) {
+  if (totalIssues === 0 && report.auditWarnings.length === 0) {
     return (
       <div className="rounded-xl border border-emerald-500/25 bg-emerald-500/6 px-4 py-3">
-        <p className="text-sm font-semibold text-emerald-300">No significant duplication found.</p>
-        <p className="text-xs text-slate-400 mt-1">The manuscript has strong conceptual variety throughout.</p>
+        <p className="text-sm font-semibold text-emerald-300">No audit findings.</p>
+        <p className="text-xs text-slate-400 mt-1">No significant duplication, style, Scripture, or contradiction issues were found.</p>
       </div>
     );
   }
 
   return (
     <div className="space-y-5">
+      {report.auditWarnings.map((warning, index) => (
+        <p key={`audit-warning-${index}`} role="alert" className="rounded-xl border border-amber-500/30 bg-amber-950/30 p-3 text-xs text-amber-100">
+          Partial audit: {warning}
+        </p>
+      ))}
+      <p className="text-xs text-slate-400">
+        Readability: grade {report.readabilityMetrics.overallFleschGrade} · average sentence length {report.readabilityMetrics.overallAvgSentenceLength} words.
+      </p>
 
       {/* Summary badges */}
       <div className="flex flex-wrap items-center gap-2">
@@ -1592,25 +1675,169 @@ function AuditPanel({
             overused word{activeWords.length !== 1 ? "s" : ""}
           </span>
         )}
+        {activeStyleViolations.length > 0 && (
+          <span className="inline-flex items-center gap-1.5 rounded-lg border border-slate-500/30 bg-slate-700/40 px-3 py-1.5 text-xs font-semibold text-slate-300">
+            <span className="text-sm font-bold tabular-nums">{activeStyleViolations.length}</span>
+            style issue{activeStyleViolations.length !== 1 ? "s" : ""}
+          </span>
+        )}
+        {activeScriptureIssues.length > 0 && (
+          <span className="inline-flex items-center gap-1.5 rounded-lg border border-blue-400/30 bg-blue-400/8 px-3 py-1.5 text-xs font-semibold text-blue-200">
+            <span className="text-sm font-bold tabular-nums">{activeScriptureIssues.length}</span>
+            Scripture issue{activeScriptureIssues.length !== 1 ? "s" : ""}
+          </span>
+        )}
+        {activeContradictions.length > 0 && (
+          <span className="inline-flex items-center gap-1.5 rounded-lg border border-red-400/30 bg-red-400/8 px-3 py-1.5 text-xs font-semibold text-red-200">
+            <span className="text-sm font-bold tabular-nums">{activeContradictions.length}</span>
+            contradiction{activeContradictions.length !== 1 ? "s" : ""}
+          </span>
+        )}
         {applied.size < totalIssues && (
           <button type="button" onClick={applyAll}
-            className="ml-auto min-h-[36px] px-4 rounded-lg text-[11px] font-semibold bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 active:bg-emerald-500/25">
-            ✓ Apply All
+            className="ml-auto min-h-12 px-4 rounded-lg text-[11px] font-semibold bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 active:bg-emerald-500/25">
+            Select All Findings
           </button>
         )}
-        {applied.size > 0 && onApplyToManuscript && (
+        {applied.size > 0 && onProposeFixes && (
           <button
             type="button"
-            onClick={() => onApplyToManuscript(Array.from(applied))}
+            onClick={() => onProposeFixes(Array.from(applied))}
             disabled={applyingAudit}
-            className="min-h-[36px] px-4 rounded-lg text-[11px] font-semibold bg-violet-500/20 border border-violet-500/40 text-violet-200 active:bg-violet-500/30 disabled:cursor-not-allowed disabled:opacity-50"
+            className="min-h-12 px-4 rounded-lg text-[11px] font-semibold bg-violet-500/20 border border-violet-500/40 text-violet-200 active:bg-violet-500/30 disabled:cursor-not-allowed disabled:opacity-50"
           >
             {applyingAudit
-              ? "Rewriting chapters…"
-              : `Rewrite Manuscript (${applied.size} fix${applied.size !== 1 ? "es" : ""})`}
+              ? "Preparing exact fixes…"
+              : `Propose exact fixes (${applied.size})`}
+          </button>
+        )}
+        {undoAvailable && onUndo && (
+          <button type="button" onClick={onUndo} className="min-h-12 rounded-lg border border-slate-600 px-4 text-xs font-semibold text-slate-200">
+            Undo last audit repair
           </button>
         )}
       </div>
+
+      {proposal && (
+        <div className="space-y-3 rounded-xl border border-cyan-400/30 bg-cyan-950/20 p-4">
+          <div>
+            <p className="text-sm font-bold text-cyan-200">Exact repair proposal</p>
+            <p className="mt-1 text-xs text-cyan-100/70">Nothing has changed yet. Review the before/after text, select the changes to keep, then approve.</p>
+          </div>
+          <div className="space-y-3">
+            {proposal.changes.map((change) => {
+              const selected = selectedChangePaths.includes(change.path);
+              return (
+                <label key={change.path} className={`block rounded-xl border p-3 ${selected ? "border-cyan-500/40 bg-slate-950/60" : "border-slate-700/60 bg-slate-950/30 opacity-75"}`}>
+                  <span className="flex min-h-12 items-center gap-3">
+                    <input
+                      type="checkbox"
+                      checked={selected}
+                      onChange={() => setSelectedChangePaths((current) => selected
+                        ? current.filter((path) => path !== change.path)
+                        : [...current, change.path])}
+                      className="h-5 w-5 shrink-0 accent-cyan-400"
+                    />
+                    <span className="text-xs font-semibold text-slate-200">{change.label}</span>
+                  </span>
+                  <span className="mt-2 grid gap-2 lg:grid-cols-2">
+                    <span className="block overflow-x-auto rounded-lg border border-red-500/20 bg-red-950/20 p-3 text-xs leading-relaxed text-red-100">
+                      <span className="mb-1 block text-[10px] font-bold uppercase tracking-widest text-red-300">Before</span>
+                      <span className="whitespace-pre-wrap">{change.before}</span>
+                    </span>
+                    <span className="block overflow-x-auto rounded-lg border border-emerald-500/20 bg-emerald-950/20 p-3 text-xs leading-relaxed text-emerald-100">
+                      <span className="mb-1 block text-[10px] font-bold uppercase tracking-widest text-emerald-300">Proposed</span>
+                      <span className="whitespace-pre-wrap">{change.after}</span>
+                    </span>
+                  </span>
+                </label>
+              );
+            })}
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <button type="button" onClick={() => onApproveProposal?.(selectedChangePaths)} disabled={applyingAudit || selectedChangePaths.length === 0} className="min-h-12 rounded-xl bg-cyan-300 px-4 text-sm font-bold text-slate-950 disabled:opacity-40">
+              Approve selected ({selectedChangePaths.length})
+            </button>
+            <button type="button" onClick={() => onApproveProposal?.(proposal.changes.map((change) => change.path))} disabled={applyingAudit} className="min-h-12 rounded-xl border border-emerald-500/40 bg-emerald-500/10 px-4 text-sm font-bold text-emerald-200 disabled:opacity-40">
+              Approve all
+            </button>
+            <button type="button" onClick={onRejectProposal} disabled={applyingAudit} className="min-h-12 rounded-xl border border-slate-700 px-4 text-sm font-semibold text-slate-300 disabled:opacity-40">
+              Reject proposal
+            </button>
+          </div>
+        </div>
+      )}
+
+      {activeContradictions.length > 0 && (
+        <div className="space-y-2">
+          <p className="text-[10px] font-bold uppercase tracking-widest text-red-300/80">Contradictions</p>
+          {activeContradictions.map(({ item, k }) => (
+            <div key={k} className="rounded-xl border border-red-500/25 bg-red-950/20 p-3">
+              <p className="text-xs font-semibold text-red-200">{item.type} contradiction · {item.severity}</p>
+              <p className="mt-1 text-xs text-slate-300">{item.description}</p>
+              <p className="mt-1 text-xs text-slate-400">{item.locationA}: {item.excerptA}</p>
+              <p className="mt-1 text-xs text-slate-400">{item.locationB}: {item.excerptB}</p>
+              <p className="mt-1 text-xs text-emerald-200">Recommendation: {item.recommendation}</p>
+              <div className="mt-2 flex flex-wrap gap-2">
+                {applied.has(k) ? (
+                  <span className="inline-flex min-h-12 items-center text-xs font-semibold text-emerald-300">Selected for proposal</span>
+                ) : (
+                  <>
+                    <button type="button" onClick={() => applyItem(k)} className="min-h-12 rounded-lg border border-emerald-500/30 bg-emerald-500/15 px-3 text-xs font-semibold text-emerald-200">Select fix</button>
+                    <button type="button" onClick={() => dismissItem(k)} className="min-h-12 rounded-lg border border-slate-600/40 bg-slate-700/40 px-3 text-xs font-semibold text-slate-300">Dismiss</button>
+                  </>
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {activeScriptureIssues.length > 0 && (
+        <div className="space-y-2">
+          <p className="text-[10px] font-bold uppercase tracking-widest text-blue-200/80">Scripture Issues</p>
+          {activeScriptureIssues.map(({ item, k }) => (
+            <div key={k} className="rounded-xl border border-blue-500/25 bg-blue-950/20 p-3">
+              <p className="text-xs font-semibold text-blue-200">{item.issueType} · {item.reference}</p>
+              <p className="mt-1 text-xs text-slate-400">{item.location}: {item.excerpt}</p>
+              <p className="mt-1 text-xs text-emerald-200">Recommendation: {item.recommendation}</p>
+              <div className="mt-2 flex flex-wrap gap-2">
+                {applied.has(k) ? (
+                  <span className="inline-flex min-h-12 items-center text-xs font-semibold text-emerald-300">Selected for proposal</span>
+                ) : (
+                  <>
+                    <button type="button" onClick={() => applyItem(k)} className="min-h-12 rounded-lg border border-emerald-500/30 bg-emerald-500/15 px-3 text-xs font-semibold text-emerald-200">Select fix</button>
+                    <button type="button" onClick={() => dismissItem(k)} className="min-h-12 rounded-lg border border-slate-600/40 bg-slate-700/40 px-3 text-xs font-semibold text-slate-300">Dismiss</button>
+                  </>
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {activeStyleViolations.length > 0 && (
+        <div className="space-y-2">
+          <p className="text-[10px] font-bold uppercase tracking-widest text-slate-300/80">Style Issues</p>
+          {activeStyleViolations.map(({ item, k }) => (
+            <div key={k} className="rounded-xl border border-slate-600/50 bg-slate-900/70 p-3">
+              <p className="text-xs font-semibold text-slate-200">{item.ruleType}: “{item.match}”</p>
+              <p className="mt-1 text-xs text-slate-400">{item.location}: {item.context}</p>
+              <p className="mt-1 text-xs text-emerald-200">Suggestion: {item.suggestion}</p>
+              <div className="mt-2 flex flex-wrap gap-2">
+                {applied.has(k) ? (
+                  <span className="inline-flex min-h-12 items-center text-xs font-semibold text-emerald-300">Selected for proposal</span>
+                ) : (
+                  <>
+                    <button type="button" onClick={() => applyItem(k)} className="min-h-12 rounded-lg border border-emerald-500/30 bg-emerald-500/15 px-3 text-xs font-semibold text-emerald-200">Select fix</button>
+                    <button type="button" onClick={() => dismissItem(k)} className="min-h-12 rounded-lg border border-slate-600/40 bg-slate-700/40 px-3 text-xs font-semibold text-slate-300">Dismiss</button>
+                  </>
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
 
       {/* ── Concept duplicates (primary, most important) ───────────────────── */}
       {activeConcepts.length > 0 && (
@@ -1666,16 +1893,16 @@ function AuditPanel({
                     {applied.has(k) ? (
                       <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-400">
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5} className="h-3.5 w-3.5"><path d="M5 13l4 4L19 7" strokeLinecap="round" strokeLinejoin="round"/></svg>
-                        Applied
+                        Selected
                       </span>
                     ) : (
                       <>
                         <button type="button" onClick={() => applyItem(k)}
-                          className="min-h-[36px] px-3 rounded-lg text-[11px] font-semibold bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 active:bg-emerald-500/25">
-                          ✓ Apply
+                          className="min-h-12 px-3 rounded-lg text-[11px] font-semibold bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 active:bg-emerald-500/25">
+                          Select fix
                         </button>
                         <button type="button" onClick={() => dismissItem(k)}
-                          className="min-h-[36px] px-3 rounded-lg text-[11px] font-semibold bg-slate-700/40 border border-slate-600/40 text-slate-400 active:bg-slate-700/60">
+                          className="min-h-12 px-3 rounded-lg text-[11px] font-semibold bg-slate-700/40 border border-slate-600/40 text-slate-400 active:bg-slate-700/60">
                           Dismiss
                         </button>
                       </>
@@ -1694,7 +1921,7 @@ function AuditPanel({
           <button
             type="button"
             onClick={() => setShowPairs((v) => !v)}
-            className="flex items-center gap-2 min-h-[44px] w-full text-left"
+            className="flex items-center gap-2 min-h-12 w-full text-left"
           >
             <p className="text-[10px] font-bold uppercase tracking-widest text-orange-400/80">
               Similar Sections ({activePairs.length})
@@ -1721,15 +1948,15 @@ function AuditPanel({
                         {Math.round(pair.similarity * 100)}% overlap
                       </span>
                       {applied.has(k) ? (
-                        <span className="text-[11px] font-semibold text-emerald-400">✓ Applied</span>
+                        <span className="text-[11px] font-semibold text-emerald-400">✓ Selected</span>
                       ) : (
                         <>
                           <button type="button" onClick={() => applyItem(k)}
-                            className="min-h-[36px] min-w-[36px] flex items-center justify-center rounded-lg text-[11px] font-semibold bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 active:bg-emerald-500/25">
+                            className="min-h-12 min-w-12 flex items-center justify-center rounded-lg text-[11px] font-semibold bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 active:bg-emerald-500/25">
                             ✓
                           </button>
                           <button type="button" onClick={() => dismissItem(k)}
-                            className="min-h-[36px] min-w-[36px] flex items-center justify-center rounded-lg text-[11px] font-semibold bg-slate-700/40 border border-slate-600/40 text-slate-400 active:bg-slate-700/60">
+                            className="min-h-12 min-w-12 flex items-center justify-center rounded-lg text-[11px] font-semibold bg-slate-700/40 border border-slate-600/40 text-slate-400 active:bg-slate-700/60">
                             ✕
                           </button>
                         </>
@@ -1753,7 +1980,7 @@ function AuditPanel({
           <button
             type="button"
             onClick={() => setShowPhrases((v) => !v)}
-            className="flex items-center gap-2 min-h-[44px] w-full text-left"
+            className="flex items-center gap-2 min-h-12 w-full text-left"
           >
             <p className="text-[10px] font-bold uppercase tracking-widest text-amber-400/80">
               Repeated Phrases ({activeRepetitions.length})
@@ -1808,16 +2035,16 @@ function AuditPanel({
                         {applied.has(k) ? (
                           <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-400">
                             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5} className="h-3.5 w-3.5"><path d="M5 13l4 4L19 7" strokeLinecap="round" strokeLinejoin="round"/></svg>
-                            Applied
+                            Selected
                           </span>
                         ) : (
                           <>
                             <button type="button" onClick={() => applyItem(k)}
-                              className="min-h-[36px] px-3 rounded-lg text-[11px] font-semibold bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 active:bg-emerald-500/25">
-                              ✓ Apply
+                              className="min-h-12 px-3 rounded-lg text-[11px] font-semibold bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 active:bg-emerald-500/25">
+                              Select fix
                             </button>
                             <button type="button" onClick={() => dismissItem(k)}
-                              className="min-h-[36px] px-3 rounded-lg text-[11px] font-semibold bg-slate-700/40 border border-slate-600/40 text-slate-400 active:bg-slate-700/60">
+                              className="min-h-12 px-3 rounded-lg text-[11px] font-semibold bg-slate-700/40 border border-slate-600/40 text-slate-400 active:bg-slate-700/60">
                               Dismiss
                             </button>
                           </>
@@ -1838,7 +2065,7 @@ function AuditPanel({
           <button
             type="button"
             onClick={() => setShowWords((v) => !v)}
-            className="flex items-center gap-2 min-h-[44px] w-full text-left"
+            className="flex items-center gap-2 min-h-12 w-full text-left"
           >
             <p className="text-[10px] font-bold uppercase tracking-widest text-slate-500">
               Overused Words ({activeWords.length})
@@ -1858,15 +2085,15 @@ function AuditPanel({
                     <div className="flex items-center gap-1.5 flex-shrink-0">
                       <span className="text-[10px] text-slate-500 tabular-nums">{w.count}× · {w.frequency}</span>
                       {applied.has(k) ? (
-                        <span className="text-[11px] font-semibold text-emerald-400">✓</span>
+                        <span className="text-[11px] font-semibold text-emerald-400">✓ Selected</span>
                       ) : (
                         <>
                           <button type="button" onClick={() => applyItem(k)}
-                            className="min-h-[36px] min-w-[36px] flex items-center justify-center rounded-lg text-[11px] font-semibold bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 active:bg-emerald-500/25">
+                            className="min-h-12 min-w-12 flex items-center justify-center rounded-lg text-[11px] font-semibold bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 active:bg-emerald-500/25">
                             ✓
                           </button>
                           <button type="button" onClick={() => dismissItem(k)}
-                            className="min-h-[36px] min-w-[36px] flex items-center justify-center rounded-lg text-[11px] font-semibold bg-slate-700/40 border border-slate-600/40 text-slate-400 active:bg-slate-700/60">
+                            className="min-h-12 min-w-12 flex items-center justify-center rounded-lg text-[11px] font-semibold bg-slate-700/40 border border-slate-600/40 text-slate-400 active:bg-slate-700/60">
                             ✕
                           </button>
                         </>
@@ -1966,6 +2193,8 @@ export function EbookPipeline({
   const [reviewContext, setReviewContext] = useState<{ contentMap: ContentMap; frontMatter: FrontBackMatter } | null>(null);
   const [qualityReport, setQualityReport] = useState<QualityReport | null>(null);
   const [auditReport, setAuditReport] = useState<AuditReport | null>(null);
+  const [pendingAuditProposal, setPendingAuditProposal] = useState<PendingAuditProposal | null>(null);
+  const [auditUndoSnapshot, setAuditUndoSnapshot] = useState<{ before: EbookManifest; after: EbookManifest } | null>(null);
   const [auditRunning, setAuditRunning] = useState(false);
   const [applyingAudit, setApplyingAudit] = useState(false);
   const [exportingBook, setExportingBook] = useState(false);
@@ -2043,6 +2272,8 @@ export function EbookPipeline({
     setReviewContext(null);
     setQualityReport(null);
     setAuditReport(null);
+    setPendingAuditProposal(null);
+    setAuditUndoSnapshot(null);
     setTotalWords(0);
     setProgress({ total: 0, completed: 0 });
     setReviewTab("manuscript");
@@ -2360,6 +2591,7 @@ export function EbookPipeline({
     if (!completedManifest) return;
     setAuditRunning(true);
     setAuditReport(null);
+    setPendingAuditProposal(null);
     try {
       const report = await postJson<AuditReport>("/api/ebook/audit", { manifest: completedManifest });
       setAuditReport(report);
@@ -2388,23 +2620,69 @@ export function EbookPipeline({
   }, [addLog, completedManifest, updateCompletedManifest]);
 
   // ── Apply audit findings to manuscript ───────────────────────────────────
-  const applyAuditToManuscript = useCallback(async (appliedKeys: string[]) => {
+  const proposeAuditFixes = useCallback(async (appliedKeys: string[]) => {
     if (!completedManifest || !auditReport) return;
     setApplyingAudit(true);
-    addLog(`→ Applying ${appliedKeys.length} audit fix(es) — duplicate sections will be deleted, word/phrase fixes applied…`);
+    setPendingAuditProposal(null);
+    addLog(`→ Preparing exact proposals for ${appliedKeys.length} audit finding(s)…`);
     try {
-      const result = await postJson<{ chapters: EbookManifest["chapters"] }>(
+      const result = await postJson<{
+        proposedChapters: EbookManifest["chapters"];
+        proposedFrontMatter: EbookManifest["frontMatter"];
+        proposedBackMatter: EbookManifest["backMatter"];
+      }>(
         "/api/ebook/apply-audit",
         { manifest: completedManifest, report: auditReport, appliedKeys },
       );
-      updateCompletedManifest((current) => ({ ...current, chapters: result.chapters }));
-      addLog(`✓ Audit applied — ${result.chapters.length} chapter(s) updated (duplicate sections deleted, seams stitched)`);
+      const proposedManifest: EbookManifest = {
+        ...completedManifest,
+        chapters: result.proposedChapters,
+        frontMatter: result.proposedFrontMatter,
+        backMatter: result.proposedBackMatter,
+      };
+      const changes = buildManifestChangeEntries(completedManifest, proposedManifest);
+      if (changes.length === 0) {
+        addLog("⚠ No exact repair could be prepared for the selected findings.");
+        return;
+      }
+      setPendingAuditProposal({ baseManifest: completedManifest, proposedManifest, changes });
+      addLog(`✓ Exact proposal ready — review ${changes.length} before/after change(s) before approving.`);
     } catch (err) {
-      addLog(`✗ Apply audit error: ${err instanceof Error ? err.message : "Rewrite failed"}`);
+      addLog(`✗ Audit proposal error: ${err instanceof Error ? err.message : "Could not prepare exact fixes"}`);
     } finally {
       setApplyingAudit(false);
     }
   }, [addLog, auditReport, completedManifest, updateCompletedManifest]);
+
+  const approveAuditProposal = useCallback((paths: string[]) => {
+    if (!completedManifest || !pendingAuditProposal || paths.length === 0) return;
+    if (buildManifestChangeEntries(pendingAuditProposal.baseManifest, completedManifest).length > 0) {
+      setPendingAuditProposal(null);
+      addLog("✗ Audit proposal rejected because the manuscript changed while it was open. Run the audit again.");
+      return;
+    }
+    const updatedManifest = applySelectedManifestChanges(
+      completedManifest,
+      pendingAuditProposal.proposedManifest,
+      paths,
+    );
+    setAuditUndoSnapshot({ before: completedManifest, after: updatedManifest });
+    updateCompletedManifest(() => updatedManifest);
+    setPendingAuditProposal(null);
+    addLog(`✓ Approved ${paths.length} audit change(s). You can undo this repair from the audit panel.`);
+  }, [addLog, completedManifest, pendingAuditProposal, updateCompletedManifest]);
+
+  const undoAuditProposal = useCallback(() => {
+    if (!completedManifest || !auditUndoSnapshot) return;
+    if (buildManifestChangeEntries(auditUndoSnapshot.after, completedManifest).length > 0) {
+      setAuditUndoSnapshot(null);
+      addLog("✗ The manuscript has changed since the audit repair, so the repair can no longer be undone safely.");
+      return;
+    }
+    updateCompletedManifest(() => auditUndoSnapshot.before);
+    setAuditUndoSnapshot(null);
+    addLog("✓ Undid the last approved audit repair.");
+  }, [addLog, auditUndoSnapshot, completedManifest, updateCompletedManifest]);
 
   // ── Auto-download PDF when export completes ──────────────────────────────
   useEffect(() => {
@@ -3276,6 +3554,9 @@ export function EbookPipeline({
       setCompletedManifest(null);
       setReviewContext(null);
       setQualityReport(null);
+      setAuditReport(null);
+      setPendingAuditProposal(null);
+      setAuditUndoSnapshot(null);
       setReviewTab("manuscript");
       setSectionAssignments([]);
       setTotalWords(0);
@@ -5145,6 +5426,7 @@ export function EbookPipeline({
             )}
 
             <div className="grid gap-3 md:grid-cols-3">
+              <div>
               <ProseEditor
                 label="Preface"
                 value={completedManifest.frontMatter.preface}
@@ -5152,6 +5434,17 @@ export function EbookPipeline({
                 rows={5}
                 placeholder="Book preface…"
               />
+              {completedManifest.frontMatter.preface.trim() && (
+                <button type="button" onClick={() => {
+                  if (window.confirm("Remove Preface and its heading from the book?")) {
+                    updateCompletedManifest((current) => ({ ...current, frontMatter: { ...current.frontMatter, preface: "" } }));
+                  }
+                }} className="mt-2 min-h-12 rounded-xl border border-red-500/40 bg-red-500/10 px-3 text-xs font-semibold text-red-200">
+                  Remove Preface from book
+                </button>
+              )}
+              </div>
+              <div>
               <ProseEditor
                 label="Introduction"
                 value={completedManifest.frontMatter.introduction}
@@ -5159,6 +5452,17 @@ export function EbookPipeline({
                 rows={5}
                 placeholder="Book introduction…"
               />
+              {completedManifest.frontMatter.introduction.trim() && (
+                <button type="button" onClick={() => {
+                  if (window.confirm("Remove Introduction and its heading from the book?")) {
+                    updateCompletedManifest((current) => ({ ...current, frontMatter: { ...current.frontMatter, introduction: "" } }));
+                  }
+                }} className="mt-2 min-h-12 rounded-xl border border-red-500/40 bg-red-500/10 px-3 text-xs font-semibold text-red-200">
+                  Remove Introduction from book
+                </button>
+              )}
+              </div>
+              <div>
               <ProseEditor
                 label="Conclusion"
                 value={completedManifest.frontMatter.conclusion}
@@ -5166,9 +5470,20 @@ export function EbookPipeline({
                 rows={5}
                 placeholder="Book conclusion…"
               />
+              {completedManifest.frontMatter.conclusion.trim() && (
+                <button type="button" onClick={() => {
+                  if (window.confirm("Remove Conclusion and its heading from the book?")) {
+                    updateCompletedManifest((current) => ({ ...current, frontMatter: { ...current.frontMatter, conclusion: "" } }));
+                  }
+                }} className="mt-2 min-h-12 rounded-xl border border-red-500/40 bg-red-500/10 px-3 text-xs font-semibold text-red-200">
+                  Remove Conclusion from book
+                </button>
+              )}
+              </div>
             </div>
 
             <div className="grid gap-3 md:grid-cols-2">
+              <div>
               <ProseEditor
                 label="About Author"
                 value={completedManifest.frontMatter.aboutAuthor ?? ""}
@@ -5176,6 +5491,16 @@ export function EbookPipeline({
                 rows={4}
                 placeholder="Author bio…"
               />
+              {completedManifest.frontMatter.aboutAuthor?.trim() && (
+                <button type="button" onClick={() => {
+                  if (window.confirm("Remove About the Author and its heading from the book?")) {
+                    updateCompletedManifest((current) => ({ ...current, frontMatter: { ...current.frontMatter, aboutAuthor: null } }));
+                  }
+                }} className="mt-2 min-h-12 rounded-xl border border-red-500/40 bg-red-500/10 px-3 text-xs font-semibold text-red-200">
+                  Remove About the Author from book
+                </button>
+              )}
+              </div>
               <div>
                 <label className="mb-1 block text-[10px] font-bold uppercase tracking-widest text-slate-500">Resources</label>
                 <textarea
@@ -5190,6 +5515,15 @@ export function EbookPipeline({
                   rows={4}
                   className="w-full rounded-xl border border-slate-700/60 bg-slate-950/70 px-3 py-2 text-base text-slate-100 outline-none focus:border-cyan-500/40"
                 />
+                {completedManifest.frontMatter.resourcesList.length > 0 && (
+                  <button type="button" onClick={() => {
+                    if (window.confirm("Remove Resources and its heading from the book?")) {
+                      updateCompletedManifest((current) => ({ ...current, frontMatter: { ...current.frontMatter, resourcesList: [] } }));
+                    }
+                  }} className="mt-2 min-h-12 rounded-xl border border-red-500/40 bg-red-500/10 px-3 text-xs font-semibold text-red-200">
+                    Remove Resources from book
+                  </button>
+                )}
               </div>
             </div>
 
@@ -5201,9 +5535,18 @@ export function EbookPipeline({
                 {/* Glossary */}
                 {(completedManifest.backMatter.glossary?.length ?? 0) > 0 && (
                   <div>
-                    <label className="mb-1 block text-[10px] font-bold uppercase tracking-widest text-slate-500">
-                      Glossary ({completedManifest.backMatter.glossary.length} terms)
-                    </label>
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <label className="mb-1 block text-[10px] font-bold uppercase tracking-widest text-slate-500">
+                        Glossary ({completedManifest.backMatter.glossary.length} terms)
+                      </label>
+                      <button type="button" onClick={() => {
+                        if (window.confirm("Remove Glossary and its heading from the book?")) {
+                          updateCompletedManifest((current) => ({ ...current, backMatter: current.backMatter ? { ...current.backMatter, glossary: [] } : null }));
+                        }
+                      }} className="min-h-12 rounded-xl border border-red-500/40 bg-red-500/10 px-3 text-xs font-semibold text-red-200">
+                        Remove Glossary
+                      </button>
+                    </div>
                     <div className="space-y-2 max-h-56 overflow-y-auto rounded-xl border border-slate-700/60 bg-slate-950/70 px-3 py-2">
                       {completedManifest.backMatter.glossary.map((entry, i) => (
                         <div key={i} className="border-b border-slate-800/60 pb-2 last:border-0 last:pb-0">
@@ -5219,9 +5562,18 @@ export function EbookPipeline({
                 {/* Reading Group Guide */}
                 {(completedManifest.backMatter.readingGroupGuide?.length ?? 0) > 0 && (
                   <div>
-                    <label className="mb-1 block text-[10px] font-bold uppercase tracking-widest text-slate-500">
-                      Reading Group Guide ({completedManifest.backMatter.readingGroupGuide.length} chapters)
-                    </label>
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <label className="mb-1 block text-[10px] font-bold uppercase tracking-widest text-slate-500">
+                        Reading Group Guide ({completedManifest.backMatter.readingGroupGuide.length} chapters)
+                      </label>
+                      <button type="button" onClick={() => {
+                        if (window.confirm("Remove Reading Group Guide and its heading from the book?")) {
+                          updateCompletedManifest((current) => ({ ...current, backMatter: current.backMatter ? { ...current.backMatter, readingGroupGuide: [] } : null }));
+                        }
+                      }} className="min-h-12 rounded-xl border border-red-500/40 bg-red-500/10 px-3 text-xs font-semibold text-red-200">
+                        Remove Study Questions
+                      </button>
+                    </div>
                     <div className="space-y-3 max-h-64 overflow-y-auto rounded-xl border border-slate-700/60 bg-slate-950/70 px-3 py-2">
                       {completedManifest.backMatter.readingGroupGuide.map((chapter, i) => (
                         <div key={i} className="border-b border-slate-800/60 pb-3 last:border-0 last:pb-0">
@@ -5242,9 +5594,18 @@ export function EbookPipeline({
                 {/* Scripture Index */}
                 {(completedManifest.backMatter.scriptureIndex?.length ?? 0) > 0 && (
                   <div>
-                    <label className="mb-1 block text-[10px] font-bold uppercase tracking-widest text-slate-500">
-                      Scripture Index ({completedManifest.backMatter.scriptureIndex.length} references)
-                    </label>
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <label className="mb-1 block text-[10px] font-bold uppercase tracking-widest text-slate-500">
+                        Scripture Index ({completedManifest.backMatter.scriptureIndex.length} references)
+                      </label>
+                      <button type="button" onClick={() => {
+                        if (window.confirm("Remove Scripture Index and its heading from the book?")) {
+                          updateCompletedManifest((current) => ({ ...current, backMatter: current.backMatter ? { ...current.backMatter, scriptureIndex: [] } : null }));
+                        }
+                      }} className="min-h-12 rounded-xl border border-red-500/40 bg-red-500/10 px-3 text-xs font-semibold text-red-200">
+                        Remove Scripture Index
+                      </button>
+                    </div>
                     <div className="max-h-48 overflow-y-auto rounded-xl border border-slate-700/60 bg-slate-950/70 px-3 py-2 space-y-1">
                       {completedManifest.backMatter.scriptureIndex.map((entry, i) => (
                         <div key={i} className="flex items-start gap-2 text-xs">
@@ -5280,7 +5641,16 @@ export function EbookPipeline({
                 {auditReport && (
                   <AuditPanel
                     report={auditReport}
-                    onApplyToManuscript={(keys) => void applyAuditToManuscript(keys)}
+                    proposal={pendingAuditProposal}
+                    undoAvailable={Boolean(
+                      auditUndoSnapshot
+                      && completedManifest
+                      && buildManifestChangeEntries(auditUndoSnapshot.after, completedManifest).length === 0
+                    )}
+                    onProposeFixes={(keys) => void proposeAuditFixes(keys)}
+                    onApproveProposal={approveAuditProposal}
+                    onRejectProposal={() => setPendingAuditProposal(null)}
+                    onUndo={undoAuditProposal}
                     applyingAudit={applyingAudit}
                   />
                 )}

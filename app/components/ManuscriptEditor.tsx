@@ -11,6 +11,20 @@ type Props = {
 
 type Section = "metadata" | "front" | "chapter" | "back";
 
+function RemoveMatterButton({ label, onRemove }: { label: string; onRemove: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={() => {
+        if (window.confirm(`Remove ${label} and its heading from the book?`)) onRemove();
+      }}
+      className="mt-2 min-h-12 rounded-xl border border-red-500/40 bg-red-500/10 px-3 text-xs font-semibold text-red-200"
+    >
+      Remove {label} from book
+    </button>
+  );
+}
+
 export function ManuscriptEditor({ manifest, onChange }: Props) {
   const [activeSection, setActiveSection] = useState<Section>("metadata");
   const [activeChapter, setActiveChapter] = useState<number>(1);
@@ -30,7 +44,7 @@ export function ManuscriptEditor({ manifest, onChange }: Props) {
     onChange({ ...manifest, [field]: value });
   }, [manifest, onChange]);
 
-  const updateFrontMatter = useCallback((field: keyof FrontBackMatter, value: string | string[] | null) => {
+  const updateFrontMatter = useCallback((field: keyof FrontBackMatter, value: FrontBackMatter[keyof FrontBackMatter]) => {
     onChange({
       ...manifest,
       frontMatter: { ...manifest.frontMatter, [field]: value },
@@ -62,7 +76,7 @@ export function ManuscriptEditor({ manifest, onChange }: Props) {
     });
   }, [manifest, onChange]);
 
-  const updateBackMatter = useCallback((field: keyof BackMatter, value: unknown) => {
+  const updateBackMatter = useCallback((field: keyof BackMatter, value: BackMatter[keyof BackMatter]) => {
     onChange({
       ...manifest,
       backMatter: manifest.backMatter
@@ -70,6 +84,52 @@ export function ManuscriptEditor({ manifest, onChange }: Props) {
         : { scriptureIndex: [], glossary: [], readingGroupGuide: [], recommendedResources: [], [field]: value },
     });
   }, [manifest, onChange]);
+
+  const updateAdditionalSection = useCallback((
+    area: "frontMatter" | "backMatter",
+    index: number,
+    field: "title" | "content",
+    value: string,
+  ) => {
+    if (area === "frontMatter") {
+      const sections = [...(manifest.frontMatter.additionalSections ?? [])];
+      sections[index] = { ...sections[index], [field]: value };
+      updateFrontMatter("additionalSections", sections);
+      return;
+    }
+
+    const sections = [...(manifest.backMatter?.additionalSections ?? [])];
+    sections[index] = { ...sections[index], [field]: value };
+    updateBackMatter("additionalSections", sections);
+  }, [manifest.backMatter, manifest.frontMatter.additionalSections, updateBackMatter, updateFrontMatter]);
+
+  const removeAdditionalSection = useCallback((area: "frontMatter" | "backMatter", index: number) => {
+    if (area === "frontMatter") {
+      updateFrontMatter(
+        "additionalSections",
+        (manifest.frontMatter.additionalSections ?? []).filter((_, itemIndex) => itemIndex !== index),
+      );
+      return;
+    }
+    updateBackMatter(
+      "additionalSections",
+      (manifest.backMatter?.additionalSections ?? []).filter((_, itemIndex) => itemIndex !== index),
+    );
+  }, [manifest.backMatter?.additionalSections, manifest.frontMatter.additionalSections, updateBackMatter, updateFrontMatter]);
+
+  const addAdditionalSection = useCallback((area: "frontMatter" | "backMatter") => {
+    if (area === "frontMatter") {
+      updateFrontMatter("additionalSections", [
+        ...(manifest.frontMatter.additionalSections ?? []),
+        { title: "New Section", content: "" },
+      ]);
+      return;
+    }
+    updateBackMatter("additionalSections", [
+      ...(manifest.backMatter?.additionalSections ?? []),
+      { title: "New Section", content: "" },
+    ]);
+  }, [manifest.backMatter?.additionalSections, manifest.frontMatter.additionalSections, updateBackMatter, updateFrontMatter]);
 
   const addManualChapter = useCallback(() => {
     const newChapterNum = manifest.chapters.length + 1;
@@ -237,6 +297,9 @@ export function ManuscriptEditor({ manifest, onChange }: Props) {
             onChange={(value) => updateFrontMatter("preface", value)}
             rows={8}
           />
+          {manifest.frontMatter.preface.trim() && (
+            <RemoveMatterButton label="Preface" onRemove={() => updateFrontMatter("preface", "")} />
+          )}
 
           <ProseEditor
             label="Introduction"
@@ -244,6 +307,9 @@ export function ManuscriptEditor({ manifest, onChange }: Props) {
             onChange={(value) => updateFrontMatter("introduction", value)}
             rows={10}
           />
+          {manifest.frontMatter.introduction.trim() && (
+            <RemoveMatterButton label="Introduction" onRemove={() => updateFrontMatter("introduction", "")} />
+          )}
 
           <ProseEditor
             label="Conclusion"
@@ -251,6 +317,9 @@ export function ManuscriptEditor({ manifest, onChange }: Props) {
             onChange={(value) => updateFrontMatter("conclusion", value)}
             rows={10}
           />
+          {manifest.frontMatter.conclusion.trim() && (
+            <RemoveMatterButton label="Conclusion" onRemove={() => updateFrontMatter("conclusion", "")} />
+          )}
 
           <ProseEditor
             label="About the Author"
@@ -258,6 +327,9 @@ export function ManuscriptEditor({ manifest, onChange }: Props) {
             onChange={(value) => updateFrontMatter("aboutAuthor", value || null)}
             rows={8}
           />
+          {manifest.frontMatter.aboutAuthor?.trim() && (
+            <RemoveMatterButton label="About the Author" onRemove={() => updateFrontMatter("aboutAuthor", null)} />
+          )}
 
           <div>
             <label className="mb-1 block text-[10px] font-bold uppercase tracking-widest text-slate-500">
@@ -270,6 +342,36 @@ export function ManuscriptEditor({ manifest, onChange }: Props) {
               placeholder="One resource per line..."
               className="w-full rounded-xl border border-slate-700/60 bg-slate-950/70 px-3 py-2 text-base text-slate-100 outline-none focus:border-cyan-500/40"
             />
+            {manifest.frontMatter.resourcesList.length > 0 && (
+              <RemoveMatterButton label="Resources" onRemove={() => updateFrontMatter("resourcesList", [])} />
+            )}
+          </div>
+
+          <div className="space-y-3 border-t border-slate-700/40 pt-4">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <h4 className="text-xs font-semibold uppercase tracking-widest text-slate-400">Additional Front Matter</h4>
+              <button type="button" onClick={() => addAdditionalSection("frontMatter")} className="min-h-12 rounded-xl border border-cyan-500/30 px-3 text-xs font-semibold text-cyan-200">
+                Add section
+              </button>
+            </div>
+            {(manifest.frontMatter.additionalSections ?? []).map((section, index) => (
+              <div key={`front-${index}`} className="space-y-2 rounded-xl border border-slate-700/50 p-3">
+                <input
+                  type="text"
+                  value={section.title}
+                  onChange={(event) => updateAdditionalSection("frontMatter", index, "title", event.target.value)}
+                  aria-label={`Front matter section ${index + 1} heading`}
+                  className="min-h-12 w-full rounded-xl border border-slate-700/60 bg-slate-950/70 px-3 py-2 text-base text-slate-100"
+                />
+                <ProseEditor
+                  label="Section body"
+                  value={section.content}
+                  onChange={(value) => updateAdditionalSection("frontMatter", index, "content", value)}
+                  rows={6}
+                />
+                <RemoveMatterButton label="this front-matter section" onRemove={() => removeAdditionalSection("frontMatter", index)} />
+              </div>
+            ))}
           </div>
         </div>
       )}
@@ -486,6 +588,9 @@ export function ManuscriptEditor({ manifest, onChange }: Props) {
               placeholder="One resource per line..."
               className="w-full rounded-xl border border-slate-700/60 bg-slate-950/70 px-3 py-2 text-base text-slate-100 outline-none focus:border-cyan-500/40"
             />
+            {(manifest.backMatter?.recommendedResources?.length ?? 0) > 0 && (
+              <RemoveMatterButton label="Recommended Resources" onRemove={() => updateBackMatter("recommendedResources", [])} />
+            )}
           </div>
 
           <div>
@@ -506,6 +611,9 @@ export function ManuscriptEditor({ manifest, onChange }: Props) {
               placeholder='[{"term":"","definition":"","firstAppearance":""}]'
               className="w-full rounded-xl border border-slate-700/60 bg-slate-950/70 px-3 py-2 font-mono text-sm text-slate-100 outline-none focus:border-cyan-500/40"
             />
+            {(manifest.backMatter?.glossary?.length ?? 0) > 0 && (
+              <RemoveMatterButton label="Glossary" onRemove={() => updateBackMatter("glossary", [])} />
+            )}
           </div>
 
           <div>
@@ -525,6 +633,9 @@ export function ManuscriptEditor({ manifest, onChange }: Props) {
               placeholder='[{"chapterNumber":1,"chapterTitle":"","questions":[]}]'
               className="w-full rounded-xl border border-slate-700/60 bg-slate-950/70 px-3 py-2 font-mono text-base text-slate-100 outline-none focus:border-cyan-500/40"
             />
+            {(manifest.backMatter?.readingGroupGuide?.length ?? 0) > 0 && (
+              <RemoveMatterButton label="Study Questions" onRemove={() => updateBackMatter("readingGroupGuide", [])} />
+            )}
           </div>
 
           <div>
@@ -544,6 +655,36 @@ export function ManuscriptEditor({ manifest, onChange }: Props) {
               placeholder='[{"reference":"","translation":"","chapters":[]}]'
               className="w-full rounded-xl border border-slate-700/60 bg-slate-950/70 px-3 py-2 font-mono text-base text-slate-100 outline-none focus:border-cyan-500/40"
             />
+            {(manifest.backMatter?.scriptureIndex?.length ?? 0) > 0 && (
+              <RemoveMatterButton label="Scripture Index" onRemove={() => updateBackMatter("scriptureIndex", [])} />
+            )}
+          </div>
+
+          <div className="space-y-3 border-t border-slate-700/40 pt-4">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <h4 className="text-xs font-semibold uppercase tracking-widest text-slate-400">Additional Back Matter</h4>
+              <button type="button" onClick={() => addAdditionalSection("backMatter")} className="min-h-12 rounded-xl border border-cyan-500/30 px-3 text-xs font-semibold text-cyan-200">
+                Add section
+              </button>
+            </div>
+            {(manifest.backMatter?.additionalSections ?? []).map((section, index) => (
+              <div key={`back-${index}`} className="space-y-2 rounded-xl border border-slate-700/50 p-3">
+                <input
+                  type="text"
+                  value={section.title}
+                  onChange={(event) => updateAdditionalSection("backMatter", index, "title", event.target.value)}
+                  aria-label={`Back matter section ${index + 1} heading`}
+                  className="min-h-12 w-full rounded-xl border border-slate-700/60 bg-slate-950/70 px-3 py-2 text-base text-slate-100"
+                />
+                <ProseEditor
+                  label="Section body"
+                  value={section.content}
+                  onChange={(value) => updateAdditionalSection("backMatter", index, "content", value)}
+                  rows={6}
+                />
+                <RemoveMatterButton label="this back-matter section" onRemove={() => removeAdditionalSection("backMatter", index)} />
+              </div>
+            ))}
           </div>
         </div>
       )}

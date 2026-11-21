@@ -268,15 +268,6 @@ export function evaluateBookQuality(input: {
     }
   }
 
-  if (!input.frontMatter.preface.trim() || !input.frontMatter.introduction.trim() || !input.frontMatter.conclusion.trim()) {
-    issues.push({
-      code: "EMPTY_FRONTMATTER",
-      severity: "error",
-      message: "Front matter contains empty required fields.",
-    });
-    score -= 15;
-  }
-
   const boundedScore = Math.max(0, Math.min(100, Math.round(score)));
   const hardErrors = issues.filter((i) => i.severity === "error").length;
   return {

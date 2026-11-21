@@ -186,6 +186,12 @@ Every field edited in the Manuscript Editor directly maps to the PDF export:
 
 ## Workflow
 
+### Audit and Matter Editing
+- The book audit reports duplication, repeated phrases, overused words, style issues, Scripture citation issues, contradictions, and readability measures. If an audit pass fails, its warning is shown so a partial report is not presented as a clean audit.
+- Select findings and choose **Propose exact fixes** to generate a before/after proposal. Review each proposed section, approve only the changes you want, or reject the proposal; approval is blocked if the manuscript changed while the proposal was open. The latest approved audit repair can be undone if no later manuscript edits would be overwritten.
+- Keep each repeated topic's full explanation in its primary chapter. Use the **Preface** for author context, the **Introduction** for the reader's need, promise, scope, and roadmap, and the **Conclusion** for synthesis and implications rather than repeating the chapter's full treatment.
+- Use the front- and back-matter remove controls to delete a standard section or a custom section, including its heading and body. For custom sections, clearing either the heading or body omits the whole section from exports.
+
 ### Standard Editing Workflow
 1. Run the pipeline to generate the initial manuscript
 2. Review the generated content

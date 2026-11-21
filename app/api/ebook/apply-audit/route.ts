@@ -2,11 +2,13 @@ import { NextRequest, NextResponse } from "next/server";
 import { generateText } from "ai";
 import { deepSeekModel, deepSeekReasonerModel } from "@/lib/ai-providers";
 import { z } from "zod";
-import { VoiceDNASchema } from "@/lib/schemas/ebook";
+import { BackMatterSchema, FrontBackMatterSchema, VoiceDNASchema } from "@/lib/schemas/ebook";
 import { SOURCE_LOCK_RULES, PROSE_MASTERY_RULES, PREMIUM_BOOK_STYLE_RULES, READER_NORMALIZATION_RULES } from "@/lib/editorial-style-bible";
 import { SCRIPTURE_FORMATTING_RULES } from "@/lib/scripture-formatter";
 
 type VoiceDNAType = z.infer<typeof VoiceDNASchema>;
+type FrontMatterInput = z.infer<typeof FrontBackMatterSchema>;
+type BackMatterInput = z.infer<typeof BackMatterSchema>;
 
 export const runtime = "nodejs";
 export const maxDuration = 120;
@@ -38,7 +40,6 @@ const ChapterSchema = z.object({
   title: z.string().default(""),
   intro: z.string().default(""),
   sections: z.array(SectionSchema),
-  conclusion: z.string().default(""),
   keyTakeaways: z.array(z.string()).default([]),
   reflectionQuestions: z.array(z.string()).default([]),
   totalWordCount: z.number().default(0),
@@ -46,7 +47,11 @@ const ChapterSchema = z.object({
 });
 
 const RequestSchema = z.object({
-  manifest: z.object({ chapters: z.array(ChapterSchema) }),
+  manifest: z.object({
+    chapters: z.array(ChapterSchema),
+    frontMatter: FrontBackMatterSchema,
+    backMatter: BackMatterSchema.nullable().optional(),
+  }),
   report: z.object({
     conceptDuplicates: z.array(z.object({
       type: z.string(),
@@ -78,8 +83,32 @@ const RequestSchema = z.object({
       frequency: z.string().default(""),
       alternatives: z.array(z.string()).default([]),
     })).default([]),
+    styleViolations: z.array(z.object({
+      location: z.string(),
+      ruleType: z.string(),
+      match: z.string(),
+      context: z.string(),
+      suggestion: z.string(),
+    })).default([]),
+    scriptureIssues: z.array(z.object({
+      location: z.string(),
+      issueType: z.string(),
+      reference: z.string(),
+      excerpt: z.string(),
+      recommendation: z.string(),
+    })).default([]),
+    contradictions: z.array(z.object({
+      type: z.string(),
+      description: z.string(),
+      locationA: z.string(),
+      excerptA: z.string().default(""),
+      locationB: z.string(),
+      excerptB: z.string().default(""),
+      severity: z.string(),
+      recommendation: z.string(),
+    })).default([]),
   }),
-  appliedKeys: z.array(z.string()),
+  appliedKeys: z.array(z.string().regex(/^(?:c|p|r|w|s|q|d)-\d+$/)).max(200),
   voiceDNA: VoiceDNASchema.optional().nullable(),
 });
 
@@ -136,7 +165,7 @@ function applyWordVariation(text: string, word: string, alternatives: string[]):
   });
 }
 
-/** Apply a text transformation to every prose field in a chapter's sections, intro, conclusion. */
+/** Apply a text transformation to every prose field in a chapter's sections and intro. */
 function mapChapterText(
   chapter: ChapterInput,
   transform: (text: string) => string,
@@ -144,11 +173,39 @@ function mapChapterText(
   return {
     ...chapter,
     intro: transform(chapter.intro),
-    conclusion: transform(chapter.conclusion),
     sections: chapter.sections.map((s) => {
       const body = transform(s.body);
       return { ...s, body, wordCount: body.split(/\s+/).filter(Boolean).length };
     }),
+  };
+}
+
+function mapMatterText(
+  frontMatter: FrontMatterInput,
+  backMatter: BackMatterInput | null | undefined,
+  transform: (text: string) => string,
+): { frontMatter: FrontMatterInput; backMatter: BackMatterInput | null | undefined } {
+  return {
+    frontMatter: {
+      ...frontMatter,
+      preface: transform(frontMatter.preface),
+      introduction: transform(frontMatter.introduction),
+      conclusion: transform(frontMatter.conclusion),
+      aboutAuthor: frontMatter.aboutAuthor === null ? null : transform(frontMatter.aboutAuthor),
+      additionalSections: frontMatter.additionalSections?.map((section) => ({
+        ...section,
+        content: transform(section.content),
+      })),
+    },
+    backMatter: backMatter
+      ? {
+          ...backMatter,
+          additionalSections: backMatter.additionalSections?.map((section) => ({
+            ...section,
+            content: transform(section.content),
+          })),
+        }
+      : backMatter,
   };
 }
 
@@ -179,8 +236,8 @@ async function reviseSectionBody(
     : "";
 
   const originalWordCount = body.split(/\s+/).filter(Boolean).length;
-  const minWords = Math.floor(originalWordCount * 0.98);  // 98% minimum (was 92%)
-  const maxWords = Math.ceil(originalWordCount * 1.02);   // 102% maximum (was 108%)
+  const minWords = Math.max(1, Math.floor(originalWordCount * 0.5));
+  const maxWords = Math.ceil(originalWordCount * 1.15);
   // Allow ~2 tokens per word (generous) + headroom, minimum 2048
   const maxTokens = Math.max(2048, originalWordCount * 3);
 
@@ -255,20 +312,17 @@ ${PREMIUM_BOOK_STYLE_RULES}`,
       text = result.text.trim();
     } catch (r1Err) {
       console.error("[apply-audit] R1 fallback also failed:", r1Err instanceof Error ? r1Err.message : r1Err);
-      return body; // final fallback to original
+      throw new Error("Could not generate an audit repair proposal with either configured model.");
     }
   }
 
-  if (!text) return body;
+  if (!text) throw new Error("The model returned an empty audit repair proposal.");
 
   // Hard safety net: if the rewrite lost more than 5% of words, reject and return original.
   // This prevents accidental content deletion during surgical edits.
   const revisedWordCount = text.split(/\s+/).filter(Boolean).length;
-  if (revisedWordCount < Math.floor(originalWordCount * 0.95)) {
-    console.warn(
-      `[apply-audit] Rewrite shrank section from ${originalWordCount} → ${revisedWordCount} words (>${Math.round((1 - revisedWordCount / originalWordCount) * 100)}% loss) — keeping original`,
-    );
-    return body;
+  if (revisedWordCount < minWords || revisedWordCount > maxWords) {
+    throw new Error(`The proposed repair was outside the allowed length range (${minWords}–${maxWords} words).`);
   }
 
   return text;
@@ -303,21 +357,88 @@ async function mapWithConcurrency(
 
 type LLMTask = {
   chapterIndex: number;
-  field: "intro" | "conclusion" | { sectionNumber: number };
+  field: "intro" | { sectionNumber: number };
   task: string;
   heading: string;
   body: string;
   voiceDNA?: VoiceDNAType | null;
 };
 
+type MatterTarget =
+  | { area: "front"; field: "preface" | "introduction" | "conclusion" | "aboutAuthor" }
+  | { area: "front"; additionalSectionIndex: number }
+  | { area: "back"; additionalSectionIndex: number };
+
+type MatterLLMTask = {
+  target: MatterTarget;
+  task: string;
+  heading: string;
+  body: string;
+  voiceDNA?: VoiceDNAType | null;
+};
+
+function resolveMatterTarget(
+  location: string,
+  frontMatter: z.infer<typeof FrontBackMatterSchema>,
+  backMatter: z.infer<typeof BackMatterSchema> | null | undefined,
+): MatterLLMTask | null {
+  const match = /^(Front|Back) Matter\s*[–-]\s*(.+)$/i.exec(location.trim());
+  if (!match) return null;
+  const area = match[1].toLowerCase() === "front" ? "front" : "back";
+  const label = match[2].trim();
+  const fields = {
+    Preface: "preface",
+    Introduction: "introduction",
+    Conclusion: "conclusion",
+    "About the Author": "aboutAuthor",
+  } as const;
+
+  if (area === "front") {
+    const field = fields[label as keyof typeof fields];
+    if (field) {
+      return {
+        target: { area, field },
+        task: "",
+        heading: label,
+        body: frontMatter[field] ?? "",
+      };
+    }
+    const additionalSectionIndex = (frontMatter.additionalSections ?? [])
+      .findIndex((section) => section.title.trim().toLowerCase() === label.toLowerCase());
+    if (additionalSectionIndex >= 0) {
+      const section = frontMatter.additionalSections?.[additionalSectionIndex];
+      if (!section) return null;
+      return {
+        target: { area, additionalSectionIndex },
+        task: "",
+        heading: section.title,
+        body: section.content,
+      };
+    }
+    return null;
+  }
+
+  const additionalSectionIndex = (backMatter?.additionalSections ?? [])
+    .findIndex((section) => section.title.trim().toLowerCase() === label.toLowerCase());
+  if (additionalSectionIndex < 0) return null;
+  const section = backMatter?.additionalSections?.[additionalSectionIndex];
+  if (!section) return null;
+  return {
+    target: { area, additionalSectionIndex },
+    task: "",
+    heading: section.title,
+    body: section.content,
+  };
+}
+
 type RewrittenLocation = {
   chapterIndex: number;
-  field: "intro" | "conclusion" | { sectionNumber: number };
+  field: "intro" | { sectionNumber: number };
 };
 
 type TransitionTask = {
   chapterIndex: number;
-  field: "intro" | "conclusion" | { sectionNumber: number };
+  field: "intro" | { sectionNumber: number };
   role: "preceding" | "following";
   headingContext: string;
   bodyToFix: string;
@@ -339,8 +460,6 @@ async function repairTransitions(
     let rewrittenBody = "";
     if (field === "intro") {
       rewrittenBody = ch.intro;
-    } else if (field === "conclusion") {
-      rewrittenBody = ch.conclusion;
     } else {
       const secNum = (field as { sectionNumber: number }).sectionNumber;
       rewrittenBody = ch.sections.find((s) => s.sectionNumber === secNum)?.body ?? "";
@@ -352,19 +471,6 @@ async function repairTransitions(
 
     if (field === "intro") {
       // Nothing precedes a chapter intro in the same chapter
-    } else if (field === "conclusion") {
-      // Preceding = last section
-      const lastSec = [...ch.sections].reverse()[0];
-      if (lastSec?.body) {
-        tasks.push({
-          chapterIndex,
-          field: { sectionNumber: lastSec.sectionNumber },
-          role: "preceding",
-          headingContext: lastSec.heading,
-          bodyToFix: lastSec.body,
-          adjacentEdge: rewrittenOpen,
-        });
-      }
     } else {
       const secNum = (field as { sectionNumber: number }).sectionNumber;
       const secIdx = ch.sections.findIndex((s) => s.sectionNumber === secNum);
@@ -402,15 +508,6 @@ async function repairTransitions(
           bodyToFix: next.body,
           adjacentEdge: rewrittenClose,
         });
-      } else if (ch.conclusion) {
-        tasks.push({
-          chapterIndex,
-          field: "conclusion",
-          role: "following",
-          headingContext: `Chapter ${ch.number} Conclusion`,
-          bodyToFix: ch.conclusion,
-          adjacentEdge: rewrittenClose,
-        });
       }
     }
   }
@@ -442,8 +539,6 @@ async function repairTransitions(
     const ch = updated[task.chapterIndex];
     if (task.field === "intro") {
       updated[task.chapterIndex] = { ...ch, intro: revisedBody };
-    } else if (task.field === "conclusion") {
-      updated[task.chapterIndex] = { ...ch, conclusion: revisedBody };
     } else {
       const secNum = (task.field as { sectionNumber: number }).sectionNumber;
       updated[task.chapterIndex] = {
@@ -479,14 +574,19 @@ export const POST = async (req: NextRequest): Promise<Response> => {
   const { manifest, report, appliedKeys, voiceDNA } = parsed.data;
 
   if (appliedKeys.length === 0) {
-    return NextResponse.json({ chapters: manifest.chapters }, { status: 200 });
+    return NextResponse.json({
+      proposedChapters: manifest.chapters,
+      proposedFrontMatter: manifest.frontMatter,
+      proposedBackMatter: manifest.backMatter,
+    }, { status: 200 });
   }
 
-  // Deep clone chapters so we can mutate them safely
   let chapters: ChapterInput[] = manifest.chapters.map((c) => ({
     ...c,
     sections: c.sections.map((s) => ({ ...s })),
   }));
+  let frontMatter = structuredClone(manifest.frontMatter);
+  let backMatter = manifest.backMatter ? structuredClone(manifest.backMatter) : manifest.backMatter;
 
   // ── Tier 1: Algorithmic fixes (no LLM, no risk of extra rewrites) ───────────
 
@@ -495,10 +595,10 @@ export const POST = async (req: NextRequest): Promise<Response> => {
       const idx = parseInt(key.slice(2));
       const rep = report.repetitions[idx];
       if (!rep || !rep.alternatives.length) continue;
-      // Apply globally across ALL chapters (repetition is a manuscript-wide stat)
       chapters = chapters.map((ch) =>
         mapChapterText(ch, (text) => applyPhraseVariation(text, rep.phrase, rep.alternatives)),
       );
+      ({ frontMatter, backMatter } = mapMatterText(frontMatter, backMatter, (text) => applyPhraseVariation(text, rep.phrase, rep.alternatives)));
     }
 
     if (key.startsWith("w-")) {
@@ -508,186 +608,185 @@ export const POST = async (req: NextRequest): Promise<Response> => {
       chapters = chapters.map((ch) =>
         mapChapterText(ch, (text) => applyWordVariation(text, ow.word, ow.alternatives)),
       );
+      ({ frontMatter, backMatter } = mapMatterText(frontMatter, backMatter, (text) => applyWordVariation(text, ow.word, ow.alternatives)));
     }
   }
 
-  // ── Tier 2: Faithful to speaker's progression — only delete obvious copy-paste errors ──
-  // STRATEGY: The book should follow the speaker's natural teaching flow. If they revisited
-  // a concept later in the transcript, that was intentional pedagogical reinforcement.
-  // ONLY delete sections that are clearly copy-paste errors (>98% verbatim duplication).
+  const chapterTasks = new Map<string, LLMTask>();
+  const matterTasks = new Map<string, MatterLLMTask>();
 
-  function calculateTextSimilarity(text1: string, text2: string): number {
-    const words1 = new Set(tokenizeContent(text1));
-    const words2 = new Set(tokenizeContent(text2));
-    const intersection = new Set([...words1].filter(x => words2.has(x)));
-    const union = new Set([...words1, ...words2]);
-    return union.size > 0 ? intersection.size / union.size : 0;
+  function queueRepair(location: string, task: string): void {
+    const matterTarget = resolveMatterTarget(location, frontMatter, backMatter);
+    if (matterTarget) {
+      if (!matterTarget.body.trim()) return;
+      const target = matterTarget.target;
+      const key = target.area === "front" && "field" in target
+        ? `front:${target.field}`
+        : target.area === "front"
+          ? `front-additional:${target.additionalSectionIndex}`
+          : `back-additional:${target.additionalSectionIndex}`;
+      const existing = matterTasks.get(key);
+      if (existing) {
+        existing.task += `\n\n${task}`;
+      } else {
+        matterTasks.set(key, { ...matterTarget, task, voiceDNA });
+      }
+      return;
+    }
+
+    const { chapterNum, sectionNum } = parseLocation(location);
+    if (chapterNum === null) return;
+    const chapterIndex = chapters.findIndex((chapter) => chapter.number === chapterNum);
+    if (chapterIndex < 0) return;
+    const chapter = chapters[chapterIndex];
+    let field: LLMTask["field"];
+    let heading: string;
+    let body: string;
+    if (sectionNum !== null) {
+      const section = chapter.sections.find((candidate) => candidate.sectionNumber === sectionNum);
+      if (!section) return;
+      field = { sectionNumber: sectionNum };
+      heading = section.heading;
+      body = section.body;
+    } else if (/\bintro(?:duction)?\b/i.test(location)) {
+      field = "intro";
+      heading = `Chapter ${chapterNum} Introduction`;
+      body = chapter.intro;
+    } else {
+      return;
+    }
+    if (!body.trim()) return;
+    const key = `${chapterIndex}:${JSON.stringify(field)}`;
+    const existing = chapterTasks.get(key);
+    if (existing) {
+      existing.task += `\n\n${task}`;
+    } else {
+      chapterTasks.set(key, { chapterIndex, field, heading, body, task, voiceDNA });
+    }
   }
-
-  const sectionsToDelete: { chapterNum: number; sectionNum: number }[] = [];
-  const llmTasks: LLMTask[] = [];
 
   for (const key of appliedKeys) {
-    // ── Concept duplicates — only delete if >98% verbatim (copy-paste error) ──────────
-    // If the speaker naturally covered the same concept again in their teaching,
-    // preserve it. Only remove obvious technical duplication errors.
     if (key.startsWith("c-")) {
-      const idx = parseInt(key.slice(2));
-      const dup = report.conceptDuplicates[idx];
-      if (!dup || dup.locations.length < 2) continue;
-
-      for (let li = 1; li < dup.locations.length; li++) {
-        const { chapterNum, sectionNum } = parseLocation(dup.locations[li].location);
-        if (chapterNum === null || sectionNum === null) continue;
-
-        // Check if this is a copy-paste error (near-verbatim text)
-        const firstExcerpt = dup.locations[0].excerpt || "";
-        const thisExcerpt = dup.locations[li].excerpt || "";
-        const similarity = firstExcerpt && thisExcerpt 
-          ? calculateTextSimilarity(firstExcerpt, thisExcerpt) 
-          : 0;
-
-        // Only delete if >98% similar (clear copy-paste error, not intentional reinforcement)
-        if (similarity > 0.98) {
-          sectionsToDelete.push({ chapterNum, sectionNum });
-        }
-        // Otherwise: preserve it — the speaker chose to revisit this concept
+      const duplicate = report.conceptDuplicates[Number(key.slice(2))];
+      if (!duplicate || duplicate.locations.length < 2) continue;
+      const canonical = duplicate.locations.find((location) =>
+        parseLocation(location.location).sectionNum !== null,
+      ) ?? duplicate.locations[0];
+      for (const target of duplicate.locations) {
+        if (target.location === canonical.location) continue;
+        const matterRole = /^Front Matter\s*[–-]\s*/i.test(target.location)
+          ? `\nApply the section's role: Preface is author context; Introduction is reader need, promise, scope, and roadmap; Conclusion is synthesis and implications.`
+          : "";
+        queueRepair(target.location, `A concept overlaps the protected primary treatment at ${canonical.location}. ${duplicate.description}\nAudit recommendation: ${duplicate.recommendation}\nProtected excerpt: ${canonical.excerpt}\nTarget excerpt: ${target.excerpt}\nRevise this target to remove only the redundant treatment while retaining any unique contribution.${matterRole}`);
       }
     }
 
-    // ── Similar pairs — only delete if >98% similar (copy-paste error) ─────────────────
     if (key.startsWith("p-")) {
-      const idx = parseInt(key.slice(2));
-      const pair = report.similarPairs[idx];
+      const pair = report.similarPairs[Number(key.slice(2))];
       if (!pair) continue;
+      const targetLocation = resolveMatterTarget(pair.locationA, frontMatter, backMatter)
+        ? pair.locationA
+        : pair.locationB;
+      const protectedLocation = targetLocation === pair.locationA ? pair.locationB : pair.locationA;
+      queueRepair(targetLocation, `This location overlaps ${protectedLocation} (${Math.round(pair.similarity * 100)}% lexical similarity). Keep the protected section's distinct teaching intact and revise this target only to remove repeated material while preserving its unique point.\nProtected excerpt: ${targetLocation === pair.locationA ? pair.excerptB : pair.excerptA}\nTarget excerpt: ${targetLocation === pair.locationA ? pair.excerptA : pair.excerptB}`);
+    }
 
-      const locB = parseLocation(pair.locationB);
-      if (locB.chapterNum !== null && locB.sectionNum !== null) {
-        // Only delete if >98% similar (clear technical duplication)
-        if (pair.similarity > 0.98) {
-          sectionsToDelete.push({ chapterNum: locB.chapterNum, sectionNum: locB.sectionNum });
-        }
-        // Otherwise: preserve it — follow the speaker's natural progression
+    if (key.startsWith("s-")) {
+      const issue = report.styleViolations[Number(key.slice(2))];
+      if (issue) {
+        queueRepair(issue.location, `Fix the style violation “${issue.match}” in this passage. Follow this recommendation: ${issue.suggestion}\nEvidence: ${issue.context}\nPreserve the original meaning and voice.`);
       }
     }
-  }
 
-  // Execute deletions and capture neighbor pairs for seam repair
-  type SeamTask = {
-    chapterIndex: number;
-    precedingSecNum: number;
-    precedingHeading: string;
-    precedingBody: string;
-    followingSecNum: number;
-    followingHeading: string;
-    followingBody: string;
-  };
-  const seamTasks: SeamTask[] = [];
-
-  // Deduplicate: a section might be nominated for deletion by multiple keys
-  const deletionSet = new Set(sectionsToDelete.map((d) => `${d.chapterNum}:${d.sectionNum}`));
-  for (const key of Array.from(deletionSet)) {
-    const [chapterNum, sectionNum] = key.split(":").map(Number);
-    const chIdx = chapters.findIndex((c) => c.number === chapterNum);
-    if (chIdx === -1) continue;
-    const ch = chapters[chIdx];
-    const secIdx = ch.sections.findIndex((s) => s.sectionNumber === sectionNum);
-    if (secIdx === -1) continue;
-
-    // Capture neighbors for seam repair BEFORE mutating
-    const precSec = secIdx > 0 ? ch.sections[secIdx - 1] : null;
-    const follSec = secIdx < ch.sections.length - 1 ? ch.sections[secIdx + 1] : null;
-    if (precSec && follSec) {
-      seamTasks.push({
-        chapterIndex: chIdx,
-        precedingSecNum: precSec.sectionNumber,
-        precedingHeading: precSec.heading,
-        precedingBody: precSec.body,
-        followingSecNum: follSec.sectionNumber,
-        followingHeading: follSec.heading,
-        followingBody: follSec.body,
-      });
+    if (key.startsWith("q-")) {
+      const issue = report.scriptureIssues[Number(key.slice(2))];
+      if (issue) {
+        queueRepair(issue.location, `Correct the Scripture citation issue (${issue.issueType}) for ${issue.reference}. Follow this recommendation: ${issue.recommendation}\nEvidence: ${issue.excerpt}\nPreserve quoted Scripture exactly unless the finding explicitly identifies its quotation as the error. Never invent or paraphrase Scripture text.`);
+      }
     }
 
-    // Delete the section and recalculate the chapter word count
-    const updatedSections = ch.sections.filter((s) => s.sectionNumber !== sectionNum);
-    const updatedWordCount = updatedSections.reduce((sum, s) => sum + s.wordCount, 0);
-    chapters[chIdx] = { ...ch, sections: updatedSections, totalWordCount: updatedWordCount };
+    if (key.startsWith("d-")) {
+      const issue = report.contradictions[Number(key.slice(2))];
+      if (!issue) continue;
+      const locationAIsMatter = Boolean(resolveMatterTarget(issue.locationA, frontMatter, backMatter));
+      const locationBIsMatter = Boolean(resolveMatterTarget(issue.locationB, frontMatter, backMatter));
+      const targetLocation = locationBIsMatter ? issue.locationB : locationAIsMatter ? issue.locationA : issue.locationB;
+      const protectedLocation = targetLocation === issue.locationA ? issue.locationB : issue.locationA;
+      queueRepair(targetLocation, `Resolve this ${issue.type} contradiction while preserving accurate nuance. ${issue.description}\nAudit recommendation: ${issue.recommendation}\nProtected claim at ${protectedLocation}: ${targetLocation === issue.locationA ? issue.excerptB : issue.excerptA}\nClaim to revise: ${targetLocation === issue.locationA ? issue.excerptA : issue.excerptB}\nChange only the claim that conflicts with the book's supported position; if evidence is insufficient, make the smallest clarifying qualification.`);
+    }
   }
 
-  // Repair seams between now-adjacent sections where a deletion created a gap
-  if (seamTasks.length > 0) {
-    const seamResults = await mapWithConcurrency(seamTasks, 2, async (task) => {
-      const follOpen = (task.followingBody.split(/\n\n+/)[0] ?? "").trim().slice(0, 200);
-      const precClose = (task.precedingBody.split(/\n\n+/).at(-1) ?? "").trim().slice(-200);
+  const chapterTasksToRun = Array.from(chapterTasks.values());
+  const matterTasksToRun = Array.from(matterTasks.values());
+  let chapterResults: Array<{ task: LLMTask; revisedBody: string }> = [];
+  let matterResults: Array<{ task: MatterLLMTask; revisedBody: string }> = [];
+  try {
+    [chapterResults, matterResults] = await Promise.all([
+      mapWithConcurrency(chapterTasksToRun, 4, async (task) => ({
+        task,
+        revisedBody: await reviseSectionBody(task.heading, task.body, task.task, task.voiceDNA),
+      })),
+      mapWithConcurrency(matterTasksToRun, 2, async (task) => ({
+        task,
+        revisedBody: await reviseSectionBody(task.heading, task.body, task.task, task.voiceDNA),
+      })),
+    ]);
+  } catch (err) {
+    console.error("[apply-audit] Could not generate repair proposal:", err instanceof Error ? err.message : err);
+    return NextResponse.json(
+      { error: err instanceof Error ? err.message : "Could not generate an audit repair proposal." },
+      { status: 502 },
+    );
+  }
 
-      const [precRevised, follRevised] = await Promise.all([
-        reviseSectionBody(
-          task.precedingHeading,
-          task.precedingBody,
-          `A duplicate section that immediately followed this one has been removed. Return the COMPLETE body, changing ONLY the final paragraph so it transitions naturally into the section that now follows, which opens with: "${follOpen}". Every other paragraph must remain word-for-word identical.`,
-          voiceDNA,
-        ),
-        reviseSectionBody(
-          task.followingHeading,
-          task.followingBody,
-          `A duplicate section that immediately preceded this one has been removed. Return the COMPLETE body, changing ONLY the opening paragraph so it follows naturally from the section that now precedes it, which ends with: "${precClose}". Every other paragraph must remain word-for-word identical.`,
-          voiceDNA,
-        ),
-      ]);
-
-      return { task, precRevised, follRevised };
-    });
-
-    for (const { task, precRevised, follRevised } of seamResults) {
-      const ch = chapters[task.chapterIndex];
+  for (const { task, revisedBody } of chapterResults) {
+    const ch = chapters[task.chapterIndex];
+    if (task.field === "intro") {
+      chapters[task.chapterIndex] = { ...ch, intro: revisedBody };
+    } else {
+      const secNum = (task.field as { sectionNumber: number }).sectionNumber;
       chapters[task.chapterIndex] = {
         ...ch,
-        sections: ch.sections.map((s) => {
-          if (s.sectionNumber === task.precedingSecNum)
-            return { ...s, body: precRevised, wordCount: precRevised.split(/\s+/).filter(Boolean).length };
-          if (s.sectionNumber === task.followingSecNum)
-            return { ...s, body: follRevised, wordCount: follRevised.split(/\s+/).filter(Boolean).length };
-          return s;
-        }),
+        sections: ch.sections.map((s) =>
+          s.sectionNumber === secNum
+            ? { ...s, body: revisedBody, wordCount: revisedBody.split(/\s+/).filter(Boolean).length }
+            : s,
+        ),
       };
     }
   }
 
-  // Run LLM tasks with concurrency limit (max 4 at a time)
-  if (llmTasks.length > 0) {
-    const results = await mapWithConcurrency(llmTasks, 4, async (task) => ({
-      task,
-      revisedBody: await reviseSectionBody(task.heading, task.body, task.task, task.voiceDNA),
-    }));
-
-    // Apply results back into the chapters array
-    for (const { task, revisedBody } of results) {
-      const ch = chapters[task.chapterIndex];
-      if (task.field === "intro") {
-        chapters[task.chapterIndex] = { ...ch, intro: revisedBody };
-      } else if (task.field === "conclusion") {
-        chapters[task.chapterIndex] = { ...ch, conclusion: revisedBody };
-      } else {
-        const secNum = (task.field as { sectionNumber: number }).sectionNumber;
-        chapters[task.chapterIndex] = {
-          ...ch,
-          sections: ch.sections.map((s) =>
-            s.sectionNumber === secNum
-              ? { ...s, body: revisedBody, wordCount: revisedBody.split(/\s+/).filter(Boolean).length }
-              : s,
-          ),
-        };
-      }
+  for (const { task, revisedBody } of matterResults) {
+    const target = task.target;
+    if (target.area === "front" && "field" in target) {
+      frontMatter = { ...frontMatter, [target.field]: revisedBody };
+    } else if (target.area === "front" && "additionalSectionIndex" in target) {
+      frontMatter = {
+        ...frontMatter,
+        additionalSections: (frontMatter.additionalSections ?? []).map((section, index) =>
+          index === target.additionalSectionIndex ? { ...section, content: revisedBody } : section,
+        ),
+      };
+    } else if (target.area === "back" && backMatter) {
+      backMatter = {
+        ...backMatter,
+        additionalSections: (backMatter.additionalSections ?? []).map((section, index) =>
+          index === target.additionalSectionIndex ? { ...section, content: revisedBody } : section,
+        ),
+      };
     }
-
-    // Upgrade 7: patch transition seams in sections adjacent to any rewritten section
-    const rewrittenLocations: RewrittenLocation[] = results.map(({ task }) => ({
-      chapterIndex: task.chapterIndex,
-      field: task.field,
-    }));
-    chapters = await repairTransitions(chapters, rewrittenLocations, voiceDNA);
   }
 
-  return NextResponse.json({ chapters }, { status: 200 });
+  if (chapterResults.length > 0) {
+    chapters = await repairTransitions(chapters, chapterResults.map(({ task }) => ({
+      chapterIndex: task.chapterIndex,
+      field: task.field,
+    })), voiceDNA);
+  }
+
+  return NextResponse.json({
+    proposedChapters: chapters,
+    proposedFrontMatter: frontMatter,
+    proposedBackMatter: backMatter,
+  }, { status: 200 });
 }

@@ -528,6 +528,7 @@ export async function generatePdfBuffer(manifest: EbookManifest, templateId?: st
     }
 
     for (const section of manifest.frontMatter.additionalSections ?? []) {
+      if (!section.title.trim() || !section.content.trim()) continue;
       forceNextRecto();
       currentChapterTitle = section.title;
       writeAdditionalMatterSection(doc, section.title, section.content, manifest.allQuotes ?? [], fonts, scaledTpl, sectionOrnament, adjustedBodyFontSizeScaled);
@@ -573,6 +574,7 @@ export async function generatePdfBuffer(manifest: EbookManifest, templateId?: st
     }
 
     for (const section of manifest.backMatter?.additionalSections ?? []) {
+      if (!section.title.trim() || !section.content.trim()) continue;
       forceNextRecto();
       currentChapterTitle = section.title;
       writeAdditionalMatterSection(doc, section.title, section.content, manifest.allQuotes ?? [], fonts, scaledTpl, sectionOrnament, adjustedBodyFontSizeScaled);
@@ -1897,6 +1899,7 @@ function frontMatterChapters(fm: FrontBackMatter, quotes: Quote[]): Array<{ titl
     });
   }
   for (const section of fm.additionalSections ?? []) {
+    if (!section.title.trim() || !section.content.trim()) continue;
     chapters.push({ title: section.title, content: quoteParagraphsToHtml(section.content, quotes) });
   }
   return chapters;
@@ -1970,6 +1973,7 @@ function backMatterChapters(fm: FrontBackMatter, quotes: Quote[], bm?: BackMatte
 
   if (bm) {
     for (const section of bm.additionalSections ?? []) {
+      if (!section.title.trim() || !section.content.trim()) continue;
       chapters.push({ title: section.title, content: quoteParagraphsToHtml(section.content, quotes) });
     }
     if ((bm.glossary ?? []).length > 0) {
@@ -2466,6 +2470,7 @@ export async function generateDocxBuffer(manifest: EbookManifest, templateId?: s
     });
   }
   for (const section of frontMatter.additionalSections ?? []) {
+    if (!section.title.trim() || !section.content.trim()) continue;
     frontMatterSections.push({
       title: section.title,
       children: [
@@ -2716,6 +2721,7 @@ export async function generateDocxBuffer(manifest: EbookManifest, templateId?: s
   }
 
   for (const section of manifest.backMatter?.additionalSections ?? []) {
+    if (!section.title.trim() || !section.content.trim()) continue;
     backMatterSections.push({
       title: section.title,
       children: [

@@ -123,6 +123,7 @@ export type AuditReport = {
   totalContradictions: number;
   // Upgrade 8: passive voice count aggregated across all sections
   totalPassiveVoiceHits: number;
+  auditWarnings: string[];
 };
 
 // ── Upgrade 9: Cross-chapter contradiction type ───────────────────────────────
@@ -137,6 +138,54 @@ export type ContradictionIssue = {
   recommendation: string;    // Concrete editorial fix
 };
 
+const ConceptDuplicateSchema = z.object({
+  type: z.enum(["example", "argument", "concept", "story", "illustration", "passage"]),
+  title: z.string().min(1),
+  description: z.string().min(1),
+  severity: z.enum(["minor", "major"]),
+  locations: z.array(z.object({
+    location: z.string().min(1),
+    excerpt: z.string().default(""),
+  }).strict()).min(2),
+  recommendation: z.string().min(1),
+}).strict();
+
+const SemanticAuditOutputSchema = z.object({
+  conceptDuplicates: z.array(ConceptDuplicateSchema).default([]),
+  phraseAmendments: z.array(z.object({
+    phrase: z.string().min(1),
+    reason: z.string().default(""),
+    alternatives: z.array(z.string().min(1)).min(1),
+  }).strict()).default([]),
+  wordAmendments: z.array(z.object({
+    word: z.string().min(1),
+    alternatives: z.array(z.string().min(1)).min(1),
+  }).strict()).default([]),
+}).strict();
+
+const ScriptureAuditOutputSchema = z.object({
+  issues: z.array(z.object({
+    location: z.string().min(1),
+    issueType: z.enum(["missing-translation", "malformed-reference", "duplicate-full-quote", "inconsistent-format"]),
+    reference: z.string().min(1),
+    excerpt: z.string().default(""),
+    recommendation: z.string().min(1),
+  }).strict()).default([]),
+}).strict();
+
+const ContradictionAuditOutputSchema = z.object({
+  contradictions: z.array(z.object({
+    type: z.enum(["factual", "theological", "instructional", "tonal"]),
+    description: z.string().min(1),
+    locationA: z.string().min(1),
+    excerptA: z.string().default(""),
+    locationB: z.string().min(1),
+    excerptB: z.string().default(""),
+    severity: z.enum(["minor", "major"]),
+    recommendation: z.string().min(1),
+  }).strict()).default([]),
+}).strict();
+
 // ── Segment extraction ────────────────────────────────────────────────────────
 
 function extractSegments(manifest: EbookManifest): SegmentMeta[] {
@@ -147,10 +196,24 @@ function extractSegments(manifest: EbookManifest): SegmentMeta[] {
     { label: "Preface", text: manifest.frontMatter.preface ?? "" },
     { label: "Introduction", text: manifest.frontMatter.introduction ?? "" },
     { label: "Conclusion", text: manifest.frontMatter.conclusion ?? "" },
+    { label: "About the Author", text: manifest.frontMatter.aboutAuthor ?? "" },
+    { label: "Resources", text: (manifest.frontMatter.resourcesList ?? []).join("\n") },
   ];
   for (const f of frontFields) {
     if (f.text.trim().length > 80) {
       segs.push({ id: `fm-${id++}`, chapterNumber: 0, sectionNumber: null, location: `Front Matter – ${f.label}`, text: f.text });
+    }
+  }
+
+  for (const [index, section] of (manifest.frontMatter.additionalSections ?? []).entries()) {
+    if (section.title.trim() && section.content.trim().length > 80) {
+      segs.push({
+        id: `fm-additional-${index}`,
+        chapterNumber: 0,
+        sectionNumber: null,
+        location: `Front Matter – ${section.title}`,
+        text: section.content,
+      });
     }
   }
 
@@ -169,8 +232,56 @@ function extractSegments(manifest: EbookManifest): SegmentMeta[] {
         });
       }
     }
-    if (chapter.conclusion?.trim().length ?? 0 > 80) {
-      segs.push({ id: `c${chapter.number}-conc`, chapterNumber: chapter.number, sectionNumber: null, location: `Ch ${chapter.number} conclusion`, text: chapter.conclusion! });
+  }
+
+  for (const [index, section] of (manifest.backMatter?.additionalSections ?? []).entries()) {
+    if (section.title.trim() && section.content.trim().length > 80) {
+      segs.push({
+        id: `bm-additional-${index}`,
+        chapterNumber: -1,
+        sectionNumber: null,
+        location: `Back Matter – ${section.title}`,
+        text: section.content,
+      });
+    }
+  }
+
+  const backMatter = manifest.backMatter;
+  if (backMatter) {
+    for (const entry of backMatter.glossary ?? []) {
+      const text = `${entry.term}: ${entry.definition}`;
+      if (text.trim().length > 80) {
+        segs.push({
+          id: `bm-glossary-${id++}`,
+          chapterNumber: -1,
+          sectionNumber: null,
+          location: `Back Matter – Glossary: ${entry.term}`,
+          text,
+        });
+      }
+    }
+    for (const guide of backMatter.readingGroupGuide ?? []) {
+      const text = guide.questions.join("\n");
+      if (text.trim().length > 80) {
+        segs.push({
+          id: `bm-guide-${guide.chapterNumber}`,
+          chapterNumber: -1,
+          sectionNumber: null,
+          location: `Back Matter – Study Questions: Chapter ${guide.chapterNumber}`,
+          text,
+        });
+      }
+    }
+    for (const [index, section] of (backMatter.recommendedResources ?? []).entries()) {
+      if (section.trim().length > 80) {
+        segs.push({
+          id: `bm-resource-${index}`,
+          chapterNumber: -1,
+          sectionNumber: null,
+          location: `Back Matter – Recommended Resource ${index + 1}`,
+          text: section,
+        });
+      }
     }
   }
 
@@ -274,7 +385,8 @@ function findLexicalRepetitions(segments: SegmentMeta[]): Omit<RepetitionEntry, 
       const context = match.length > 130 ? match.slice(0, 127) + "…" : match;
       if (!phraseMap.has(phrase)) phraseMap.set(phrase, { count: 0, occurrences: [] });
       const entry = phraseMap.get(phrase)!;
-      entry.count++;
+      const occurrenceCount = seg.text.match(new RegExp(re.source, "gi"))?.length ?? 0;
+      entry.count += occurrenceCount;
       entry.occurrences.push({ chapterNumber: seg.chapterNumber, sectionNumber: seg.sectionNumber, location: seg.location, context });
     }
   }
@@ -289,13 +401,8 @@ function findLexicalRepetitions(segments: SegmentMeta[]): Omit<RepetitionEntry, 
 // ── Overused words ────────────────────────────────────────────────────────────
 
 function findOverusedWords(manifest: EbookManifest): Omit<OverusedWord, "alternatives">[] {
-  const total = manifest.totalWordCount || 1;
-  const fullText = [
-    manifest.frontMatter.preface ?? "",
-    manifest.frontMatter.introduction ?? "",
-    manifest.frontMatter.conclusion ?? "",
-    ...manifest.chapters.flatMap((c) => [c.intro ?? "", ...c.sections.map((s) => s.body ?? ""), c.conclusion ?? ""]),
-  ].join(" ");
+  const fullText = extractSegments(manifest).map((segment) => segment.text).join(" ");
+  const total = Math.max(1, fullText.split(/\s+/).filter(Boolean).length);
 
   const counts = new Map<string, number>();
   for (const w of fullText.toLowerCase().replace(/[^a-z\s]/g, " ").split(/\s+/)) {
@@ -473,14 +580,13 @@ async function runScriptureAudit(segments: SegmentMeta[]): Promise<ScriptureIssu
   if (relevant.length === 0) return [];
 
   const index = relevant
-    .map((s) => `[${s.location}]\n${s.text.trim().slice(0, 600)}${s.text.length > 600 ? "\u2026" : ""}`)
+    .map((s) => `[${s.location}]\n${createAuditExcerpt(s.text, 1000)}`)
     .join("\n\n---\n\n");
 
-  try {
-    const { text } = await generateText({
-      model: deepSeekReasonerModel,
-      maxTokens: 4096,
-      prompt: `You are a manuscript editor specializing in scripture citation accuracy. Review the passages below and identify ONLY genuine issues:
+  const { text } = await generateText({
+    model: deepSeekReasonerModel,
+    maxTokens: 4096,
+    prompt: `You are a manuscript editor specializing in scripture citation accuracy. Review the passages below and identify ONLY genuine issues:
 
 1. MISSING TRANSLATION: A scripture is quoted with a Bible reference but no translation label (NIV, KJV, ESV, NKJV, NLT, NASB, AMP, MSG, etc.)
 2. MALFORMED REFERENCE: A Bible reference with missing verse number, missing space, or non-standard format (e.g. "John3:16" or "John 3" without a verse)
@@ -502,14 +608,25 @@ Return ONLY valid JSON — no markdown fences, no commentary:
     }
   ]
 }`,
-    });
-    const match = text.match(/\{[\s\S]*\}/);
-    if (!match) return [];
-    const parsed = JSON.parse(match[0]) as { issues?: ScriptureIssue[] };
-    return Array.isArray(parsed.issues) ? parsed.issues : [];
-  } catch {
-    return [];
-  }
+  });
+  const match = text.match(/\{[\s\S]*\}/);
+  if (!match) throw new Error("Scripture audit returned invalid JSON.");
+  return ScriptureAuditOutputSchema.parse(JSON.parse(match[0]) as unknown).issues;
+}
+
+function createAuditExcerpt(text: string, limit: number): string {
+  const normalized = text.trim();
+  if (normalized.length <= limit) return normalized;
+  const startLength = Math.floor(limit * 0.4);
+  const middleLength = Math.floor(limit * 0.2);
+  const endLength = limit - startLength - middleLength;
+  const middleStart = Math.max(startLength, Math.floor((normalized.length - middleLength) / 2));
+  const endStart = Math.max(middleStart + middleLength, normalized.length - endLength);
+  return [
+    normalized.slice(0, startLength),
+    normalized.slice(middleStart, middleStart + middleLength),
+    normalized.slice(endStart),
+  ].join("\n[…]\n");
 }
 
 // ── LLM: semantic concept duplicate analysis ──────────────────────────────────
@@ -526,9 +643,9 @@ async function runSemanticAudit(
   phraseAmendments: Array<{ phrase: string; reason: string; alternatives: string[] }>;
   wordAmendments: Array<{ word: string; alternatives: string[] }>;
 }> {
-  // Build a compact section index for the LLM — location label + first 280 chars
+  const excerptLimit = Math.max(300, Math.min(1000, Math.floor(48_000 / Math.max(1, segments.length))));
   const sectionIndex = segments
-    .map((s, i) => `[${i + 1}] ${s.location}\n${s.text.trim().slice(0, 300)}${s.text.length > 300 ? "…" : ""}`)
+    .map((s, i) => `[${i + 1}] ${s.location}\n${createAuditExcerpt(s.text, excerptLimit)}`)
     .join("\n\n");
 
   // Summarise algorithmically flagged pairs so the LLM knows where to look
@@ -558,8 +675,11 @@ ${lexicalText || "None"}
 ${wordText || "None"}
 
 SECTION TYPE RULES — apply these when deciding recommendations:
+- PREFACE: author motivation and relevant personal context; do not repeat the book's promise or teach chapter content.
+- INTRODUCTION: reader need, book promise, scope, and brief roadmap; do not fully teach examples developed in chapters.
+- CONCLUSION: synthesis, implications, and next steps; do not repeat the introduction or recap every chapter.
 - BODY SECTIONS (location format "Ch X § Y: Heading") are the PRIMARY HOME for a concept. When a concept is fully developed in a body section, that section is PROTECTED — do not recommend cutting it.
-- FRAME SECTIONS ("Front Matter – Introduction", "Front Matter – Conclusion", "Ch N intro", "Ch N conclusion") must only briefly mention/summarise a concept — they are NOT the place for full development. If a frame section duplicates content that already has a full treatment in a body section, the frame section is the CUT TARGET, not the body section.
+- FRAME SECTIONS ("Front Matter – Preface", "Front Matter – Introduction", "Front Matter – Conclusion", "Ch N intro", "Ch N conclusion") must only briefly mention/summarise a concept — they are NOT the place for full development. If a frame section duplicates content that already has a full treatment in a body section, the frame section is the CUT TARGET, not the body section.
 - When a concept appears in both a body section and a frame section, the recommendation must always be: trim the frame section to a one-sentence mention and keep the body section intact.
 
 Your tasks:
@@ -589,18 +709,10 @@ Respond ONLY with valid JSON (no markdown fences, no commentary outside the JSON
   ]
 }`;
 
-  try {
-    const { text } = await generateText({ model: deepSeekReasonerModel, prompt, maxTokens: 12000 });
-    const jsonMatch = text.match(/\{[\s\S]*\}/);
-    if (!jsonMatch) return { conceptDuplicates: [], phraseAmendments: [], wordAmendments: [] };
-    return JSON.parse(jsonMatch[0]) as {
-      conceptDuplicates: ConceptDuplicate[];
-      phraseAmendments: Array<{ phrase: string; reason: string; alternatives: string[] }>;
-      wordAmendments: Array<{ word: string; alternatives: string[] }>;
-    };
-  } catch {
-    return { conceptDuplicates: [], phraseAmendments: [], wordAmendments: [] };
-  }
+  const { text } = await generateText({ model: deepSeekReasonerModel, prompt, maxTokens: 12000 });
+  const jsonMatch = text.match(/\{[\s\S]*\}/);
+  if (!jsonMatch) throw new Error("Semantic audit returned invalid JSON.");
+  return SemanticAuditOutputSchema.parse(JSON.parse(jsonMatch[0]) as unknown);
 }
 
 // ── Upgrade 9: Cross-chapter contradiction detection ─────────────────────────
@@ -611,6 +723,7 @@ async function runContradictionAudit(segments: SegmentMeta[]): Promise<Contradic
   // Only cross-chapter — group by chapter and take the most content-rich sections
   const byChapter = new Map<number, SegmentMeta[]>();
   for (const seg of segments) {
+    if (seg.chapterNumber < 1) continue;
     if (!byChapter.has(seg.chapterNumber)) byChapter.set(seg.chapterNumber, []);
     byChapter.get(seg.chapterNumber)!.push(seg);
   }
@@ -620,18 +733,19 @@ async function runContradictionAudit(segments: SegmentMeta[]): Promise<Contradic
   const claimIndex = Array.from(byChapter.entries())
     .map(([chNum, segs]) => {
       const claims = segs.map((s) => {
-        const firstSentence = s.text.split(/(?<=[.!?])\s+/).filter(Boolean)[0] ?? "";
-        return `  [${s.location}]: "${firstSentence.slice(0, 160).trim()}"`;
+        const sentences = s.text.split(/(?<=[.!?])\s+/).filter(Boolean);
+        const selected = [sentences[0], sentences[Math.floor(sentences.length / 2)], sentences.at(-1)]
+          .filter((sentence, index, list): sentence is string => Boolean(sentence) && list.indexOf(sentence) === index);
+        return `  [${s.location}]: "${selected.map((sentence) => sentence.slice(0, 160).trim()).join(" … ")}"`;
       }).join("\n");
       return `Chapter ${chNum}:\n${claims}`;
     })
     .join("\n\n");
 
-  try {
-    const { text } = await generateText({
-      model: deepSeekReasonerModel,
-      maxTokens: 6000,
-      prompt: `You are a developmental editor checking a multi-chapter book manuscript for logical contradictions across chapters.
+  const { text } = await generateText({
+    model: deepSeekReasonerModel,
+    maxTokens: 6000,
+    prompt: `You are a developmental editor checking a multi-chapter book manuscript for logical contradictions across chapters.
 
 A contradiction is when Chapter A asserts X and Chapter B asserts the logical opposite or a significantly incompatible claim about the same topic, scripture, principle, or instruction.
 
@@ -664,14 +778,10 @@ Return ONLY valid JSON — no markdown fences:
     }
   ]
 }`,
-    });
-    const match = text.match(/\{[\s\S]*\}/);
-    if (!match) return [];
-    const parsed = JSON.parse(match[0]) as { contradictions?: ContradictionIssue[] };
-    return Array.isArray(parsed.contradictions) ? parsed.contradictions : [];
-  } catch {
-    return [];
-  }
+  });
+  const match = text.match(/\{[\s\S]*\}/);
+  if (!match) throw new Error("Contradiction audit returned invalid JSON.");
+  return ContradictionAuditOutputSchema.parse(JSON.parse(match[0]) as unknown).contradictions;
 }
 
 // ── Route ─────────────────────────────────────────────────────────────────────
@@ -712,11 +822,26 @@ export async function POST(req: NextRequest) {
     const readabilityMetrics = computeReadabilityMetrics(segments);
 
     // Layer 6 + 7 + 8: LLM semantic audit, scripture audit, contradiction audit run in parallel
-    const [llm, scriptureIssues, contradictions] = await Promise.all([
+    const [llmResult, scriptureResult, contradictionResult] = await Promise.allSettled([
       runSemanticAudit(segments, similarPairs, lexicalRepetitions, overusedWordsRaw),
       runScriptureAudit(segments),
       runContradictionAudit(segments),
     ]);
+    const auditWarnings: string[] = [];
+    const llm = llmResult.status === "fulfilled"
+      ? llmResult.value
+      : { conceptDuplicates: [], phraseAmendments: [], wordAmendments: [] };
+    const scriptureIssues = scriptureResult.status === "fulfilled" ? scriptureResult.value : [];
+    const contradictions = contradictionResult.status === "fulfilled" ? contradictionResult.value : [];
+    if (llmResult.status === "rejected") {
+      auditWarnings.push(`Semantic audit unavailable: ${llmResult.reason instanceof Error ? llmResult.reason.message : "provider or response error"}`);
+    }
+    if (scriptureResult.status === "rejected") {
+      auditWarnings.push(`Scripture audit unavailable: ${scriptureResult.reason instanceof Error ? scriptureResult.reason.message : "provider or response error"}`);
+    }
+    if (contradictionResult.status === "rejected") {
+      auditWarnings.push(`Contradiction audit unavailable: ${contradictionResult.reason instanceof Error ? contradictionResult.reason.message : "provider or response error"}`);
+    }
 
     // Merge LLM amendments into lexical repetitions
     const repetitions: RepetitionEntry[] = lexicalRepetitions.map((r) => {
@@ -746,6 +871,7 @@ export async function POST(req: NextRequest) {
       totalScriptureIssues: scriptureIssues.length,
       totalContradictions: contradictions.length,
       totalPassiveVoiceHits: 0, // populated client-side from write-section passiveVoiceCount aggregate
+      auditWarnings,
     };
 
     return NextResponse.json(report, { status: 200 });
