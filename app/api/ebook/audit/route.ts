@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { generateText } from "ai";
+import { generateObject } from "ai";
 import { deepSeekReasonerModel } from "@/lib/ai-providers";
 import { z } from "zod";
 import { EbookManifestSchema } from "@/lib/schemas/ebook";
@@ -586,8 +586,10 @@ async function runScriptureAudit(segments: SegmentMeta[]): Promise<ScriptureIssu
     .map((s) => `[${s.location}]\n${createAuditExcerpt(s.text, 1000)}`)
     .join("\n\n---\n\n");
 
-  const { text } = await generateText({
+  const { object } = await generateObject({
     model: deepSeekReasonerModel,
+    schema: ScriptureAuditOutputSchema,
+    mode: "json",
     maxTokens: 4096,
     prompt: `You are a manuscript editor specializing in scripture citation accuracy. Review the passages below and identify ONLY genuine issues:
 
@@ -612,9 +614,7 @@ Return ONLY valid JSON — no markdown fences, no commentary:
   ]
 }`,
   });
-  const match = text.match(/\{[\s\S]*\}/);
-  if (!match) throw new Error("Scripture audit returned invalid JSON.");
-  return ScriptureAuditOutputSchema.parse(JSON.parse(match[0]) as unknown).issues;
+  return object.issues;
 }
 
 function createAuditExcerpt(text: string, limit: number): string {
@@ -713,10 +713,14 @@ Respond ONLY with valid JSON (no markdown fences, no commentary outside the JSON
   ]
 }`;
 
-  const { text } = await generateText({ model: deepSeekReasonerModel, prompt, maxTokens: 12000 });
-  const jsonMatch = text.match(/\{[\s\S]*\}/);
-  if (!jsonMatch) throw new Error("Semantic audit returned invalid JSON.");
-  return SemanticAuditOutputSchema.parse(JSON.parse(jsonMatch[0]) as unknown);
+  const { object } = await generateObject({
+    model: deepSeekReasonerModel,
+    schema: SemanticAuditOutputSchema,
+    mode: "json",
+    prompt,
+    maxTokens: 12000,
+  });
+  return object;
 }
 
 // ── Upgrade 9: Cross-chapter contradiction detection ─────────────────────────
@@ -746,8 +750,10 @@ async function runContradictionAudit(segments: SegmentMeta[]): Promise<Contradic
     })
     .join("\n\n");
 
-  const { text } = await generateText({
+  const { object } = await generateObject({
     model: deepSeekReasonerModel,
+    schema: ContradictionAuditOutputSchema,
+    mode: "json",
     maxTokens: 6000,
     prompt: `You are a developmental editor checking a multi-chapter book manuscript for logical contradictions across chapters.
 
@@ -783,9 +789,7 @@ Return ONLY valid JSON — no markdown fences:
   ]
 }`,
   });
-  const match = text.match(/\{[\s\S]*\}/);
-  if (!match) throw new Error("Contradiction audit returned invalid JSON.");
-  return ContradictionAuditOutputSchema.parse(JSON.parse(match[0]) as unknown).contradictions;
+  return object.contradictions;
 }
 
 // ── Route ─────────────────────────────────────────────────────────────────────

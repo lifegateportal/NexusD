@@ -820,6 +820,7 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
   const [pendingMatter, setPendingMatter] = useState<PendingMatter | null>(null);
   const [auditReport, setAuditReport] = useState<BookAuditReport | null>(null);
   const [auditRepairStatuses, setAuditRepairStatuses] = useState<Record<string, AuditRepairStatus>>({});
+  const [auditPanelCollapsed, setAuditPanelCollapsed] = useState(false);
   const [undoSnapshot, setUndoSnapshot] = useState<EbookUndoSnapshot | null>(null);
   const [showProposalDiff, setShowProposalDiff] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
@@ -1787,6 +1788,7 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
         const json = await res.json() as BookAuditReport & { error?: string };
         if (!res.ok || json.error) throw new Error(json.error ?? `Request failed (${res.status})`);
         setAuditReport(json);
+        setAuditPanelCollapsed(false);
         setMessages((current) => [...current, { role: "assistant", content: formatAuditReport(json) }]);
         return;
       }
@@ -2757,17 +2759,30 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
               </div>
             )}
             {auditReport && (
-              <div className="mb-3 max-h-[45dvh] overflow-y-auto rounded-2xl border border-emerald-500/30 bg-emerald-950/20 p-4">
+              <div className={`mb-3 rounded-2xl border border-emerald-500/30 bg-emerald-950/20 p-4 ${auditPanelCollapsed ? "" : "max-h-[45dvh] overflow-y-auto"}`}>
                 <div className="flex items-start justify-between gap-3">
                   <div>
                     <p className="text-xs font-bold uppercase tracking-widest text-emerald-300">NexusLM audit findings</p>
-                    <p className="mt-1 text-xs text-emerald-100/70">Select a finding to send a focused repair request through the preview workflow.</p>
+                    {!auditPanelCollapsed && (
+                      <p className="mt-1 text-xs text-emerald-100/70">Select a finding to send a focused repair request through the preview workflow.</p>
+                    )}
                   </div>
-                  <button type="button" onClick={() => setAuditReport(null)} className="min-h-12 rounded-xl border border-slate-700 px-3 text-xs font-semibold text-slate-300">
-                    Dismiss
-                  </button>
+                  <div className="flex shrink-0 gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setAuditPanelCollapsed((collapsed) => !collapsed)}
+                      aria-expanded={!auditPanelCollapsed}
+                      aria-controls="nexuslm-audit-findings"
+                      className="min-h-12 rounded-xl border border-slate-700 px-3 text-xs font-semibold text-slate-300"
+                    >
+                      {auditPanelCollapsed ? "Expand" : "Collapse"}
+                    </button>
+                    <button type="button" onClick={() => setAuditReport(null)} className="min-h-12 rounded-xl border border-slate-700 px-3 text-xs font-semibold text-slate-300">
+                      Dismiss
+                    </button>
+                  </div>
                 </div>
-                <div className="mt-3 space-y-2">
+                {!auditPanelCollapsed && <div id="nexuslm-audit-findings" className="mt-3 space-y-2">
                   {auditReport.conceptDuplicates.map((duplicate, index) => (
                     <div key={`duplicate-${index}`} className="rounded-xl border border-rose-500/25 bg-rose-950/20 p-3">
                       <p className="text-xs font-semibold text-rose-200">{duplicate.title}</p>
@@ -2834,7 +2849,7 @@ export function NexusLMPanel({ conversationKey, manifest, pipelineSnapshot, tran
                       Partial audit: {warning}
                     </p>
                   ))}
-                </div>
+                </div>}
               </div>
             )}
             {lastGeneralRequest && !loading && (
