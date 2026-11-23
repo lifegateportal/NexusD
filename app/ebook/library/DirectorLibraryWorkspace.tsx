@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 import { NexusNav } from "@/app/components/NexusNav";
 import DirectorFaqs from "@/app/ebook/faqs/DirectorFaqs";
 import VideoWorkspace from "@/app/ebook/videos/VideoWorkspace";
@@ -31,6 +32,12 @@ export default function DirectorLibraryWorkspace({
             <p className="mt-3 max-w-3xl text-sm leading-relaxed text-slate-400 sm:text-base">
               Manage published video content and curated answers from one workspace.
             </p>
+            <Link
+              href="/ebook/library/trailers"
+              className="mt-4 inline-flex min-h-12 items-center rounded-xl border border-cyan-700 px-4 text-sm font-semibold text-cyan-100"
+            >
+              Open Trailer Studio
+            </Link>
           </header>
 
           <div role="tablist" aria-label="Library tools" className="mb-5 flex gap-2 border-b border-slate-800">

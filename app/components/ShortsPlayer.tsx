@@ -4,36 +4,12 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, PointerEvent } from "react";
 import type { ShortProject, ShortCropKeyframe, ShortFrameSlot, ShortOverlay } from "@/lib/schemas/video-short";
 import { buildTimedCaptionCues } from "@/lib/short-caption-cues";
+import { loadYouTubeApi } from "@/lib/youtube-iframe-api";
+import type { YouTubePlayerInstance } from "@/lib/youtube-iframe-api";
 import {
   getRemovedTranscriptWordIndexes,
   getTranscriptCutAtTime,
 } from "@/lib/short-transcript-edits";
-
-type YouTubePlayerInstance = {
-  destroy(): void;
-  getCurrentTime(): number;
-  getIframe(): HTMLIFrameElement;
-  getPlayerState(): number;
-  unloadModule(moduleName: string): void;
-  pauseVideo(): void;
-  playVideo(): void;
-  seekTo(seconds: number, allowSeekAhead: boolean): void;
-};
-
-type YouTubeApi = {
-  Player: new (
-    element: HTMLElement,
-    options: Record<string, unknown>,
-  ) => YouTubePlayerInstance;
-  PlayerState: { PLAYING: number };
-};
-
-declare global {
-  interface Window {
-    YT?: YouTubeApi;
-    onYouTubeIframeAPIReady?: () => void;
-  }
-}
 
 type Props = {
   project: ShortProject;
@@ -53,38 +29,6 @@ type PreviewStyle = CSSProperties & {
   "--preview-width-mobile"?: string;
   "--preview-width-desktop"?: string;
 };
-
-let youtubeApiPromise: Promise<void> | null = null;
-
-function loadYouTubeApi(): Promise<void> {
-  if (typeof window.YT?.Player === "function") return Promise.resolve();
-  if (!youtubeApiPromise) {
-    youtubeApiPromise = new Promise((resolve, reject) => {
-      const previousCallback = window.onYouTubeIframeAPIReady;
-      const timeout = window.setTimeout(() => reject(new Error("YouTube player API did not load.")), 15000);
-      window.onYouTubeIframeAPIReady = () => {
-        try {
-          previousCallback?.();
-        } finally {
-          window.clearTimeout(timeout);
-          resolve();
-        }
-      };
-      let script = document.querySelector<HTMLScriptElement>("script[data-youtube-iframe-api]");
-      if (!script) {
-        script = document.createElement("script");
-        script.src = "https://www.youtube.com/iframe_api";
-        script.dataset.youtubeIframeApi = "true";
-        script.onerror = () => {
-          window.clearTimeout(timeout);
-          reject(new Error("Could not load the YouTube player API."));
-        };
-        document.head.appendChild(script);
-      }
-    });
-  }
-  return youtubeApiPromise;
-}
 
 function framePosition(slot: ShortFrameSlot, timeSeconds: number): ShortCropKeyframe {
   const frames = [...slot.keyframes].sort((a, b) => a.timeSeconds - b.timeSeconds);
