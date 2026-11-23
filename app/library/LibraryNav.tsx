@@ -6,6 +6,7 @@ const links = [
   { href: "/library/faqs", label: "FAQs", icon: "?" },
   { href: "/library/videos", label: "Videos", icon: "▷" },
   { href: "/library/shorts", label: "Shorts", icon: "▸" },
+  { href: "/library/trailers", label: "Trailers", icon: "▶" },
 ];
 
 export default function LibraryNav() {

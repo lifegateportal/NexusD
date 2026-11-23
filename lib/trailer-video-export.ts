@@ -1,4 +1,5 @@
 import { TrailerProjectSchema, type TrailerProject } from "@/lib/schemas/trailer";
+import { getTrailerMomentFrame } from "@/lib/trailer-utils";
 
 const OUTPUT_FPS = 30;
 const MAX_EXPORT_MS = 6 * 60 * 1000;
@@ -77,14 +78,24 @@ function drawTrailerFrame(
   context.fillRect(0, 0, width, height);
 
   if (video.videoWidth > 0 && video.videoHeight > 0) {
-    const scale = project.fit === "cover"
-      ? Math.max(width / video.videoWidth, height / video.videoHeight) * project.zoom
-      : Math.min(width / video.videoWidth, height / video.videoHeight) * project.zoom;
-    const drawWidth = video.videoWidth * scale;
-    const drawHeight = video.videoHeight * scale;
-    const left = (width - drawWidth) * project.cropX / 100;
-    const top = (height - drawHeight) * project.cropY / 100;
+    const frame = getTrailerMomentFrame(project, momentIndex);
+    const baseScale = frame.fit === "cover"
+      ? Math.max(width / video.videoWidth, height / video.videoHeight)
+      : Math.min(width / video.videoWidth, height / video.videoHeight);
+    const baseWidth = video.videoWidth * baseScale;
+    const baseHeight = video.videoHeight * baseScale;
+    const drawWidth = baseWidth * frame.zoom;
+    const drawHeight = baseHeight * frame.zoom;
+    const baseLeft = (width - baseWidth) * frame.cropX / 100;
+    const baseTop = (height - baseHeight) * frame.cropY / 100;
+    const left = width / 2 + (baseLeft - width / 2) * frame.zoom;
+    const top = height / 2 + (baseTop - height / 2) * frame.zoom;
+    context.save();
+    context.beginPath();
+    context.rect(0, 0, width, height);
+    context.clip();
     context.drawImage(video, left, top, drawWidth, drawHeight);
+    context.restore();
   }
 
   const currentMoment = project.moments[momentIndex];
@@ -232,6 +243,7 @@ export async function exportTrailerVideo(
     const startedAt = performance.now();
     let activeMomentIndex = 0;
     let completedDuration = 0;
+    let pendingSeek = false;
     const drawFrame = () => {
       if (performance.now() - startedAt > MAX_EXPORT_MS) {
         exportError = new Error("Trailer export took too long. Keep this tab open and in the foreground, then try again.");
@@ -239,7 +251,7 @@ export async function exportTrailerVideo(
         return;
       }
       try {
-        if (video.currentTime >= project.moments[activeMomentIndex].endSeconds) {
+        if (!pendingSeek && !video.seeking && video.currentTime >= project.moments[activeMomentIndex].endSeconds) {
           completedDuration += project.moments[activeMomentIndex].endSeconds
             - project.moments[activeMomentIndex].startSeconds;
           activeMomentIndex += 1;
@@ -247,11 +259,18 @@ export async function exportTrailerVideo(
             stopRecorder();
             return;
           }
-          video.pause();
-          void seekVideoTo(video, project.moments[activeMomentIndex].startSeconds).then(() => video.play()).catch((error: unknown) => {
+          pendingSeek = true;
+          void seekVideoTo(video, project.moments[activeMomentIndex].startSeconds).then(() => {
+            pendingSeek = false;
+          }).catch((error: unknown) => {
             exportError = error instanceof Error ? error : new Error("The source video could not seek to the next trailer moment.");
             stopRecorder();
           });
+        }
+
+        if (pendingSeek || video.seeking || video.readyState < 2) {
+          animationFrame = requestAnimationFrame(drawFrame);
+          return;
         }
 
         drawTrailerFrame(context, video, project, activeMomentIndex, width, height);

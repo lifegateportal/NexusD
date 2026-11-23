@@ -1,10 +1,12 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import type { PointerEvent } from "react";
 import type { TrailerMoment } from "@/lib/schemas/trailer";
 import type { TrailerProject } from "@/lib/schemas/trailer";
 import { loadYouTubeApi } from "@/lib/youtube-iframe-api";
 import type { YouTubePlayerInstance } from "@/lib/youtube-iframe-api";
+import { getTrailerMomentFrame } from "@/lib/trailer-utils";
 
 type YouTubePlayerStateChange = { data: number };
 
@@ -14,6 +16,7 @@ type Props = {
   playRequest: { index: number; nonce: number } | null;
   activeMoment: number;
   onActiveMomentChange: (index: number) => void;
+  onCropChange: (cropX: number, cropY: number) => void;
   onError: (message: string) => void;
 };
 
@@ -23,11 +26,13 @@ export default function TrailerVideoPreview({
   playRequest,
   activeMoment,
   onActiveMomentChange,
+  onCropChange,
   onError,
 }: Props) {
   const playerTargetRef = useRef<HTMLDivElement>(null);
   const playerRef = useRef<YouTubePlayerInstance | null>(null);
   const localVideoRef = useRef<HTMLVideoElement>(null);
+  const cropDragRef = useRef<{ x: number; y: number; clientX: number; clientY: number; width: number; height: number } | null>(null);
   const momentsRef = useRef<TrailerMoment[]>(project.moments);
   const activeMomentRef = useRef(0);
   const [playerReady, setPlayerReady] = useState(false);
@@ -44,7 +49,7 @@ export default function TrailerVideoPreview({
   };
 
   useEffect(() => {
-    if (!project.source.videoId || !playerTargetRef.current) return;
+    if (!project.source.videoId || localVideoUrl || !playerTargetRef.current) return;
     let active = true;
     setPlayerReady(false);
     setPlayerError("");
@@ -57,7 +62,8 @@ export default function TrailerVideoPreview({
         videoId: project.source.videoId!,
         playerVars: {
           autoplay: 0,
-          controls: 1,
+          cc_load_policy: 0,
+          controls: 0,
           enablejsapi: 1,
           playsinline: 1,
           rel: 0,
@@ -71,6 +77,8 @@ export default function TrailerVideoPreview({
             iframe.referrerPolicy = "strict-origin-when-cross-origin";
             iframe.allow = "accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share";
             iframe.allowFullscreen = true;
+            iframe.style.pointerEvents = "none";
+            playerRef.current.unloadModule("captions");
             setPlayerReady(true);
           },
           onStateChange: (event: YouTubePlayerStateChange) => setPlaying(event.data === 1),
@@ -95,13 +103,26 @@ export default function TrailerVideoPreview({
       setPlayerReady(false);
       setPlaying(false);
     };
-  }, [onError, project.source.videoId, project.source.videoTitle]);
+  }, [localVideoUrl, onError, project.source.videoId, project.source.videoTitle]);
 
   useEffect(() => {
     if (!playRequest || playRequest.nonce === 0) return;
     const moment = momentsRef.current[playRequest.index];
     if (!moment) return;
     setMoment(playRequest.index);
+    if (localVideoUrl) {
+      if (!localVideoReady) return;
+      const video = localVideoRef.current;
+      if (!video) {
+        onError("Upload or re-select the source video to preview this trailer.");
+        return;
+      }
+      video.currentTime = moment.startSeconds;
+      void video.play().catch((error: unknown) => {
+        onError(error instanceof Error ? error.message : "The uploaded source could not play.");
+      });
+      return;
+    }
     if (project.source.videoId) {
       const player = playerRef.current;
       if (!player || !playerReady) {
@@ -122,10 +143,10 @@ export default function TrailerVideoPreview({
     void video.play().catch((error: unknown) => {
       onError(error instanceof Error ? error.message : "The uploaded source could not play.");
     });
-  }, [localVideoReady, onError, playRequest, playerReady, project.source.videoId]);
+  }, [localVideoReady, localVideoUrl, onError, playRequest, playerReady, project.source.videoId]);
 
   useEffect(() => {
-    if (!project.source.videoId || !playing) return;
+    if (!project.source.videoId || localVideoUrl || !playing) return;
     const interval = window.setInterval(() => {
       const player = playerRef.current;
       const moment = momentsRef.current[activeMomentRef.current];
@@ -141,12 +162,12 @@ export default function TrailerVideoPreview({
       player.seekTo(momentsRef.current[nextIndex].startSeconds, true);
     }, 100);
     return () => window.clearInterval(interval);
-  }, [onActiveMomentChange, playing, project.source.videoId]);
+  }, [localVideoUrl, onActiveMomentChange, playing, project.source.videoId]);
 
   function handleLocalTimeUpdate() {
     const video = localVideoRef.current;
     const moment = momentsRef.current[activeMomentRef.current];
-    if (!video || !moment || video.paused || video.currentTime < moment.endSeconds - 0.08) return;
+    if (!video || !moment || video.paused || video.seeking || video.currentTime < moment.endSeconds - 0.08) return;
     const nextIndex = activeMomentRef.current + 1;
     if (nextIndex >= momentsRef.current.length) {
       video.pause();
@@ -159,10 +180,11 @@ export default function TrailerVideoPreview({
 
   const [ratioWidth, ratioHeight] = project.aspectRatio.split(":").map(Number);
   const ratio = ratioWidth / ratioHeight;
+  const frame = getTrailerMomentFrame(project, activeMoment);
   const sourceRatio = 16 / 9;
   let widthPercent = 100;
   let heightPercent = 100;
-  if (project.fit === "cover") {
+  if (frame.fit === "cover") {
     if (ratio < sourceRatio) widthPercent = sourceRatio / ratio * 100;
     else heightPercent = ratio / sourceRatio * 100;
   } else if (ratio < sourceRatio) {
@@ -170,56 +192,85 @@ export default function TrailerVideoPreview({
   } else {
     widthPercent = sourceRatio / ratio * 100;
   }
-  widthPercent *= project.zoom;
-  heightPercent *= project.zoom;
+  widthPercent *= frame.zoom;
+  heightPercent *= frame.zoom;
   const playerStyle = {
     position: "absolute" as const,
     width: `${widthPercent}%`,
     height: `${heightPercent}%`,
     maxWidth: "none",
-    left: `${(100 - widthPercent) * project.cropX / 100}%`,
-    top: `${(100 - heightPercent) * project.cropY / 100}%`,
+    left: `${(100 - widthPercent) * frame.cropX / 100}%`,
+    top: `${(100 - heightPercent) * frame.cropY / 100}%`,
     border: 0,
+    pointerEvents: "none" as const,
   };
 
   useEffect(() => {
-    if (!playerReady || !project.source.videoId) return;
+    if (!playerReady || !project.source.videoId || localVideoUrl) return;
     const iframe = playerRef.current?.getIframe();
     if (iframe) Object.assign(iframe.style, playerStyle);
-  }, [playerReady, project.source.videoId, playerStyle.height, playerStyle.left, playerStyle.top, playerStyle.width]);
+  }, [localVideoUrl, playerReady, project.source.videoId, playerStyle.height, playerStyle.left, playerStyle.top, playerStyle.width]);
 
   useEffect(() => {
     setLocalVideoReady(false);
   }, [localVideoUrl]);
 
+  function startCropDrag(event: PointerEvent<HTMLDivElement>) {
+    if (event.button !== 0) return;
+    const bounds = event.currentTarget.getBoundingClientRect();
+    cropDragRef.current = {
+      x: frame.cropX,
+      y: frame.cropY,
+      clientX: event.clientX,
+      clientY: event.clientY,
+      width: bounds.width,
+      height: bounds.height,
+    };
+    event.currentTarget.setPointerCapture(event.pointerId);
+  }
+
+  function moveCropDrag(event: PointerEvent<HTMLDivElement>) {
+    const drag = cropDragRef.current;
+    if (!drag) return;
+    onCropChange(
+      Math.max(0, Math.min(100, drag.x - (event.clientX - drag.clientX) / drag.width * 100)),
+      Math.max(0, Math.min(100, drag.y - (event.clientY - drag.clientY) / drag.height * 100)),
+    );
+  }
+
   return (
     <div className="space-y-3">
       <div
-        className="relative mx-auto w-full max-w-xl overflow-hidden rounded-xl border border-slate-700 bg-black"
+        className="relative mx-auto w-full max-w-xl touch-none overflow-hidden rounded-xl border border-slate-700 bg-black"
         style={{ aspectRatio: project.aspectRatio.replace(":", "/") }}
+        onPointerDown={startCropDrag}
+        onPointerMove={moveCropDrag}
+        onPointerUp={() => { cropDragRef.current = null; }}
+        onPointerCancel={() => { cropDragRef.current = null; }}
+        aria-label="Drag the video to adjust its crop"
       >
-        {project.source.videoId ? (
-          <div className="absolute inset-0 overflow-hidden">
-            <div ref={playerTargetRef} style={playerStyle} />
-          </div>
-        ) : localVideoUrl ? (
+        {localVideoUrl ? (
           <video
             ref={localVideoRef}
             src={localVideoUrl}
-            controls
             playsInline
             onLoadedMetadata={() => setLocalVideoReady(true)}
             onError={() => onError("The uploaded source could not be decoded for preview. Re-select the source file and try again.")}
             onPlay={() => setPlaying(true)}
             onPause={() => setPlaying(false)}
             onTimeUpdate={handleLocalTimeUpdate}
-            className="absolute inset-0 h-full w-full"
+            className="pointer-events-none absolute inset-0 h-full w-full"
             style={{
-              objectFit: project.fit,
-              objectPosition: `${project.cropX}% ${project.cropY}%`,
-              transform: `scale(${project.zoom})`,
+              objectFit: frame.fit,
+              objectPosition: `${frame.cropX}% ${frame.cropY}%`,
+              transform: `scale(${frame.zoom})`,
+              transformOrigin: "center center",
             }}
           />
+        ) : project.source.videoId ? (
+          <div className="absolute inset-0 overflow-hidden">
+            <div ref={playerTargetRef} style={playerStyle} />
+          </div>
         ) : (
           <div className="flex h-full items-center justify-center p-6 text-center text-sm text-slate-400">
             Upload or re-select a source file to preview it here.
@@ -255,6 +306,16 @@ export default function TrailerVideoPreview({
         <button
           type="button"
           onClick={() => {
+            if (localVideoUrl) {
+              const video = localVideoRef.current;
+              if (!video || !localVideoReady || momentsRef.current.length === 0) return;
+              setMoment(0);
+              video.currentTime = momentsRef.current[0].startSeconds;
+              void video.play().catch((error: unknown) => {
+                onError(error instanceof Error ? error.message : "The uploaded source could not play.");
+              });
+              return;
+            }
             if (project.source.videoId) {
               const player = playerRef.current;
               if (!player || !playerReady) {
@@ -275,7 +336,7 @@ export default function TrailerVideoPreview({
             });
           }}
           disabled={project.moments.length === 0 || (
-            project.source.videoId ? !playerReady : !localVideoReady
+            localVideoUrl ? !localVideoReady : project.source.videoId ? !playerReady : true
           )}
           className="min-h-12 rounded-lg bg-cyan-300 px-4 text-sm font-bold text-slate-950 disabled:opacity-50"
         >
@@ -293,7 +354,7 @@ export default function TrailerVideoPreview({
           Pause
         </button>
         <span role="status" className="text-xs text-slate-400">
-          {playerError || (playerReady || localVideoUrl ? `Moment ${activeMoment + 1} of ${project.moments.length}` : "Loading embedded player…")}
+          {playerError || (localVideoReady || playerReady ? `Moment ${activeMoment + 1} of ${project.moments.length}` : "Loading video…")}
         </span>
       </div>
     </div>

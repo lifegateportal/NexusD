@@ -4,14 +4,25 @@ import {
   deleteTrailer,
   hasTrailerStorageConfiguration,
   listTrailers,
+  publishTrailer,
   saveTrailer,
+  unpublishTrailer,
 } from "@/lib/trailer-store";
 import { TrailerProjectSchema, TrailerSlugSchema } from "@/lib/schemas/trailer";
+import { ShortAspectRatioSchema } from "@/lib/schemas/video-short";
 
 export const runtime = "nodejs";
 
 const ActionSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("save"), project: TrailerProjectSchema }).strict(),
+  z.object({
+    action: z.literal("publish"),
+    slug: TrailerSlugSchema,
+    title: z.string().trim().min(1).max(120),
+    videoUrl: z.string().url(),
+    aspectRatio: ShortAspectRatioSchema,
+  }).strict(),
+  z.object({ action: z.literal("unpublish"), slug: TrailerSlugSchema }).strict(),
   z.object({ action: z.literal("delete"), slug: TrailerSlugSchema }).strict(),
 ]);
 
@@ -57,11 +68,23 @@ export async function POST(request: NextRequest) {
   }
 
   try {
-    if (action.action === "save") {
-      return NextResponse.json({ project: await saveTrailer(action.project) });
+    switch (action.action) {
+      case "save":
+        return NextResponse.json({ project: await saveTrailer(action.project) });
+      case "publish":
+        return NextResponse.json({ trailer: await publishTrailer({
+          slug: action.slug,
+          title: action.title,
+          videoUrl: action.videoUrl,
+          aspectRatio: action.aspectRatio,
+        }) });
+      case "unpublish":
+        await unpublishTrailer(action.slug);
+        return NextResponse.json(await listTrailers());
+      case "delete":
+        await deleteTrailer(action.slug);
+        return NextResponse.json(await listTrailers());
     }
-    await deleteTrailer(action.slug);
-    return NextResponse.json(await listTrailers());
   } catch (error) {
     return NextResponse.json(
       { error: error instanceof Error ? error.message : "Trailer project operation failed." },

@@ -26,6 +26,12 @@ export const TrailerMomentSchema = z.object({
   title: z.string().trim().min(1).max(100),
   hook: z.string().trim().max(240).default(""),
   reason: z.string().trim().max(400).default(""),
+  frame: z.object({
+    fit: z.enum(["cover", "contain"]),
+    cropX: z.number().finite().min(0).max(100),
+    cropY: z.number().finite().min(0).max(100),
+    zoom: z.number().finite().min(1).max(3),
+  }).strict().optional(),
 }).strict().refine((moment) => moment.endSeconds > moment.startSeconds, {
   message: "Moment end must be after its start.",
   path: ["endSeconds"],
@@ -42,7 +48,7 @@ export const TrailerProjectSchema = z.object({
   fit: z.enum(["cover", "contain"]).default("cover"),
   cropX: z.number().finite().min(0).max(100).default(50),
   cropY: z.number().finite().min(0).max(100).default(50),
-  zoom: z.number().finite().min(1).max(2).default(1),
+  zoom: z.number().finite().min(1).max(3).default(1),
   headline: z.string().trim().max(120).default(""),
   brandLine: z.string().trim().max(80).default(""),
   callToAction: z.string().trim().max(120).default(""),
@@ -72,7 +78,21 @@ export const TrailerCatalogSchema = z.object({
     slug: TrailerSlugSchema,
     title: z.string().trim().min(1).max(120),
     updatedAt: z.string().datetime(),
+    status: z.enum(["draft", "published"]).default("draft"),
   }).strict()).max(500),
+}).strict();
+
+export const PublishedTrailerSchema = z.object({
+  slug: TrailerSlugSchema,
+  title: z.string().trim().min(1).max(120),
+  videoUrl: z.string().url(),
+  aspectRatio: ShortAspectRatioSchema,
+  updatedAt: z.string().datetime(),
+}).strict();
+
+export const PublicTrailerCatalogSchema = z.object({
+  updatedAt: z.string().datetime(),
+  trailers: z.array(PublishedTrailerSchema.omit({ videoUrl: true })).max(500),
 }).strict();
 
 export const TrailerSuggestionSchema = z.object({
@@ -92,3 +112,4 @@ export const TrailerSuggestionResponseSchema = z.object({
 export type TrailerProject = z.infer<typeof TrailerProjectSchema>;
 export type TrailerMoment = z.infer<typeof TrailerMomentSchema>;
 export type TrailerSuggestion = z.infer<typeof TrailerSuggestionSchema>;
+export type PublishedTrailer = z.infer<typeof PublishedTrailerSchema>;

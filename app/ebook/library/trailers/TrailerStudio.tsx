@@ -6,6 +6,7 @@ import TrailerVideoPreview from "./TrailerVideoPreview";
 import {
   TrailerCatalogSchema,
   TrailerProjectSchema,
+  PublishedTrailerSchema,
   TrailerSuggestionResponseSchema,
   type TrailerMoment,
   type TrailerProject,
@@ -18,9 +19,9 @@ import {
 import { ShortAspectRatioSchema } from "@/lib/schemas/video-short";
 import { deleteShortSource, getShortSource, saveShortSource } from "@/lib/short-video-store";
 import { exportTrailerVideo } from "@/lib/trailer-video-export";
+import { getTrailerMomentFrame } from "@/lib/trailer-utils";
 
 const ErrorSchema = z.object({ error: z.string() });
-const FitSchema = z.enum(["cover", "contain"]);
 const TranscriptResponseSchema = z.object({
   videoId: z.string().regex(/^[A-Za-z0-9_-]{11}$/),
   transcript: z.string(),
@@ -31,12 +32,23 @@ const TranscriptionResponseSchema = z.object({
   segments: z.array(LibraryVideoSegmentSchema).min(1).max(20000),
 }).passthrough();
 const SavedProjectResponseSchema = z.object({ project: TrailerProjectSchema }).strict();
+const TrailerUploadResponseSchema = z.object({
+  presignedUrl: z.string().url(),
+  videoUrl: z.string().url(),
+  contentType: z.enum(["video/mp4", "video/webm"]),
+}).strict();
+const PublishedTrailerResponseSchema = z.object({ trailer: PublishedTrailerSchema }).strict();
 const MAX_SOURCE_BYTES = 100 * 1024 * 1024;
 const MAX_SOURCE_DURATION_SECONDS = 3600;
 const MAX_TRAILER_SECONDS = 300;
 
 type Catalog = z.infer<typeof TrailerCatalogSchema>;
 type PlayRequest = { index: number; nonce: number };
+
+function projectRenderSignature(project: TrailerProject): string {
+  const { updatedAt: _updatedAt, ...renderableProject } = project;
+  return JSON.stringify(renderableProject);
+}
 
 async function requestJson(url: string, init?: RequestInit): Promise<unknown> {
   const response = await fetch(url, init);
@@ -170,6 +182,8 @@ export default function TrailerStudio() {
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const localFileRef = useRef<File | null>(null);
+  const exportedVideoRef = useRef<Blob | null>(null);
+  const exportedProjectSignatureRef = useRef<string | null>(null);
 
   const loadCatalog = useCallback(async () => {
     const body = await requestJson("/api/ebook/trailers", { cache: "no-store" });
@@ -228,6 +242,8 @@ export default function TrailerStudio() {
     setLocalVideoUrl(null);
     setSourceFileReady(false);
     localFileRef.current = null;
+    exportedVideoRef.current = null;
+    exportedProjectSignatureRef.current = null;
     setPlayRequest(null);
     setDownloadUrl(null);
     setSourceTitle("");
@@ -439,6 +455,7 @@ export default function TrailerStudio() {
         moments: orderedSuggestions.map((moment) => ({
           id: crypto.randomUUID(),
           ...moment,
+          frame: getTrailerMomentFrame(current, activeMoment),
         })),
       } : current);
       setActiveMoment(0);
@@ -472,6 +489,7 @@ export default function TrailerStudio() {
             slug: parsed.data.project.slug,
             title: parsed.data.project.title,
             updatedAt: parsed.data.project.updatedAt,
+            status: current?.trailers.find((trailer) => trailer.slug === parsed.data.project.slug)?.status ?? "draft",
           },
           ...(current?.trailers ?? []).filter((trailer) => trailer.slug !== parsed.data.project.slug),
         ],
@@ -498,6 +516,8 @@ export default function TrailerStudio() {
       setManualEnd(String(parsed.data.moments[0].endSeconds));
       setActiveMoment(0);
       setDownloadUrl(null);
+      exportedVideoRef.current = null;
+      exportedProjectSignatureRef.current = null;
       let blob: Blob | null = null;
       try {
         blob = await getShortSource(slug);
@@ -566,6 +586,10 @@ export default function TrailerStudio() {
     setNotice("");
     setExportProgress(0);
     setDownloadUrl(null);
+    exportedVideoRef.current = null;
+    exportedProjectSignatureRef.current = null;
+    exportedVideoRef.current = null;
+    exportedProjectSignatureRef.current = null;
     try {
       let file = localFileRef.current;
       if (!file) {
@@ -574,6 +598,8 @@ export default function TrailerStudio() {
       }
       if (!file) throw new Error("Re-select the uploaded source video on this device before exporting.");
       const result = await exportTrailerVideo(project, file, setExportProgress);
+      exportedVideoRef.current = result.blob;
+      exportedProjectSignatureRef.current = projectRenderSignature(project);
       setDownloadUrl(URL.createObjectURL(result.blob));
       setDownloadName(`${project.slug}.${result.extension}`);
       setNotice("Trailer export is ready to download.");
@@ -582,6 +608,101 @@ export default function TrailerStudio() {
     } finally {
       setBusy(false);
       setExportProgress(null);
+    }
+  }
+
+  async function publishProject() {
+    if (!project || !exportedVideoRef.current || !downloadUrl
+      || exportedProjectSignatureRef.current !== projectRenderSignature(project)) {
+      setError("Render the trailer again after your latest edits before publishing.");
+      return;
+    }
+    setBusy(true);
+    setError("");
+    setNotice("");
+    try {
+      const validatedProject = TrailerProjectSchema.parse(project);
+      const blob = exportedVideoRef.current;
+      const contentType = blob.type.includes("mp4") ? "video/mp4" : "video/webm";
+      const uploadBody = await requestJson("/api/ebook/trailers/source", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          filename: `${validatedProject.slug}.${contentType === "video/mp4" ? "mp4" : "webm"}`,
+          contentType,
+          size: blob.size,
+        }),
+      });
+      const upload = TrailerUploadResponseSchema.safeParse(uploadBody);
+      if (!upload.success) throw new Error("Trailer upload returned an invalid response.");
+      const uploadResponse = await fetch(upload.data.presignedUrl, {
+        method: "PUT",
+        headers: { "Content-Type": upload.data.contentType },
+        body: blob,
+      });
+      if (!uploadResponse.ok) throw new Error(`Could not upload rendered trailer (HTTP ${uploadResponse.status}).`);
+
+      const saveBody = await requestJson("/api/ebook/trailers", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "save", project: validatedProject }),
+      });
+      const saved = SavedProjectResponseSchema.safeParse(saveBody);
+      if (!saved.success) throw new Error("Trailer save returned an invalid project.");
+      setProject(saved.data.project);
+
+      const publishBody = await requestJson("/api/ebook/trailers", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "publish",
+          slug: validatedProject.slug,
+          title: validatedProject.title,
+          aspectRatio: validatedProject.aspectRatio,
+          videoUrl: upload.data.videoUrl,
+        }),
+      });
+      const published = PublishedTrailerResponseSchema.safeParse(publishBody);
+      if (!published.success) throw new Error("Trailer publishing returned an invalid response.");
+      setCatalog((current) => ({
+        updatedAt: published.data.trailer.updatedAt,
+        trailers: [
+          {
+            slug: published.data.trailer.slug,
+            title: published.data.trailer.title,
+            updatedAt: published.data.trailer.updatedAt,
+            status: "published",
+          },
+          ...(current?.trailers ?? []).filter((trailer) => trailer.slug !== published.data.trailer.slug),
+        ],
+      }));
+      setNotice(`Trailer published. Share /library/trailers/${published.data.trailer.slug} with your audience.`);
+    } catch (publishError) {
+      setError(publishError instanceof Error ? publishError.message : "Could not publish this trailer.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function unpublishProject() {
+    if (!project) return;
+    setBusy(true);
+    setError("");
+    setNotice("");
+    try {
+      const body = await requestJson("/api/ebook/trailers", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "unpublish", slug: project.slug }),
+      });
+      const parsed = TrailerCatalogSchema.safeParse(body);
+      if (!parsed.success) throw new Error("Trailer unpublish returned an invalid catalog.");
+      setCatalog(parsed.data);
+      setNotice("Trailer unpublished from the Library. The private draft is still available.");
+    } catch (unpublishError) {
+      setError(unpublishError instanceof Error ? unpublishError.message : "Could not unpublish this trailer.");
+    } finally {
+      setBusy(false);
     }
   }
 
@@ -633,6 +754,7 @@ export default function TrailerStudio() {
       title: `Moment ${project.moments.length + 1}`,
       hook: transcriptText.slice(0, 240),
       reason: "Added manually.",
+      frame: getTrailerMomentFrame(project, activeMoment),
     };
     setProject({ ...project, moments: [...project.moments, nextMoment] });
     setActiveMoment(project.moments.length);
@@ -651,6 +773,29 @@ export default function TrailerStudio() {
 
   const selectedMoment = project?.moments[activeMoment];
   const canExport = Boolean(project?.source.uploadedFileName && sourceFileReady);
+  const isPublished = Boolean(catalog?.trailers.find((trailer) => trailer.slug === project?.slug)?.status === "published");
+  const hasCurrentExport = Boolean(
+    canExport
+    && downloadUrl
+    && exportedVideoRef.current
+    && project
+    && exportedProjectSignatureRef.current === projectRenderSignature(project),
+  );
+  const canPublish = hasCurrentExport;
+  const updateActiveMomentFrame = useCallback((patch: Partial<ReturnType<typeof getTrailerMomentFrame>>) => {
+    setProject((current) => current ? {
+      ...current,
+      moments: current.moments.map((moment, index) =>
+        index === activeMoment
+          ? { ...moment, frame: { ...getTrailerMomentFrame(current, index), ...patch } }
+          : moment,
+      ),
+    } : current);
+  }, [activeMoment]);
+  const handleCropChange = useCallback((cropX: number, cropY: number) => {
+    updateActiveMomentFrame({ cropX, cropY });
+  }, [updateActiveMomentFrame]);
+  const selectedFrame = project ? getTrailerMomentFrame(project, activeMoment) : null;
 
   return (
     <div className="space-y-6 pb-20 lg:pb-0">
@@ -711,7 +856,7 @@ export default function TrailerStudio() {
           <div>
             <h2 className="text-lg font-bold text-white">Use another YouTube URL</h2>
             <p className="mt-1 text-sm leading-relaxed text-slate-400">
-              For a video not yet in the approved library, load its timestamped transcript here. YouTube projects cannot be exported.
+              For a video not yet in the approved library, load its timestamped transcript here. Rendering and publishing require an authorized source file.
             </p>
           </div>
           <label className="block">
@@ -748,7 +893,7 @@ export default function TrailerStudio() {
           <div>
             <h2 className="text-lg font-bold text-white">Start from an uploaded source</h2>
             <p className="mt-1 text-sm leading-relaxed text-slate-400">
-                Select your authorized MP4/WebM source (up to 100 MB) to transcribe, edit, and export a trailer.
+                Select your authorized MP4/WebM source (up to 100 MB) to transcribe, edit, render, and publish a trailer.
             </p>
           </div>
           <input
@@ -759,7 +904,7 @@ export default function TrailerStudio() {
             className="block min-h-12 w-full text-base text-slate-300 file:mr-3 file:min-h-12 file:rounded-lg file:border-0 file:bg-slate-700 file:px-4 file:text-sm file:font-semibold file:text-white"
           />
           <p className="text-xs leading-relaxed text-slate-500">
-            The source file stays in this browser’s IndexedDB; only project edits are saved in R2. Export is available when the source file is available on this device.
+            The source file stays in this browser’s IndexedDB. For smooth montage preview and publishing, use the matching source file; the embedded YouTube preview may buffer at cuts.
           </p>
         </div>
       </section>}
@@ -787,7 +932,9 @@ export default function TrailerStudio() {
                 >
                   {trailer.title}
                 </button>
-                <span className="shrink-0 text-[10px] text-slate-500">{new Date(trailer.updatedAt).toLocaleDateString()}</span>
+                <span className="shrink-0 text-[10px] text-slate-500">
+                  {trailer.status === "published" ? "Published" : "Draft"} · {new Date(trailer.updatedAt).toLocaleDateString()}
+                </span>
               </li>
             ))}
           </ul>
@@ -812,7 +959,18 @@ export default function TrailerStudio() {
               <p className="mt-2 text-sm text-slate-400">
                 {project.source.videoId ? `YouTube embed · ${project.source.videoTitle}` : `Uploaded source · ${project.source.uploadedFileName ?? "video file"}`}
                 {project.source.uploadedFileName ? " · source uploaded" : " · preview only"}
+                {isPublished ? " · published" : ""}
               </p>
+              {isPublished && (
+                <a
+                  href={`/library/trailers/${encodeURIComponent(project.slug)}`}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="mt-2 inline-flex min-h-12 items-center text-sm font-semibold text-emerald-300"
+                >
+                  Open published trailer
+                </a>
+              )}
             </div>
             <div className="flex flex-wrap gap-2">
               <button
@@ -823,7 +981,17 @@ export default function TrailerStudio() {
               >
                 Save draft
               </button>
-              {catalog?.trailers.some((trailer) => trailer.slug === project.slug) && (
+              {isPublished && (
+                <button
+                  type="button"
+                  onClick={() => void unpublishProject()}
+                  disabled={busy}
+                  className="min-h-12 rounded-xl border border-amber-900 px-4 text-sm font-semibold text-amber-200 disabled:opacity-50"
+                >
+                  Unpublish
+                </button>
+              )}
+              {catalog?.trailers.some((trailer) => trailer.slug === project.slug) && !isPublished && (
                 <button
                   type="button"
                   onClick={() => void deleteProject()}
@@ -844,15 +1012,16 @@ export default function TrailerStudio() {
                 playRequest={playRequest}
                 activeMoment={activeMoment}
                 onActiveMomentChange={handleActiveMomentChange}
+                onCropChange={handleCropChange}
                 onError={handlePreviewError}
               />
               <p className="text-xs leading-relaxed text-slate-500">
-                Preview uses the YouTube embedded player when available. Scene changes are hard cuts and may buffer; no YouTube content is downloaded or exported.
+                An uploaded source is used for local montage playback and rendering. Without it, YouTube remains an embedded preview and can buffer between selected moments. YouTube auto-captions are disabled.
               </p>
               <section className="space-y-3 rounded-xl border border-slate-800 bg-slate-950/60 p-4">
                 <div>
                   <h3 className="font-bold text-white">Frame and crop</h3>
-                  <p className="mt-1 text-xs text-slate-400">Uses the same frame ratios as Shorts Studio.</p>
+                  <p className="mt-1 text-xs text-slate-400">Each moment keeps its own crop. Drag the preview or use the controls like Shorts Studio.</p>
                 </div>
                 <div className="grid gap-3 sm:grid-cols-2">
                   <label className="block text-sm font-semibold text-slate-300">
@@ -865,17 +1034,34 @@ export default function TrailerStudio() {
                       {ShortAspectRatioSchema.options.map((ratio) => <option key={ratio} value={ratio}>{ratio.replace(":", " : ")}</option>)}
                     </select>
                   </label>
-                  <label className="block text-sm font-semibold text-slate-300">
-                    Frame fit
-                    <select
-                      value={project.fit}
-                      onChange={(event) => setProject({ ...project, fit: FitSchema.parse(event.target.value) })}
-                      className="mt-2 min-h-12 w-full rounded-xl border border-slate-700 bg-slate-900 px-3 text-base text-white"
-                    >
-                      <option value="cover">Fill frame (crop)</option>
-                      <option value="contain">Fit full video</option>
-                    </select>
-                  </label>
+                  <div className="space-y-2">
+                    <span className="block text-sm font-semibold text-slate-300">Video fit</span>
+                    <div className="flex flex-wrap gap-2">
+                      <button
+                        type="button"
+                        aria-pressed={selectedFrame?.fit === "contain"}
+                        onClick={() => updateActiveMomentFrame({ fit: "contain" })}
+                        className={`min-h-12 rounded-lg border px-3 text-sm font-semibold ${selectedFrame?.fit === "contain" ? "border-cyan-400 bg-cyan-950 text-cyan-100" : "border-slate-700 text-slate-300"}`}
+                      >
+                        Show full video
+                      </button>
+                      <button
+                        type="button"
+                        aria-pressed={selectedFrame?.fit === "cover"}
+                        onClick={() => updateActiveMomentFrame({ fit: "cover" })}
+                        className={`min-h-12 rounded-lg border px-3 text-sm font-semibold ${selectedFrame?.fit === "cover" ? "border-cyan-400 bg-cyan-950 text-cyan-100" : "border-slate-700 text-slate-300"}`}
+                      >
+                        Fill frame
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => updateActiveMomentFrame({ cropX: 50, cropY: 50, zoom: 1 })}
+                        className="min-h-12 rounded-lg border border-slate-700 px-3 text-sm font-semibold text-slate-300"
+                      >
+                        Reset crop
+                      </button>
+                    </div>
+                  </div>
                 </div>
                 <div className="grid gap-3 sm:grid-cols-3">
                   {([
@@ -888,10 +1074,15 @@ export default function TrailerStudio() {
                       <input
                         type="range"
                         min={field === "zoom" ? 1 : 0}
-                        max={field === "zoom" ? 2 : 100}
+                        max={field === "zoom" ? 3 : 100}
                         step={field === "zoom" ? 0.05 : 1}
-                        value={project[field]}
-                        onChange={(event) => setProject({ ...project, [field]: Number(event.target.value) })}
+                        value={selectedFrame?.[field] ?? project[field]}
+                        onChange={(event) => {
+                          const value = Number(event.target.value);
+                          if (field === "cropX") updateActiveMomentFrame({ cropX: value });
+                          else if (field === "cropY") updateActiveMomentFrame({ cropY: value });
+                          else updateActiveMomentFrame({ zoom: value });
+                        }}
                         className="mt-2 min-h-12 w-full accent-cyan-300"
                       />
                     </label>
@@ -1069,7 +1260,7 @@ export default function TrailerStudio() {
                 <section className="space-y-3 rounded-xl border border-emerald-900/70 bg-emerald-950/20 p-4">
                   <div className="flex flex-wrap items-start justify-between gap-2">
                     <div>
-                      <h3 className="font-bold text-emerald-100">Export source ready</h3>
+                      <h3 className="font-bold text-emerald-100">Render and publish</h3>
                       <p className="mt-1 text-xs text-slate-400">{project.source.uploadedFileName} · {sourceFileReady ? "available on this device" : "re-select source to export"}</p>
                     </div>
                     <input
@@ -1087,7 +1278,7 @@ export default function TrailerStudio() {
                     disabled={busy || !canExport}
                     className="min-h-12 w-full rounded-xl bg-emerald-300 px-4 text-sm font-extrabold text-slate-950 disabled:opacity-50 sm:w-auto"
                   >
-                    {exportProgress === null ? "Export uploaded source" : `Rendering ${Math.round(exportProgress * 100)}%`}
+                    {exportProgress === null ? "Render trailer" : `Rendering ${Math.round(exportProgress * 100)}%`}
                   </button>
                   {exportProgress !== null && (
                     <div
@@ -1101,13 +1292,26 @@ export default function TrailerStudio() {
                       <div className="h-full bg-emerald-300 transition-[width]" style={{ width: `${exportProgress * 100}%` }} />
                     </div>
                   )}
-                  {downloadUrl && (
+                  {downloadUrl && hasCurrentExport && (
                     <a href={downloadUrl} download={downloadName} className="flex min-h-12 items-center justify-center rounded-lg border border-emerald-700 px-4 text-sm font-bold text-emerald-100 sm:w-auto">
                       Download {downloadName}
                     </a>
                   )}
+                  <button
+                    type="button"
+                    onClick={() => void publishProject()}
+                    disabled={busy || !canPublish}
+                    className="min-h-12 w-full rounded-xl bg-cyan-300 px-4 text-sm font-extrabold text-slate-950 disabled:opacity-50 sm:w-auto"
+                  >
+                    {isPublished ? "Update published trailer" : "Publish to Library"}
+                  </button>
+                  {!hasCurrentExport && (
+                    <p className="text-xs text-amber-200">
+                      Render the latest edits before publishing. The published page plays one continuous video file.
+                    </p>
+                  )}
                   <p className="text-xs leading-relaxed text-slate-500">
-                    Export renders in this browser at the selected aspect ratio. Keep this tab open and in the foreground. Export is available only for uploaded source files.
+                    Render uses the uploaded source and selected frame. Publishing uploads only the finished trailer, not your original source.
                   </p>
                 </section>
               )}
