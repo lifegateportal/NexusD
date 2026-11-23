@@ -12,6 +12,7 @@ function dimensionsFor(aspectRatio: TrailerProject["aspectRatio"]): { width: num
 }
 
 function waitForVideoEvent(video: HTMLVideoElement, eventName: "loadeddata" | "seeked"): Promise<void> {
+  if (eventName === "loadeddata" && video.readyState >= 2) return Promise.resolve();
   return new Promise((resolve, reject) => {
     const timeout = window.setTimeout(() => {
       cleanup();
@@ -188,14 +189,18 @@ export async function exportTrailerVideo(
   if (!context) throw new Error("This browser could not create the trailer export canvas.");
 
   const sourceUrl = URL.createObjectURL(sourceFile);
-  const video = document.createElement("video");
-  video.crossOrigin = "anonymous";
-  video.preload = "auto";
-  video.playsInline = true;
-  video.src = sourceUrl;
-  video.load();
+  const videos = [document.createElement("video"), document.createElement("video")];
+  for (const video of videos) {
+    video.crossOrigin = "anonymous";
+    video.preload = "auto";
+    video.playsInline = true;
+    video.src = sourceUrl;
+    video.load();
+  }
 
   let audioContext: AudioContext | null = null;
+  let videoStream: MediaStream | null = null;
+  let recordingStream: MediaStream | null = null;
   let animationFrame = 0;
   let recorder: MediaRecorder | null = null;
   let recordingStopped = false;
@@ -206,22 +211,28 @@ export async function exportTrailerVideo(
   };
 
   try {
-    await waitForVideoEvent(video, "loadeddata");
-    if (!Number.isFinite(video.duration) || video.duration <= 0) {
+    await Promise.all(videos.map((video) => waitForVideoEvent(video, "loadeddata")));
+    if (!Number.isFinite(videos[0].duration) || videos[0].duration <= 0) {
       throw new Error("The uploaded source video has no valid duration.");
     }
-    if (project.moments.some((moment) => moment.endSeconds > video.duration)) {
+    if (project.moments.some((moment) => moment.endSeconds > videos[0].duration)) {
       throw new Error("A trailer moment extends beyond the uploaded source video. Re-select the correct source or adjust the moments.");
     }
 
     audioContext = new AudioContext();
     const audioDestination = audioContext.createMediaStreamDestination();
-    const sourceAudio = audioContext.createMediaElementSource(video);
-    sourceAudio.connect(audioDestination);
+    const audioGains = videos.map((video, index) => {
+      const sourceAudio = audioContext!.createMediaElementSource(video);
+      const gain = audioContext!.createGain();
+      gain.gain.value = index === 0 ? 1 : 0;
+      sourceAudio.connect(gain);
+      gain.connect(audioDestination);
+      return gain;
+    });
     await audioContext.resume();
 
-    const videoStream = canvas.captureStream(OUTPUT_FPS);
-    const recordingStream = new MediaStream([
+    videoStream = canvas.captureStream(OUTPUT_FPS);
+    recordingStream = new MediaStream([
       ...videoStream.getVideoTracks(),
       ...audioDestination.stream.getAudioTracks(),
     ]);
@@ -242,8 +253,55 @@ export async function exportTrailerVideo(
 
     const startedAt = performance.now();
     let activeMomentIndex = 0;
+    let activeDeck = 0;
     let completedDuration = 0;
-    let pendingSeek = false;
+    let transitioning = false;
+    const preparedMomentByDeck: Array<number | null> = [null, null];
+    const preparationByDeck: Array<Promise<void>> = [Promise.resolve(), Promise.resolve()];
+    const prepareDeck = (deckIndex: number, momentIndex: number): Promise<void> => {
+      const deck = videos[deckIndex];
+      deck.pause();
+      preparedMomentByDeck[deckIndex] = null;
+      const preparation = seekVideoTo(deck, project.moments[momentIndex].startSeconds).then(() => {
+        preparedMomentByDeck[deckIndex] = momentIndex;
+      });
+      preparationByDeck[deckIndex] = preparation;
+      return preparation;
+    };
+
+    await prepareDeck(0, 0);
+    if (project.moments.length > 1) await prepareDeck(1, 1);
+
+    const transitionToMoment = (nextMomentIndex: number) => {
+      transitioning = true;
+      const previousDeck = activeDeck;
+      const nextDeck = 1 - previousDeck;
+      videos[previousDeck].pause();
+      void (async () => {
+        await preparationByDeck[nextDeck];
+        if (preparedMomentByDeck[nextDeck] !== nextMomentIndex) {
+          throw new Error("The next trailer moment was not ready for a smooth cut.");
+        }
+        const now = audioContext!.currentTime;
+        audioGains[previousDeck].gain.setTargetAtTime(0, now, 0.01);
+        audioGains[nextDeck].gain.setTargetAtTime(1, now, 0.01);
+        await videos[nextDeck].play();
+        activeDeck = nextDeck;
+        activeMomentIndex = nextMomentIndex;
+        transitioning = false;
+        const followingMoment = nextMomentIndex + 1;
+        if (followingMoment < project.moments.length) {
+          void prepareDeck(previousDeck, followingMoment).catch((error: unknown) => {
+            exportError = error instanceof Error ? error : new Error("The next trailer moment could not be prepared.");
+            stopRecorder();
+          });
+        }
+      })().catch((error: unknown) => {
+        exportError = error instanceof Error ? error : new Error("The next trailer moment could not be prepared.");
+        stopRecorder();
+      });
+    };
+
     const drawFrame = () => {
       if (performance.now() - startedAt > MAX_EXPORT_MS) {
         exportError = new Error("Trailer export took too long. Keep this tab open and in the foreground, then try again.");
@@ -251,30 +309,26 @@ export async function exportTrailerVideo(
         return;
       }
       try {
-        if (!pendingSeek && !video.seeking && video.currentTime >= project.moments[activeMomentIndex].endSeconds) {
-          completedDuration += project.moments[activeMomentIndex].endSeconds
-            - project.moments[activeMomentIndex].startSeconds;
-          activeMomentIndex += 1;
-          if (activeMomentIndex >= project.moments.length) {
+        if (transitioning) {
+          drawTrailerFrame(context, videos[activeDeck], project, activeMomentIndex, width, height);
+          animationFrame = requestAnimationFrame(drawFrame);
+          return;
+        }
+        const video = videos[activeDeck];
+        const currentMoment = project.moments[activeMomentIndex];
+        if (video.currentTime >= currentMoment.endSeconds) {
+          completedDuration += currentMoment.endSeconds - currentMoment.startSeconds;
+          const nextMomentIndex = activeMomentIndex + 1;
+          if (nextMomentIndex >= project.moments.length) {
             stopRecorder();
             return;
           }
-          pendingSeek = true;
-          void seekVideoTo(video, project.moments[activeMomentIndex].startSeconds).then(() => {
-            pendingSeek = false;
-          }).catch((error: unknown) => {
-            exportError = error instanceof Error ? error : new Error("The source video could not seek to the next trailer moment.");
-            stopRecorder();
-          });
-        }
-
-        if (pendingSeek || video.seeking || video.readyState < 2) {
+          transitionToMoment(nextMomentIndex);
           animationFrame = requestAnimationFrame(drawFrame);
           return;
         }
 
         drawTrailerFrame(context, video, project, activeMomentIndex, width, height);
-        const currentMoment = project.moments[activeMomentIndex];
         const currentDuration = Math.max(0, Math.min(
           currentMoment.endSeconds - currentMoment.startSeconds,
           video.currentTime - currentMoment.startSeconds,
@@ -288,9 +342,8 @@ export async function exportTrailerVideo(
       animationFrame = requestAnimationFrame(drawFrame);
     };
 
-    await seekVideoTo(video, project.moments[0].startSeconds);
     recorder.start(250);
-    await video.play();
+    await videos[0].play();
     drawFrame();
     await stopped;
     if (exportError) throw exportError;
@@ -310,9 +363,13 @@ export async function exportTrailerVideo(
     throw new Error("Could not export this trailer.");
   } finally {
     cancelAnimationFrame(animationFrame);
-    video.pause();
-    video.removeAttribute("src");
-    video.load();
+    videos.forEach((video) => {
+      video.pause();
+      video.removeAttribute("src");
+      video.load();
+    });
+    videoStream?.getTracks().forEach((track) => track.stop());
+    recordingStream?.getTracks().forEach((track) => track.stop());
     URL.revokeObjectURL(sourceUrl);
     if (audioContext && audioContext.state !== "closed") await audioContext.close();
   }
