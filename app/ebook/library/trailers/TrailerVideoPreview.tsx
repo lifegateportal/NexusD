@@ -1,12 +1,12 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { PointerEvent } from "react";
 import type { TrailerMoment } from "@/lib/schemas/trailer";
 import type { TrailerProject } from "@/lib/schemas/trailer";
 import { loadYouTubeApi } from "@/lib/youtube-iframe-api";
 import type { YouTubePlayerInstance } from "@/lib/youtube-iframe-api";
-import { getTrailerMomentFrame } from "@/lib/trailer-utils";
+import { getTrailerFrameAtTime } from "@/lib/trailer-utils";
 
 type YouTubePlayerStateChange = { data: number };
 
@@ -14,9 +14,11 @@ type Props = {
   project: TrailerProject;
   localVideoUrl: string | null;
   playRequest: { index: number; nonce: number } | null;
+  seekRequest: { index: number; timeSeconds: number; nonce: number } | null;
   activeMoment: number;
   onActiveMomentChange: (index: number) => void;
-  onCropChange: (cropX: number, cropY: number) => void;
+  onCurrentTimeChange: (timeSeconds: number) => void;
+  onCropChange: (timeSeconds: number, cropX: number, cropY: number, zoom: number, fit: "cover" | "contain") => void;
   onError: (message: string) => void;
 };
 
@@ -24,20 +26,34 @@ export default function TrailerVideoPreview({
   project,
   localVideoUrl,
   playRequest,
+  seekRequest,
   activeMoment,
   onActiveMomentChange,
+  onCurrentTimeChange,
   onCropChange,
   onError,
 }: Props) {
   const playerTargetRef = useRef<HTMLDivElement>(null);
   const playerRef = useRef<YouTubePlayerInstance | null>(null);
   const localVideoRef = useRef<HTMLVideoElement>(null);
-  const cropDragRef = useRef<{ x: number; y: number; clientX: number; clientY: number; width: number; height: number } | null>(null);
+  const cropDragRef = useRef<{
+    x: number;
+    y: number;
+    timeSeconds: number;
+    zoom: number;
+    fit: "cover" | "contain";
+    clientX: number;
+    clientY: number;
+    width: number;
+    height: number;
+  } | null>(null);
   const momentsRef = useRef<TrailerMoment[]>(project.moments);
   const activeMomentRef = useRef(0);
+  const lastReportedTimeRef = useRef(-1);
   const [playerReady, setPlayerReady] = useState(false);
   const [playing, setPlaying] = useState(false);
   const [localVideoReady, setLocalVideoReady] = useState(false);
+  const [sourceAspectRatio, setSourceAspectRatio] = useState(16 / 9);
   const [playerError, setPlayerError] = useState("");
 
   momentsRef.current = project.moments;
@@ -46,7 +62,16 @@ export default function TrailerVideoPreview({
   const setMoment = (index: number) => {
     activeMomentRef.current = index;
     onActiveMomentChange(index);
+    const moment = momentsRef.current[index];
+    if (moment) reportCurrentTime(moment.startSeconds, true);
   };
+
+  const reportCurrentTime = useCallback((timeSeconds: number, force = false) => {
+    if (!Number.isFinite(timeSeconds)) return;
+    if (!force && Math.abs(timeSeconds - lastReportedTimeRef.current) < 0.2) return;
+    lastReportedTimeRef.current = timeSeconds;
+    onCurrentTimeChange(timeSeconds);
+  }, [onCurrentTimeChange]);
 
   useEffect(() => {
     if (!project.source.videoId || localVideoUrl || !playerTargetRef.current) return;
@@ -81,7 +106,16 @@ export default function TrailerVideoPreview({
             playerRef.current.unloadModule("captions");
             setPlayerReady(true);
           },
-          onStateChange: (event: YouTubePlayerStateChange) => setPlaying(event.data === 1),
+          onStateChange: (event: YouTubePlayerStateChange) => {
+            const isPlaying = event.data === 1;
+            setPlaying(isPlaying);
+            const player = playerRef.current;
+            player?.unloadModule("captions");
+            if (isPlaying) {
+              const timeSeconds = player?.getCurrentTime();
+              if (timeSeconds !== undefined) reportCurrentTime(timeSeconds, true);
+            }
+          },
           onError: (event: YouTubePlayerStateChange) => {
             const message = `YouTube could not play this embedded video (player error ${event.data}).`;
             setPlayerError(message);
@@ -103,7 +137,7 @@ export default function TrailerVideoPreview({
       setPlayerReady(false);
       setPlaying(false);
     };
-  }, [localVideoUrl, onError, project.source.videoId, project.source.videoTitle]);
+  }, [localVideoUrl, onError, project.source.videoId, project.source.videoTitle, reportCurrentTime]);
 
   useEffect(() => {
     if (!playRequest || playRequest.nonce === 0) return;
@@ -146,12 +180,56 @@ export default function TrailerVideoPreview({
   }, [localVideoReady, localVideoUrl, onError, playRequest, playerReady, project.source.videoId]);
 
   useEffect(() => {
+    if (!seekRequest || seekRequest.nonce === 0) return;
+    const moment = momentsRef.current[seekRequest.index];
+    if (!moment) return;
+    setMoment(seekRequest.index);
+    const timeSeconds = Math.max(
+      moment.startSeconds,
+      Math.min(moment.endSeconds, seekRequest.timeSeconds),
+    );
+    if (localVideoUrl) {
+      if (!localVideoReady) return;
+      const video = localVideoRef.current;
+      if (!video) {
+        onError("Upload or re-select the source video to preview this trailer.");
+        return;
+      }
+      video.currentTime = timeSeconds;
+      reportCurrentTime(timeSeconds, true);
+      return;
+    }
+    if (project.source.videoId) {
+      const player = playerRef.current;
+      if (!player || !playerReady) return;
+      player.seekTo(timeSeconds, true);
+      reportCurrentTime(timeSeconds, true);
+      return;
+    }
+    if (!localVideoReady) return;
+    const video = localVideoRef.current;
+    if (!video) return;
+    video.currentTime = timeSeconds;
+    reportCurrentTime(timeSeconds, true);
+  }, [
+    localVideoReady,
+    localVideoUrl,
+    onError,
+    playerReady,
+    project.source.videoId,
+    reportCurrentTime,
+    seekRequest,
+  ]);
+
+  useEffect(() => {
     if (!project.source.videoId || localVideoUrl || !playing) return;
     const interval = window.setInterval(() => {
       const player = playerRef.current;
       const moment = momentsRef.current[activeMomentRef.current];
       if (!player || !moment) return;
-      if (player.getCurrentTime() < moment.endSeconds - 0.12) return;
+      const currentTime = player.getCurrentTime();
+      reportCurrentTime(currentTime);
+      if (currentTime < moment.endSeconds - 0.12) return;
 
       const nextIndex = activeMomentRef.current + 1;
       if (nextIndex >= momentsRef.current.length) {
@@ -162,11 +240,12 @@ export default function TrailerVideoPreview({
       player.seekTo(momentsRef.current[nextIndex].startSeconds, true);
     }, 100);
     return () => window.clearInterval(interval);
-  }, [localVideoUrl, onActiveMomentChange, playing, project.source.videoId]);
+  }, [localVideoUrl, onActiveMomentChange, playing, project.source.videoId, reportCurrentTime]);
 
   function handleLocalTimeUpdate() {
     const video = localVideoRef.current;
     const moment = momentsRef.current[activeMomentRef.current];
+    if (video) reportCurrentTime(video.currentTime);
     if (!video || !moment || video.paused || video.seeking || video.currentTime < moment.endSeconds - 0.08) return;
     const nextIndex = activeMomentRef.current + 1;
     if (nextIndex >= momentsRef.current.length) {
@@ -178,29 +257,32 @@ export default function TrailerVideoPreview({
     video.currentTime = momentsRef.current[nextIndex].startSeconds;
   }
 
-  const [ratioWidth, ratioHeight] = project.aspectRatio.split(":").map(Number);
+  const currentTime = localVideoRef.current?.currentTime
+    ?? playerRef.current?.getCurrentTime()
+    ?? project.moments[activeMoment]?.startSeconds
+    ?? 0;
+  const frameAtTime = getTrailerFrameAtTime(project, activeMoment, currentTime);
+  const slot = frameAtTime?.slot;
+  const frame = frameAtTime?.position ?? { x: 50, y: 50, zoom: 1, fit: project.fit };
+  const aspectRatio = slot?.aspectRatio ?? project.aspectRatio;
+  const [ratioWidth, ratioHeight] = aspectRatio.split(":").map(Number);
   const ratio = ratioWidth / ratioHeight;
-  const frame = getTrailerMomentFrame(project, activeMoment);
-  const sourceRatio = 16 / 9;
-  let widthPercent = 100;
-  let heightPercent = 100;
-  if (frame.fit === "cover") {
-    if (ratio < sourceRatio) widthPercent = sourceRatio / ratio * 100;
-    else heightPercent = ratio / sourceRatio * 100;
-  } else if (ratio < sourceRatio) {
-    heightPercent = ratio / sourceRatio * 100;
-  } else {
-    widthPercent = sourceRatio / ratio * 100;
-  }
-  widthPercent *= frame.zoom;
-  heightPercent *= frame.zoom;
+  const sourceRatio = localVideoUrl ? sourceAspectRatio : 16 / 9;
+  const widthAtFit = frame.fit === "cover"
+    ? Math.max(100, sourceRatio / ratio * 100)
+    : Math.min(100, sourceRatio / ratio * 100);
+  const heightAtFit = frame.fit === "cover"
+    ? Math.max(100, ratio / sourceRatio * 100)
+    : Math.min(100, ratio / sourceRatio * 100);
+  const widthPercent = widthAtFit * frame.zoom;
+  const heightPercent = heightAtFit * frame.zoom;
   const playerStyle = {
     position: "absolute" as const,
     width: `${widthPercent}%`,
     height: `${heightPercent}%`,
     maxWidth: "none",
-    left: `${(100 - widthPercent) * frame.cropX / 100}%`,
-    top: `${(100 - heightPercent) * frame.cropY / 100}%`,
+    left: `${(100 - widthPercent) * frame.x / 100}%`,
+    top: `${(100 - heightPercent) * frame.y / 100}%`,
     border: 0,
     pointerEvents: "none" as const,
   };
@@ -213,14 +295,20 @@ export default function TrailerVideoPreview({
 
   useEffect(() => {
     setLocalVideoReady(false);
+    setSourceAspectRatio(16 / 9);
   }, [localVideoUrl]);
 
   function startCropDrag(event: PointerEvent<HTMLDivElement>) {
     if (event.button !== 0) return;
     const bounds = event.currentTarget.getBoundingClientRect();
     cropDragRef.current = {
-      x: frame.cropX,
-      y: frame.cropY,
+      x: frame.x,
+      y: frame.y,
+      timeSeconds: localVideoRef.current?.currentTime
+        ?? playerRef.current?.getCurrentTime()
+        ?? currentTime,
+      zoom: frame.zoom,
+      fit: frame.fit,
       clientX: event.clientX,
       clientY: event.clientY,
       width: bounds.width,
@@ -233,8 +321,11 @@ export default function TrailerVideoPreview({
     const drag = cropDragRef.current;
     if (!drag) return;
     onCropChange(
+      drag.timeSeconds,
       Math.max(0, Math.min(100, drag.x - (event.clientX - drag.clientX) / drag.width * 100)),
       Math.max(0, Math.min(100, drag.y - (event.clientY - drag.clientY) / drag.height * 100)),
+      drag.zoom,
+      drag.fit,
     );
   }
 
@@ -242,7 +333,7 @@ export default function TrailerVideoPreview({
     <div className="space-y-3">
       <div
         className="relative mx-auto w-full max-w-xl touch-none overflow-hidden rounded-xl border border-slate-700 bg-black"
-        style={{ aspectRatio: project.aspectRatio.replace(":", "/") }}
+        style={{ aspectRatio: aspectRatio.replace(":", "/") }}
         onPointerDown={startCropDrag}
         onPointerMove={moveCropDrag}
         onPointerUp={() => { cropDragRef.current = null; }}
@@ -254,18 +345,20 @@ export default function TrailerVideoPreview({
             ref={localVideoRef}
             src={localVideoUrl}
             playsInline
-            onLoadedMetadata={() => setLocalVideoReady(true)}
+            onLoadedMetadata={() => {
+              const video = localVideoRef.current;
+              if (video && video.videoHeight > 0) {
+                setSourceAspectRatio(video.videoWidth / video.videoHeight);
+              }
+              setLocalVideoReady(true);
+              reportCurrentTime(video?.currentTime ?? 0, true);
+            }}
             onError={() => onError("The uploaded source could not be decoded for preview. Re-select the source file and try again.")}
             onPlay={() => setPlaying(true)}
             onPause={() => setPlaying(false)}
             onTimeUpdate={handleLocalTimeUpdate}
-            className="pointer-events-none absolute inset-0 h-full w-full"
-            style={{
-              objectFit: frame.fit,
-              objectPosition: `${frame.cropX}% ${frame.cropY}%`,
-              transform: `scale(${frame.zoom})`,
-              transformOrigin: "center center",
-            }}
+            className="pointer-events-none"
+            style={playerStyle}
           />
         ) : project.source.videoId ? (
           <div className="absolute inset-0 overflow-hidden">

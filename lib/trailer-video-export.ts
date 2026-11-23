@@ -1,14 +1,33 @@
 import { TrailerProjectSchema, type TrailerProject } from "@/lib/schemas/trailer";
-import { getTrailerMomentFrame } from "@/lib/trailer-utils";
+import { getTrailerFrameAtTime, getTrailerFrameSlots } from "@/lib/trailer-utils";
 
 const OUTPUT_FPS = 30;
 const MAX_EXPORT_MS = 6 * 60 * 1000;
 
-function dimensionsFor(aspectRatio: TrailerProject["aspectRatio"]): { width: number; height: number } {
+function dimensionsFor(project: TrailerProject): { width: number; height: number } {
+  const aspectRatio = getTrailerFrameSlots(project, 0)[0]?.aspectRatio ?? project.aspectRatio;
   const [aspectWidth, aspectHeight] = aspectRatio.split(":").map(Number);
   const ratio = aspectWidth / aspectHeight;
   if (ratio >= 1) return { width: 1280, height: Math.round(1280 / ratio) };
   return { width: 720, height: Math.round(720 / ratio) };
+}
+
+function frameBox(
+  canvasWidth: number,
+  canvasHeight: number,
+  aspectRatio: TrailerProject["aspectRatio"],
+): { x: number; y: number; width: number; height: number } {
+  const [aspectWidth, aspectHeight] = aspectRatio.split(":").map(Number);
+  const ratio = aspectWidth / aspectHeight;
+  const canvasRatio = canvasWidth / canvasHeight;
+  const width = ratio > canvasRatio ? canvasWidth : canvasHeight * ratio;
+  const height = width / ratio;
+  return {
+    x: (canvasWidth - width) / 2,
+    y: (canvasHeight - height) / 2,
+    width,
+    height,
+  };
 }
 
 function waitForVideoEvent(video: HTMLVideoElement, eventName: "loadeddata" | "seeked"): Promise<void> {
@@ -78,22 +97,25 @@ function drawTrailerFrame(
   context.fillStyle = "#05070b";
   context.fillRect(0, 0, width, height);
 
+  const frameAtTime = getTrailerFrameAtTime(project, momentIndex, video.currentTime);
+  const slot = frameAtTime?.slot;
+  const frame = frameAtTime?.position ?? { x: 50, y: 50, zoom: 1, fit: project.fit };
+  const box = frameBox(width, height, slot?.aspectRatio ?? project.aspectRatio);
   if (video.videoWidth > 0 && video.videoHeight > 0) {
-    const frame = getTrailerMomentFrame(project, momentIndex);
     const baseScale = frame.fit === "cover"
-      ? Math.max(width / video.videoWidth, height / video.videoHeight)
-      : Math.min(width / video.videoWidth, height / video.videoHeight);
+      ? Math.max(box.width / video.videoWidth, box.height / video.videoHeight)
+      : Math.min(box.width / video.videoWidth, box.height / video.videoHeight);
     const baseWidth = video.videoWidth * baseScale;
     const baseHeight = video.videoHeight * baseScale;
     const drawWidth = baseWidth * frame.zoom;
     const drawHeight = baseHeight * frame.zoom;
-    const baseLeft = (width - baseWidth) * frame.cropX / 100;
-    const baseTop = (height - baseHeight) * frame.cropY / 100;
-    const left = width / 2 + (baseLeft - width / 2) * frame.zoom;
-    const top = height / 2 + (baseTop - height / 2) * frame.zoom;
+    const baseLeft = box.x + (box.width - baseWidth) * frame.x / 100;
+    const baseTop = box.y + (box.height - baseHeight) * frame.y / 100;
+    const left = box.x + box.width / 2 + (baseLeft - box.x - box.width / 2) * frame.zoom;
+    const top = box.y + box.height / 2 + (baseTop - box.y - box.height / 2) * frame.zoom;
     context.save();
     context.beginPath();
-    context.rect(0, 0, width, height);
+    context.rect(box.x, box.y, box.width, box.height);
     context.clip();
     context.drawImage(video, left, top, drawWidth, drawHeight);
     context.restore();
@@ -107,38 +129,38 @@ function drawTrailerFrame(
   context.shadowOffsetY = Math.max(2, height * 0.004);
 
   if (project.brandLine) {
-    context.font = `700 ${Math.max(18, width * 0.035)}px system-ui, sans-serif`;
+    context.font = `700 ${Math.max(18, box.width * 0.035)}px system-ui, sans-serif`;
     context.fillStyle = "#67e8f9";
-    context.fillText(project.brandLine, width / 2, height * 0.11, width * 0.84);
+    context.fillText(project.brandLine, box.x + box.width / 2, box.y + box.height * 0.11, box.width * 0.84);
   }
   if (project.headline) {
-    context.font = `800 ${Math.max(28, width * 0.075)}px system-ui, sans-serif`;
+    context.font = `800 ${Math.max(28, box.width * 0.075)}px system-ui, sans-serif`;
     context.fillStyle = "#ffffff";
-    context.fillText(project.headline, width / 2, height * 0.2, width * 0.88);
+    context.fillText(project.headline, box.x + box.width / 2, box.y + box.height * 0.2, box.width * 0.88);
   }
   if (currentMoment?.title) {
-    context.font = `700 ${Math.max(22, width * 0.05)}px system-ui, sans-serif`;
+    context.font = `700 ${Math.max(22, box.width * 0.05)}px system-ui, sans-serif`;
     context.fillStyle = "#ffffff";
-    context.fillText(currentMoment.title, width / 2, height * (project.callToAction ? 0.76 : 0.84), width * 0.88);
+    context.fillText(currentMoment.title, box.x + box.width / 2, box.y + box.height * (project.callToAction ? 0.76 : 0.84), box.width * 0.88);
   }
   if (currentMoment?.hook) {
-    const fontSize = Math.max(18, width * 0.04);
+    const fontSize = Math.max(18, box.width * 0.04);
     context.font = `600 ${fontSize}px system-ui, sans-serif`;
     context.fillStyle = "#ffffff";
-    const lines = drawWrappedText(context, currentMoment.hook, width * 0.84, 3);
+    const lines = drawWrappedText(context, currentMoment.hook, box.width * 0.84, 3);
     const lineHeight = fontSize * 1.2;
-    const firstLineY = height * (project.callToAction ? 0.68 : 0.73)
+    const firstLineY = box.y + box.height * (project.callToAction ? 0.68 : 0.73)
       - (lines.length - 1) * lineHeight / 2;
     lines.forEach((line, index) => {
-      context.fillText(line, width / 2, firstLineY + index * lineHeight, width * 0.84);
+      context.fillText(line, box.x + box.width / 2, firstLineY + index * lineHeight, box.width * 0.84);
     });
   }
   if (project.callToAction && momentIndex === project.moments.length - 1) {
-    const fontSize = Math.max(18, width * 0.038);
-    const textWidth = Math.min(width * 0.84, context.measureText(project.callToAction).width + fontSize * 2);
+    const fontSize = Math.max(18, box.width * 0.038);
+    const textWidth = Math.min(box.width * 0.84, context.measureText(project.callToAction).width + fontSize * 2);
     const buttonHeight = fontSize * 2.1;
-    const buttonX = (width - textWidth) / 2;
-    const buttonY = height * 0.87;
+    const buttonX = box.x + (box.width - textWidth) / 2;
+    const buttonY = box.y + box.height * 0.87;
     context.shadowBlur = 0;
     context.fillStyle = "#22d3ee";
     context.beginPath();
@@ -147,7 +169,7 @@ function drawTrailerFrame(
     context.fillStyle = "#082f49";
     context.font = `800 ${fontSize}px system-ui, sans-serif`;
     context.shadowColor = "transparent";
-    context.fillText(project.callToAction, width / 2, buttonY + buttonHeight * 0.67, textWidth - fontSize);
+    context.fillText(project.callToAction, box.x + box.width / 2, buttonY + buttonHeight * 0.67, textWidth - fontSize);
   }
   context.restore();
 }
@@ -181,7 +203,7 @@ export async function exportTrailerVideo(
   ].find((candidate) => MediaRecorder.isTypeSupported(candidate));
   if (!mimeType) throw new Error("This browser does not support MP4 or WebM recording.");
 
-  const { width, height } = dimensionsFor(project.aspectRatio);
+  const { width, height } = dimensionsFor(project);
   const canvas = document.createElement("canvas");
   canvas.width = width;
   canvas.height = height;

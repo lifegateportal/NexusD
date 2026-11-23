@@ -2,7 +2,10 @@ import { z } from "zod";
 import {
   LibraryVideoSegmentSchema,
 } from "@/lib/schemas/library-video";
-import { ShortAspectRatioSchema } from "@/lib/schemas/video-short";
+import {
+  ShortAspectRatioSchema,
+  ShortFrameSlotSchema,
+} from "@/lib/schemas/video-short";
 
 export const TrailerSlugSchema = z.string().regex(/^[a-z0-9][a-z0-9-]{0,79}$/);
 
@@ -32,9 +35,30 @@ export const TrailerMomentSchema = z.object({
     cropY: z.number().finite().min(0).max(100),
     zoom: z.number().finite().min(1).max(3),
   }).strict().optional(),
-}).strict().refine((moment) => moment.endSeconds > moment.startSeconds, {
-  message: "Moment end must be after its start.",
-  path: ["endSeconds"],
+  frameSlots: z.array(ShortFrameSlotSchema).min(1).max(100).optional(),
+}).strict().superRefine((moment, context) => {
+  if (moment.endSeconds <= moment.startSeconds) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["endSeconds"],
+      message: "Moment end must be after its start.",
+    });
+  }
+  if (!moment.frameSlots) return;
+  const slots = [...moment.frameSlots].sort((first, second) => first.startSeconds - second.startSeconds);
+  if (
+    Math.abs(slots[0].startSeconds - moment.startSeconds) > 0.05
+    || Math.abs(slots[slots.length - 1].endSeconds - moment.endSeconds) > 0.05
+    || slots.some((slot, index) =>
+      index > 0 && Math.abs(slot.startSeconds - slots[index - 1].endSeconds) > 0.05,
+    )
+  ) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["frameSlots"],
+      message: "Framing slots must cover this trailer moment continuously.",
+    });
+  }
 });
 
 export const TrailerProjectSchema = z.object({

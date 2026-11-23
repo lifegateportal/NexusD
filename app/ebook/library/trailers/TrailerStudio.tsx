@@ -19,7 +19,15 @@ import {
 import { ShortAspectRatioSchema } from "@/lib/schemas/video-short";
 import { deleteShortSource, getShortSource, saveShortSource } from "@/lib/short-video-store";
 import { exportTrailerVideo } from "@/lib/trailer-video-export";
-import { getTrailerMomentFrame } from "@/lib/trailer-utils";
+import {
+  createTrailerFrameSlots,
+  getTrailerFrameAtTime,
+  getTrailerFrameSlots,
+  resizeTrailerFrameSlots,
+  setTrailerFrameKeyframe,
+  splitTrailerFrameSlot as splitTrailerFrameSlots,
+  type TrailerFramePosition,
+} from "@/lib/trailer-utils";
 
 const ErrorSchema = z.object({ error: z.string() });
 const TranscriptResponseSchema = z.object({
@@ -44,6 +52,7 @@ const MAX_TRAILER_SECONDS = 300;
 
 type Catalog = z.infer<typeof TrailerCatalogSchema>;
 type PlayRequest = { index: number; nonce: number };
+type SeekRequest = { index: number; timeSeconds: number; nonce: number };
 
 function projectRenderSignature(project: TrailerProject): string {
   const { updatedAt: _updatedAt, ...renderableProject } = project;
@@ -64,17 +73,29 @@ function createSlug(): string {
   return `trailer-${crypto.randomUUID()}`;
 }
 
-function initialMoment(segments: z.infer<typeof LibraryVideoSegmentSchema>[], durationSeconds: number): TrailerMoment {
+function initialMoment(
+  segments: z.infer<typeof LibraryVideoSegmentSchema>[],
+  durationSeconds: number,
+  aspectRatio: z.infer<typeof ShortAspectRatioSchema>,
+): TrailerMoment {
   const first = segments[0];
   const startSeconds = first?.startSeconds ?? 0;
   const endSeconds = Math.min(durationSeconds, Math.max(startSeconds + 6, first?.endSeconds ?? 0));
+  const momentEndSeconds = Math.max(startSeconds + 0.1, endSeconds);
   return {
     id: crypto.randomUUID(),
     startSeconds,
-    endSeconds: Math.max(startSeconds + 0.1, endSeconds),
+    endSeconds: momentEndSeconds,
     title: "Opening hook",
     hook: first?.text.slice(0, 240) ?? "",
     reason: "Edit this moment or generate an AI-curated sequence.",
+    frameSlots: createTrailerFrameSlots(startSeconds, momentEndSeconds, aspectRatio, {
+      timeSeconds: startSeconds,
+      x: 50,
+      y: 50,
+      zoom: 1,
+      fit: "cover",
+    }),
   };
 }
 
@@ -98,7 +119,7 @@ function createProject(input: {
     },
     sourceDurationSeconds: input.durationSeconds,
     transcript: input.segments,
-    moments: [initialMoment(input.segments, input.durationSeconds)],
+    moments: [initialMoment(input.segments, input.durationSeconds, "9:16")],
     aspectRatio: "9:16",
     fit: "cover",
     cropX: 50,
@@ -171,7 +192,9 @@ export default function TrailerStudio() {
   const [localVideoUrl, setLocalVideoUrl] = useState<string | null>(null);
   const [sourceFileReady, setSourceFileReady] = useState(false);
   const [playRequest, setPlayRequest] = useState<PlayRequest | null>(null);
+  const [seekRequest, setSeekRequest] = useState<SeekRequest | null>(null);
   const [activeMoment, setActiveMoment] = useState(0);
+  const [previewTime, setPreviewTime] = useState(0);
   const [manualStart, setManualStart] = useState("0");
   const [manualEnd, setManualEnd] = useState("8");
   const [loading, setLoading] = useState(true);
@@ -236,6 +259,7 @@ export default function TrailerStudio() {
 
   const handlePreviewError = useCallback((message: string) => setError(message), []);
   const handleActiveMomentChange = useCallback((index: number) => setActiveMoment(index), []);
+  const handleCurrentTimeChange = useCallback((timeSeconds: number) => setPreviewTime(timeSeconds), []);
 
   function resetEditor() {
     setProject(null);
@@ -245,6 +269,8 @@ export default function TrailerStudio() {
     exportedVideoRef.current = null;
     exportedProjectSignatureRef.current = null;
     setPlayRequest(null);
+    setSeekRequest(null);
+    setPreviewTime(0);
     setDownloadUrl(null);
     setSourceTitle("");
     setYoutubeUrl("");
@@ -255,7 +281,24 @@ export default function TrailerStudio() {
   function playFromMoment(index: number) {
     setPlayRequest((current) => ({ index, nonce: (current?.nonce ?? 0) + 1 }));
     setActiveMoment(index);
+    setPreviewTime(project?.moments[index]?.startSeconds ?? 0);
     setError("");
+  }
+
+  function seekPreview(timeSeconds: number) {
+    const moment = project?.moments[activeMoment];
+    if (!moment) return;
+    const nextTime = Math.max(moment.startSeconds, Math.min(moment.endSeconds, timeSeconds));
+    requestPreviewSeek(activeMoment, nextTime);
+  }
+
+  function requestPreviewSeek(index: number, timeSeconds: number) {
+    setPreviewTime(timeSeconds);
+    setSeekRequest((current) => ({
+      index,
+      timeSeconds,
+      nonce: (current?.nonce ?? 0) + 1,
+    }));
   }
 
   async function createFromApprovedVideo() {
@@ -294,6 +337,7 @@ export default function TrailerStudio() {
       setManualStart(String(next.moments[0].startSeconds));
       setManualEnd(String(next.moments[0].endSeconds));
       setActiveMoment(0);
+      requestPreviewSeek(0, next.moments[0].startSeconds);
       setLocalVideoUrl(null);
       setSourceFileReady(false);
       localFileRef.current = null;
@@ -334,6 +378,7 @@ export default function TrailerStudio() {
       setManualStart(String(next.moments[0].startSeconds));
       setManualEnd(String(next.moments[0].endSeconds));
       setActiveMoment(0);
+      requestPreviewSeek(0, next.moments[0].startSeconds);
       setLocalVideoUrl(null);
       setSourceFileReady(false);
       localFileRef.current = null;
@@ -400,6 +445,7 @@ export default function TrailerStudio() {
     setManualStart(String(next.moments[0].startSeconds));
     setManualEnd(String(next.moments[0].endSeconds));
     setActiveMoment(0);
+    requestPreviewSeek(0, next.moments[0].startSeconds);
     setNotice(transcriptionWarning
       ? "Source saved in this browser. Add moments manually; AI curation needs a transcript."
       : "Source saved in this browser and transcribed. Ask AI to curate a trailer sequence.");
@@ -452,13 +498,30 @@ export default function TrailerStudio() {
       }
       setProject((current) => current ? {
         ...current,
-        moments: orderedSuggestions.map((moment) => ({
-          id: crypto.randomUUID(),
-          ...moment,
-          frame: getTrailerMomentFrame(current, activeMoment),
-        })),
+        moments: (() => {
+          const currentFrame = getTrailerFrameAtTime(current, activeMoment, previewTime);
+          const position = currentFrame?.position ?? {
+            timeSeconds: previewTime,
+            x: 50,
+            y: 50,
+            zoom: 1,
+            fit: current.fit,
+          };
+          const aspectRatio = currentFrame?.slot.aspectRatio ?? current.aspectRatio;
+          return orderedSuggestions.map((moment) => ({
+            id: crypto.randomUUID(),
+            ...moment,
+            frameSlots: createTrailerFrameSlots(
+              moment.startSeconds,
+              moment.endSeconds,
+              aspectRatio,
+              position,
+            ),
+          }));
+        })(),
       } : current);
       setActiveMoment(0);
+      requestPreviewSeek(0, orderedSuggestions[0]?.startSeconds ?? 0);
       setNotice("AI sequence created. Review and edit every selected moment before saving or exporting.");
     } catch (curationError) {
       setError(curationError instanceof Error ? curationError.message : "Could not curate trailer moments.");
@@ -515,6 +578,8 @@ export default function TrailerStudio() {
       setManualStart(String(parsed.data.moments[0].startSeconds));
       setManualEnd(String(parsed.data.moments[0].endSeconds));
       setActiveMoment(0);
+      setPlayRequest(null);
+      requestPreviewSeek(0, parsed.data.moments[0].startSeconds);
       setDownloadUrl(null);
       exportedVideoRef.current = null;
       exportedProjectSignatureRef.current = null;
@@ -658,7 +723,7 @@ export default function TrailerStudio() {
           action: "publish",
           slug: validatedProject.slug,
           title: validatedProject.title,
-          aspectRatio: validatedProject.aspectRatio,
+          aspectRatio: getTrailerFrameSlots(validatedProject, 0)[0]?.aspectRatio ?? validatedProject.aspectRatio,
           videoUrl: upload.data.videoUrl,
         }),
       });
@@ -707,12 +772,45 @@ export default function TrailerStudio() {
   }
 
   function updateMoment(index: number, patch: Partial<TrailerMoment>) {
+    const currentMoment = project?.moments[index];
+    if (!project || !currentMoment) return;
+    const nextStart = patch.startSeconds ?? currentMoment.startSeconds;
+    const nextEnd = patch.endSeconds ?? currentMoment.endSeconds;
+    if (
+      (patch.startSeconds !== undefined || patch.endSeconds !== undefined)
+      && (nextStart < 0 || nextEnd <= nextStart || nextEnd > project.sourceDurationSeconds)
+    ) {
+      setError("Enter a valid moment range inside the source video.");
+      return;
+    }
+    let resizedFrameSlots: ReturnType<typeof getTrailerFrameSlots> | undefined;
+    if (patch.startSeconds !== undefined || patch.endSeconds !== undefined) {
+      try {
+        resizedFrameSlots = resizeTrailerFrameSlots(
+          getTrailerFrameSlots(project, index),
+          nextStart,
+          nextEnd,
+        );
+      } catch (resizeError) {
+        setError(resizeError instanceof Error ? resizeError.message : "Could not resize this moment's framing slots.");
+        return;
+      }
+    }
     setProject((current) => current ? {
       ...current,
-      moments: current.moments.map((moment, momentIndex) =>
-        momentIndex === index ? { ...moment, ...patch } : moment,
-      ),
+      moments: current.moments.map((moment, momentIndex) => {
+        if (momentIndex !== index) return moment;
+        return {
+          ...moment,
+          ...patch,
+          ...(resizedFrameSlots ? { frameSlots: resizedFrameSlots } : {}),
+        };
+      }),
     } : current);
+    if (index === activeMoment && (patch.startSeconds !== undefined || patch.endSeconds !== undefined)) {
+      const timeSeconds = Math.max(nextStart, Math.min(nextEnd, previewTime));
+      requestPreviewSeek(index, timeSeconds);
+    }
   }
 
   function moveMoment(index: number, direction: -1 | 1) {
@@ -723,6 +821,7 @@ export default function TrailerStudio() {
     [moments[index], moments[target]] = [moments[target], moments[index]];
     setProject({ ...project, moments });
     setActiveMoment(target);
+    requestPreviewSeek(target, moments[target].startSeconds);
   }
 
   function addManualMoment() {
@@ -747,6 +846,14 @@ export default function TrailerStudio() {
       .filter((segment) => segment.endSeconds > startSeconds && segment.startSeconds < endSeconds)
       .map((segment) => segment.text)
       .join(" ");
+    const currentFrame = getTrailerFrameAtTime(project, activeMoment, previewTime);
+    const framePosition = currentFrame?.position ?? {
+      timeSeconds: previewTime,
+      x: 50,
+      y: 50,
+      zoom: 1,
+      fit: project.fit,
+    };
     const nextMoment: TrailerMoment = {
       id: crypto.randomUUID(),
       startSeconds,
@@ -754,10 +861,16 @@ export default function TrailerStudio() {
       title: `Moment ${project.moments.length + 1}`,
       hook: transcriptText.slice(0, 240),
       reason: "Added manually.",
-      frame: getTrailerMomentFrame(project, activeMoment),
+      frameSlots: createTrailerFrameSlots(
+        startSeconds,
+        endSeconds,
+        currentFrame?.slot.aspectRatio ?? project.aspectRatio,
+        framePosition,
+      ),
     };
     setProject({ ...project, moments: [...project.moments, nextMoment] });
     setActiveMoment(project.moments.length);
+    requestPreviewSeek(project.moments.length, startSeconds);
     setError("");
   }
 
@@ -768,7 +881,9 @@ export default function TrailerStudio() {
     }
     const moments = project.moments.filter((_, momentIndex) => momentIndex !== index);
     setProject({ ...project, moments });
-    setActiveMoment(activeMoment > index ? activeMoment - 1 : Math.min(activeMoment, moments.length - 1));
+    const nextActiveMoment = activeMoment > index ? activeMoment - 1 : Math.min(activeMoment, moments.length - 1);
+    setActiveMoment(nextActiveMoment);
+    requestPreviewSeek(nextActiveMoment, moments[nextActiveMoment].startSeconds);
   }
 
   const selectedMoment = project?.moments[activeMoment];
@@ -782,20 +897,98 @@ export default function TrailerStudio() {
     && exportedProjectSignatureRef.current === projectRenderSignature(project),
   );
   const canPublish = hasCurrentExport;
-  const updateActiveMomentFrame = useCallback((patch: Partial<ReturnType<typeof getTrailerMomentFrame>>) => {
+  const frameAtPlayhead = project
+    ? getTrailerFrameAtTime(project, activeMoment, previewTime)
+    : null;
+  const selectedSlot = frameAtPlayhead?.slot ?? null;
+  const selectedFrame = frameAtPlayhead?.position ?? null;
+  const activeFrameSlots = project ? getTrailerFrameSlots(project, activeMoment) : [];
+  const selectedSlotIndex = activeFrameSlots.findIndex((slot) =>
+    previewTime >= slot.startSeconds && previewTime <= slot.endSeconds,
+  );
+
+  const setKeyframeAtTime = useCallback((
+    timeSeconds: number,
+    patch: Partial<TrailerFramePosition>,
+    persistFit = false,
+  ) => {
+    const selectedProjectMoment = project?.moments[activeMoment];
+    if (!project || !selectedProjectMoment) return;
+    const boundedTime = Math.max(
+      selectedProjectMoment.startSeconds,
+      Math.min(selectedProjectMoment.endSeconds, timeSeconds),
+    );
+    let frameSlots: ReturnType<typeof getTrailerFrameSlots>;
+    try {
+      frameSlots = setTrailerFrameKeyframe(
+        getTrailerFrameSlots(project, activeMoment),
+        boundedTime,
+        patch,
+        persistFit,
+      );
+    } catch (editError) {
+      setError(editError instanceof Error ? editError.message : "Could not save this crop keyframe.");
+      return;
+    }
     setProject((current) => current ? {
       ...current,
       moments: current.moments.map((moment, index) =>
-        index === activeMoment
-          ? { ...moment, frame: { ...getTrailerMomentFrame(current, index), ...patch } }
-          : moment,
+        index === activeMoment ? { ...moment, frameSlots } : moment,
       ),
     } : current);
-  }, [activeMoment]);
-  const handleCropChange = useCallback((cropX: number, cropY: number) => {
-    updateActiveMomentFrame({ cropX, cropY });
-  }, [updateActiveMomentFrame]);
-  const selectedFrame = project ? getTrailerMomentFrame(project, activeMoment) : null;
+  }, [activeMoment, project]);
+
+  const splitFrameSlot = useCallback(() => {
+    if (!project || !selectedMoment) return;
+    let frameSlots: ReturnType<typeof getTrailerFrameSlots>;
+    try {
+      frameSlots = splitTrailerFrameSlots(getTrailerFrameSlots(project, activeMoment), previewTime);
+    } catch (splitError) {
+      setError(splitError instanceof Error ? splitError.message : "Could not split this framing slot.");
+      return;
+    }
+    setProject((current) => current ? {
+      ...current,
+      moments: current.moments.map((moment, index) =>
+        index === activeMoment ? { ...moment, frameSlots } : moment,
+      ),
+    } : current);
+    setError("");
+    setNotice("Framing slot split at the playhead. Both sides retain the current crop and can now be edited independently.");
+  }, [activeMoment, previewTime, project, selectedMoment]);
+
+  const handleCropChange = useCallback((
+    timeSeconds: number,
+    cropX: number,
+    cropY: number,
+    zoom: number,
+    fit: "cover" | "contain",
+  ) => {
+    setKeyframeAtTime(timeSeconds, { x: cropX, y: cropY, zoom, fit });
+  }, [setKeyframeAtTime]);
+
+  function updateActiveFrameAspectRatio(aspectRatio: z.infer<typeof ShortAspectRatioSchema>) {
+    if (!project || !selectedSlot) return;
+    const slots = getTrailerFrameSlots(project, activeMoment);
+    const selectedSlotIndex = slots.findIndex((slot) =>
+      previewTime >= slot.startSeconds && previewTime <= slot.endSeconds,
+    );
+    if (selectedSlotIndex < 0) return;
+    setProject({
+      ...project,
+      ...(activeMoment === 0 && selectedSlotIndex === 0 ? { aspectRatio } : {}),
+      moments: project.moments.map((moment, index) =>
+        index === activeMoment
+          ? {
+            ...moment,
+            frameSlots: slots.map((slot, slotIndex) =>
+              slotIndex === selectedSlotIndex ? { ...slot, aspectRatio } : slot,
+            ),
+          }
+          : moment,
+      ),
+    });
+  }
 
   return (
     <div className="space-y-6 pb-20 lg:pb-0">
@@ -1010,28 +1203,71 @@ export default function TrailerStudio() {
                 project={project}
                 localVideoUrl={localVideoUrl}
                 playRequest={playRequest}
+                seekRequest={seekRequest}
                 activeMoment={activeMoment}
                 onActiveMomentChange={handleActiveMomentChange}
+                onCurrentTimeChange={handleCurrentTimeChange}
                 onCropChange={handleCropChange}
                 onError={handlePreviewError}
               />
               <p className="text-xs leading-relaxed text-slate-500">
-                An uploaded source is used for local montage playback and rendering. Without it, YouTube remains an embedded preview and can buffer between selected moments. YouTube auto-captions are disabled.
+                {localVideoUrl
+                  ? "The uploaded source powers local montage playback and rendering. Captions already baked into its video pixels cannot be removed."
+                  : "YouTube stays embedded and may buffer between moments. Trailer Studio suppresses the YouTube caption module where supported; captions burned into the source cannot be removed."}
               </p>
               <section className="space-y-3 rounded-xl border border-slate-800 bg-slate-950/60 p-4">
                 <div>
-                  <h3 className="font-bold text-white">Frame and crop</h3>
-                  <p className="mt-1 text-xs text-slate-400">Each moment keeps its own crop. Drag the preview or use the controls like Shorts Studio.</p>
+                  <h3 className="font-bold text-white">Framing and crop</h3>
+                  <p className="mt-1 text-xs text-slate-400">
+                    Moment {activeMoment + 1} · Slot {Math.max(1, selectedSlotIndex + 1)} of {activeFrameSlots.length}
+                  </p>
                 </div>
+                {selectedMoment && selectedFrame && selectedSlot && (
+                  <>
+                    <label className="block text-sm font-semibold text-slate-300">
+                      Playhead · {previewTime.toFixed(1)}s
+                      <input
+                        type="range"
+                        min={selectedMoment.startSeconds}
+                        max={selectedMoment.endSeconds}
+                        step="0.05"
+                        value={Math.max(selectedMoment.startSeconds, Math.min(selectedMoment.endSeconds, previewTime))}
+                        onChange={(event) => seekPreview(Number(event.target.value))}
+                        className="mt-2 min-h-12 w-full accent-cyan-300"
+                        aria-label="Seek within the selected trailer moment"
+                      />
+                    </label>
+                    <div className="flex flex-wrap gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setKeyframeAtTime(previewTime, selectedFrame)}
+                        className="min-h-12 rounded-lg bg-cyan-300 px-4 text-sm font-bold text-slate-950"
+                      >
+                        Save position at playhead
+                      </button>
+                      <button
+                        type="button"
+                        onClick={splitFrameSlot}
+                        className="min-h-12 rounded-lg border border-cyan-800 px-4 text-sm font-semibold text-cyan-100"
+                      >
+                        Split framing slot here
+                      </button>
+                    </div>
+                  </>
+                )}
                 <div className="grid gap-3 sm:grid-cols-2">
                   <label className="block text-sm font-semibold text-slate-300">
                     Aspect ratio
                     <select
-                      value={project.aspectRatio}
-                      onChange={(event) => setProject({ ...project, aspectRatio: ShortAspectRatioSchema.parse(event.target.value) })}
+                      value={selectedSlot?.aspectRatio ?? project.aspectRatio}
+                      onChange={(event) => updateActiveFrameAspectRatio(ShortAspectRatioSchema.parse(event.target.value))}
                       className="mt-2 min-h-12 w-full rounded-xl border border-slate-700 bg-slate-900 px-3 text-base text-white"
                     >
-                      {ShortAspectRatioSchema.options.map((ratio) => <option key={ratio} value={ratio}>{ratio.replace(":", " : ")}</option>)}
+                      {ShortAspectRatioSchema.options.map((ratio) => (
+                        <option key={ratio} value={ratio}>
+                          {ratio === "9:16" ? "9:16 vertical" : ratio === "4:5" ? "4:5 portrait" : ratio === "1:1" ? "1:1 square" : "16:9 landscape"}
+                        </option>
+                      ))}
                     </select>
                   </label>
                   <div className="space-y-2">
@@ -1040,7 +1276,11 @@ export default function TrailerStudio() {
                       <button
                         type="button"
                         aria-pressed={selectedFrame?.fit === "contain"}
-                        onClick={() => updateActiveMomentFrame({ fit: "contain" })}
+                        onClick={() => selectedFrame && setKeyframeAtTime(
+                          previewTime,
+                          { x: selectedFrame.x, y: selectedFrame.y, zoom: selectedFrame.zoom, fit: "contain" },
+                          true,
+                        )}
                         className={`min-h-12 rounded-lg border px-3 text-sm font-semibold ${selectedFrame?.fit === "contain" ? "border-cyan-400 bg-cyan-950 text-cyan-100" : "border-slate-700 text-slate-300"}`}
                       >
                         Show full video
@@ -1048,14 +1288,18 @@ export default function TrailerStudio() {
                       <button
                         type="button"
                         aria-pressed={selectedFrame?.fit === "cover"}
-                        onClick={() => updateActiveMomentFrame({ fit: "cover" })}
+                        onClick={() => selectedFrame && setKeyframeAtTime(
+                          previewTime,
+                          { x: selectedFrame.x, y: selectedFrame.y, zoom: selectedFrame.zoom, fit: "cover" },
+                          true,
+                        )}
                         className={`min-h-12 rounded-lg border px-3 text-sm font-semibold ${selectedFrame?.fit === "cover" ? "border-cyan-400 bg-cyan-950 text-cyan-100" : "border-slate-700 text-slate-300"}`}
                       >
                         Fill frame
                       </button>
                       <button
                         type="button"
-                        onClick={() => updateActiveMomentFrame({ cropX: 50, cropY: 50, zoom: 1 })}
+                        onClick={() => setKeyframeAtTime(previewTime, { x: 50, y: 50, zoom: 1 })}
                         className="min-h-12 rounded-lg border border-slate-700 px-3 text-sm font-semibold text-slate-300"
                       >
                         Reset crop
@@ -1065,8 +1309,8 @@ export default function TrailerStudio() {
                 </div>
                 <div className="grid gap-3 sm:grid-cols-3">
                   {([
-                    ["cropX", "Horizontal framing"],
-                    ["cropY", "Vertical framing"],
+                    ["x", "Horizontal framing"],
+                    ["y", "Vertical framing"],
                     ["zoom", "Zoom"],
                   ] as const).map(([field, label]) => (
                     <label key={field} className="block text-sm font-semibold text-slate-300">
@@ -1076,12 +1320,10 @@ export default function TrailerStudio() {
                         min={field === "zoom" ? 1 : 0}
                         max={field === "zoom" ? 3 : 100}
                         step={field === "zoom" ? 0.05 : 1}
-                        value={selectedFrame?.[field] ?? project[field]}
+                        value={selectedFrame?.[field] ?? (field === "zoom" ? project.zoom : 50)}
                         onChange={(event) => {
                           const value = Number(event.target.value);
-                          if (field === "cropX") updateActiveMomentFrame({ cropX: value });
-                          else if (field === "cropY") updateActiveMomentFrame({ cropY: value });
-                          else updateActiveMomentFrame({ zoom: value });
+                          setKeyframeAtTime(previewTime, { [field]: value });
                         }}
                         className="mt-2 min-h-12 w-full accent-cyan-300"
                       />
