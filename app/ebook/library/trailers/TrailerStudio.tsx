@@ -10,7 +10,11 @@ import {
   type TrailerMoment,
   type TrailerProject,
 } from "@/lib/schemas/trailer";
-import { LibraryVideoSegmentSchema } from "@/lib/schemas/library-video";
+import {
+  LibraryVideoCatalogSchema,
+  LibraryVideoRecordSchema,
+  LibraryVideoSegmentSchema,
+} from "@/lib/schemas/library-video";
 import { ShortAspectRatioSchema } from "@/lib/schemas/video-short";
 import { deleteShortSource, getShortSource, saveShortSource } from "@/lib/short-video-store";
 import { exportTrailerVideo } from "@/lib/trailer-video-export";
@@ -28,6 +32,7 @@ const TranscriptionResponseSchema = z.object({
 }).passthrough();
 const SavedProjectResponseSchema = z.object({ project: TrailerProjectSchema }).strict();
 const MAX_SOURCE_BYTES = 100 * 1024 * 1024;
+const MAX_SOURCE_DURATION_SECONDS = 3600;
 const MAX_TRAILER_SECONDS = 300;
 
 type Catalog = z.infer<typeof TrailerCatalogSchema>;
@@ -144,6 +149,10 @@ function formatTime(seconds: number): string {
 export default function TrailerStudio() {
   const [catalog, setCatalog] = useState<Catalog | null>(null);
   const [project, setProject] = useState<TrailerProject | null>(null);
+  const [libraryVideos, setLibraryVideos] = useState<z.infer<typeof LibraryVideoCatalogSchema>["videos"]>([]);
+  const [selectedLibraryVideoId, setSelectedLibraryVideoId] = useState("");
+  const [libraryVideosLoading, setLibraryVideosLoading] = useState(true);
+  const [libraryVideosError, setLibraryVideosError] = useState("");
   const [youtubeUrl, setYoutubeUrl] = useState("");
   const [sourceTitle, setSourceTitle] = useState("");
   const [editorDirection, setEditorDirection] = useState("");
@@ -181,6 +190,28 @@ export default function TrailerStudio() {
     return () => { active = false; };
   }, [loadCatalog]);
 
+  useEffect(() => {
+    let active = true;
+    requestJson("/api/library/videos", { cache: "no-store" })
+      .then((body) => {
+        const parsed = LibraryVideoCatalogSchema.safeParse(body);
+        if (!parsed.success) throw new Error("The approved video catalog has an invalid format.");
+        if (active) {
+          setLibraryVideos(parsed.data.videos);
+          setSelectedLibraryVideoId(parsed.data.videos[0]?.videoId ?? "");
+        }
+      })
+      .catch((loadError: unknown) => {
+        if (active) {
+          setLibraryVideosError(loadError instanceof Error ? loadError.message : "Could not load approved videos.");
+        }
+      })
+      .finally(() => {
+        if (active) setLibraryVideosLoading(false);
+      });
+    return () => { active = false; };
+  }, []);
+
   useEffect(() => () => {
     if (localVideoUrl?.startsWith("blob:")) URL.revokeObjectURL(localVideoUrl);
   }, [localVideoUrl]);
@@ -209,6 +240,55 @@ export default function TrailerStudio() {
     setPlayRequest((current) => ({ index, nonce: (current?.nonce ?? 0) + 1 }));
     setActiveMoment(index);
     setError("");
+  }
+
+  async function createFromApprovedVideo() {
+    if (!selectedLibraryVideoId) return;
+    setBusy(true);
+    setError("");
+    setNotice("");
+    try {
+      const body = await requestJson(`/api/library/videos/${encodeURIComponent(selectedLibraryVideoId)}`, {
+        cache: "no-store",
+      });
+      const parsed = LibraryVideoRecordSchema.safeParse(body);
+      if (!parsed.success) throw new Error("The approved video transcript has an invalid format.");
+
+      const record = parsed.data;
+      const fullDuration = Math.max(...record.segments.map((segment) => segment.endSeconds));
+      const durationSeconds = Math.min(fullDuration, MAX_SOURCE_DURATION_SECONDS);
+      const segments = record.segments.flatMap((segment) => {
+        if (segment.startSeconds >= durationSeconds) return [];
+        const endSeconds = Math.min(segment.endSeconds, durationSeconds);
+        return endSeconds > segment.startSeconds ? [{ ...segment, endSeconds }] : [];
+      });
+      if (durationSeconds <= 0 || segments.length === 0) {
+        throw new Error("This approved transcript has no usable timestamps for Trailer Studio.");
+      }
+
+      const next = createProject({
+        title: record.title,
+        videoId: record.videoId,
+        youtubeUrl: record.youtubeUrl,
+        durationSeconds,
+        segments,
+      });
+      setProject(next);
+      setSourceTitle(record.title);
+      setManualStart(String(next.moments[0].startSeconds));
+      setManualEnd(String(next.moments[0].endSeconds));
+      setActiveMoment(0);
+      setLocalVideoUrl(null);
+      setSourceFileReady(false);
+      localFileRef.current = null;
+      setNotice(fullDuration > MAX_SOURCE_DURATION_SECONDS
+        ? "Approved transcript loaded. Trailer editing is limited to the first 60 minutes of this video."
+        : "Approved video and transcript loaded. Ask AI to curate moments, or edit the opening moment and add your own.");
+    } catch (loadError) {
+      setError(loadError instanceof Error ? loadError.message : "Could not load the approved video transcript.");
+    } finally {
+      setBusy(false);
+    }
   }
 
   async function createFromYouTube() {
@@ -577,6 +657,49 @@ export default function TrailerStudio() {
       {error && <p role="alert" className="rounded-xl border border-rose-900 bg-rose-950/40 p-4 text-sm text-rose-200">{error}</p>}
       {notice && <p role="status" className="rounded-xl border border-cyan-900 bg-cyan-950/30 p-4 text-sm text-cyan-100">{notice}</p>}
 
+      {!project && <section className="space-y-4 rounded-2xl border border-cyan-900/70 bg-cyan-950/20 p-4 lg:p-6">
+        <div>
+          <h2 className="text-lg font-bold text-white">Use an approved YouTube transcript</h2>
+          <p className="mt-1 text-sm leading-relaxed text-slate-300">
+            Choose one of your videos already approved in the Video Library. Trailer Studio will use its saved transcript and embedded YouTube video.
+          </p>
+        </div>
+        <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_auto]">
+          <label className="block">
+            <span className="text-sm font-semibold text-slate-200">Approved video</span>
+            <select
+              value={selectedLibraryVideoId}
+              onChange={(event) => setSelectedLibraryVideoId(event.target.value)}
+              disabled={libraryVideosLoading || libraryVideos.length === 0}
+              className="mt-2 min-h-12 w-full rounded-xl border border-slate-700 bg-slate-950 px-4 text-base text-white disabled:opacity-60"
+            >
+              <option value="">
+                {libraryVideosLoading ? "Loading approved videos…" : "Select an approved video"}
+              </option>
+              {libraryVideos.map((video) => (
+                <option key={video.videoId} value={video.videoId}>{video.title}</option>
+              ))}
+            </select>
+          </label>
+          <button
+            type="button"
+            onClick={() => void createFromApprovedVideo()}
+            disabled={busy || libraryVideosLoading || !selectedLibraryVideoId}
+            className="min-h-12 self-end rounded-xl bg-cyan-300 px-5 text-sm font-bold text-slate-950 disabled:opacity-50"
+          >
+            {busy ? "Loading video…" : "Load approved video"}
+          </button>
+        </div>
+        {libraryVideosError && (
+          <p role="alert" className="text-sm text-rose-200">{libraryVideosError}</p>
+        )}
+        {!libraryVideosLoading && !libraryVideosError && libraryVideos.length === 0 && (
+          <p className="text-sm text-amber-100">
+            No approved videos were found. Approve a timestamped transcript in Nexus Director, then refresh this page.
+          </p>
+        )}
+      </section>}
+
       {!project && <section className="grid gap-4 rounded-2xl border border-slate-800 bg-slate-900/40 p-4 lg:grid-cols-[minmax(0,1fr)_minmax(18rem,0.75fr)] lg:p-6">
         <form
           onSubmit={(event) => {
@@ -586,9 +709,9 @@ export default function TrailerStudio() {
           className="space-y-3"
         >
           <div>
-            <h2 className="text-lg font-bold text-white">Start from YouTube</h2>
+            <h2 className="text-lg font-bold text-white">Use another YouTube URL</h2>
             <p className="mt-1 text-sm leading-relaxed text-slate-400">
-              Load a timestamped transcript and curate an embedded preview. YouTube projects cannot be exported.
+              For a video not yet in the approved library, load its timestamped transcript here. YouTube projects cannot be exported.
             </p>
           </div>
           <label className="block">
