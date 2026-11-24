@@ -28,6 +28,7 @@ import {
 import { ShortAspectRatioSchema } from "@/lib/schemas/video-short";
 import { deleteShortSource, getShortSource, saveShortSource } from "@/lib/short-video-store";
 import { exportTrailerVideo } from "@/lib/trailer-video-export";
+import { transcribeTrailerSource } from "@/lib/trailer-transcription";
 import {
   createTrailerFrameSlots,
   getTrailerFrameAtTime,
@@ -45,10 +46,6 @@ const TranscriptResponseSchema = z.object({
   transcript: z.string(),
   segments: z.array(LibraryVideoSegmentSchema).min(1).max(20000),
 }).strict();
-const TranscriptionResponseSchema = z.object({
-  transcript: z.string().min(1),
-  segments: z.array(LibraryVideoSegmentSchema).min(1).max(20000),
-}).passthrough();
 const SavedProjectResponseSchema = z.object({ project: TrailerProjectSchema }).strict();
 const TrailerUploadResponseSchema = z.object({
   presignedUrl: z.string().url(),
@@ -221,20 +218,6 @@ function readVideoDuration(file: File): Promise<number> {
     video.addEventListener("loadedmetadata", onLoaded, { once: true });
     video.addEventListener("error", onError, { once: true });
   });
-}
-
-async function transcribeSource(file: File): Promise<z.infer<typeof LibraryVideoSegmentSchema>[]> {
-  const form = new FormData();
-  form.append("file", new File([file], file.name, { type: getFileContentType(file) }));
-  const body = await requestJson("/api/transcribe", { method: "POST", body: form });
-  const parsed = TranscriptionResponseSchema.safeParse(body);
-  if (!parsed.success) {
-    const detail = parsed.error.issues[0]?.message;
-    throw new Error(detail
-      ? `Transcription returned an invalid response: ${detail}`
-      : "Transcription service returned an invalid transcript.");
-  }
-  return parsed.data.segments;
 }
 
 function formatTime(seconds: number): string {
@@ -485,7 +468,7 @@ export default function TrailerStudio() {
     let transcript = currentProject?.transcript ?? [];
     let transcriptionWarning = "";
     try {
-      const transcribedSegments = await transcribeSource(file);
+      const transcribedSegments = await transcribeTrailerSource(file);
       transcript = transcribedSegments.flatMap((segment) => {
         if (segment.startSeconds >= durationSeconds) return [];
         const endSeconds = Math.min(segment.endSeconds, durationSeconds);
@@ -547,7 +530,7 @@ export default function TrailerStudio() {
     setError("");
     setNotice("");
     try {
-      const segments = await transcribeSource(localFileRef.current);
+      const segments = await transcribeTrailerSource(localFileRef.current);
       if (segments.length === 0) throw new Error("No usable speech timestamps were found in this source.");
       setProject((current) => current ? { ...current, transcript: segments } : current);
       setNotice("Source transcribed. AI moment curation is ready.");
