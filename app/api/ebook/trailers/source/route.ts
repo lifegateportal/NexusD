@@ -3,13 +3,14 @@ import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { env } from "@/lib/env";
+import { MAX_VIDEO_SOURCE_FILE_BYTES } from "@/lib/schemas/video-short";
 
 export const runtime = "nodejs";
 
 const RequestSchema = z.object({
   filename: z.string().trim().min(1).max(255),
   contentType: z.enum(["video/mp4", "video/webm"]),
-  size: z.number().int().min(1).max(500 * 1024 * 1024),
+  size: z.number().int().min(1).max(MAX_VIDEO_SOURCE_FILE_BYTES),
 }).strict();
 
 export async function POST(request: NextRequest) {

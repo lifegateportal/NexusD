@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { MAX_TRAILER_SOURCE_FILE_BYTES } from "@/lib/schemas/trailer";
+import { MAX_VIDEO_SOURCE_FILE_BYTES } from "@/lib/schemas/video-short";
 import { LibraryVideoSegmentSchema } from "@/lib/schemas/library-video";
 
 const DeepgramWordSchema = z.object({
@@ -30,7 +30,7 @@ const DeepgramResponseSchema = z.object({
 const DeepgramTokenSchema = z.object({ apiKey: z.string().min(1) });
 const ErrorResponseSchema = z.object({ error: z.string().min(1) });
 
-function trailerVideoContentType(file: File): "video/mp4" | "video/webm" {
+function videoContentType(file: File): "video/mp4" | "video/webm" {
   if (file.type === "video/mp4" || file.type === "video/webm") return file.type;
   const filename = file.name.toLowerCase();
   if (filename.endsWith(".mp4")) return "video/mp4";
@@ -43,11 +43,11 @@ function errorMessage(body: unknown, fallback: string): string {
   return parsed.success ? parsed.data.error : fallback;
 }
 
-export async function transcribeTrailerSource(file: File) {
-  if (file.size === 0 || file.size > MAX_TRAILER_SOURCE_FILE_BYTES) {
+export async function transcribeVideoSource(file: File) {
+  if (file.size === 0 || file.size > MAX_VIDEO_SOURCE_FILE_BYTES) {
     throw new Error("Source videos must be non-empty and 500 MB or smaller.");
   }
-  const contentType = trailerVideoContentType(file);
+  const contentType = videoContentType(file);
 
   const tokenResponse = await fetch("/api/transcribe-token", {
     cache: "no-store",

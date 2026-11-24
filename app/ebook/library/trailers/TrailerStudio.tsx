@@ -9,7 +9,6 @@ import {
   PublishedTrailerSchema,
   TrailerTransitionSchema,
   TrailerSuggestionResponseSchema,
-  MAX_TRAILER_SOURCE_FILE_BYTES,
   type TrailerMoment,
   type TrailerMusicTrack,
   type TrailerProject,
@@ -25,10 +24,10 @@ import {
   LibraryVideoRecordSchema,
   LibraryVideoSegmentSchema,
 } from "@/lib/schemas/library-video";
-import { ShortAspectRatioSchema } from "@/lib/schemas/video-short";
+import { MAX_VIDEO_SOURCE_FILE_BYTES, ShortAspectRatioSchema } from "@/lib/schemas/video-short";
 import { deleteShortSource, getShortSource, saveShortSource } from "@/lib/short-video-store";
 import { exportTrailerVideo } from "@/lib/trailer-video-export";
-import { transcribeTrailerSource } from "@/lib/trailer-transcription";
+import { transcribeVideoSource } from "@/lib/video-transcription";
 import {
   createTrailerFrameSlots,
   getTrailerFrameAtTime,
@@ -443,7 +442,7 @@ export default function TrailerStudio() {
   }
 
   async function uploadSource(file: File, currentProject?: TrailerProject) {
-    if (file.size === 0 || file.size > MAX_TRAILER_SOURCE_FILE_BYTES) {
+    if (file.size === 0 || file.size > MAX_VIDEO_SOURCE_FILE_BYTES) {
       throw new Error("Source videos must be non-empty and 500 MB or smaller.");
     }
     getFileContentType(file);
@@ -468,7 +467,7 @@ export default function TrailerStudio() {
     let transcript = currentProject?.transcript ?? [];
     let transcriptionWarning = "";
     try {
-      const transcribedSegments = await transcribeTrailerSource(file);
+      const transcribedSegments = await transcribeVideoSource(file);
       transcript = transcribedSegments.flatMap((segment) => {
         if (segment.startSeconds >= durationSeconds) return [];
         const endSeconds = Math.min(segment.endSeconds, durationSeconds);
@@ -530,7 +529,7 @@ export default function TrailerStudio() {
     setError("");
     setNotice("");
     try {
-      const segments = await transcribeTrailerSource(localFileRef.current);
+      const segments = await transcribeVideoSource(localFileRef.current);
       if (segments.length === 0) throw new Error("No usable speech timestamps were found in this source.");
       setProject((current) => current ? { ...current, transcript: segments } : current);
       setNotice("Source transcribed. AI moment curation is ready.");

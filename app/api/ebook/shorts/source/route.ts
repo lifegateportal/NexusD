@@ -3,6 +3,7 @@ import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { env } from "@/lib/env";
+import { MAX_VIDEO_SOURCE_FILE_BYTES } from "@/lib/schemas/video-short";
 
 export const runtime = "nodejs";
 
@@ -20,7 +21,7 @@ const RequestSchema = z.object({
     "image/jpeg",
     "image/webp",
   ]),
-  size: z.number().int().min(1).max(500 * 1024 * 1024),
+  size: z.number().int().min(1).max(MAX_VIDEO_SOURCE_FILE_BYTES),
 }).strict().refine(
   (input) => !input.contentType.startsWith("image/") || input.size <= 10 * 1024 * 1024,
   { message: "Images must be 10 MB or smaller.", path: ["size"] },

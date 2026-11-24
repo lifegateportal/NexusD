@@ -2,6 +2,7 @@ import { z } from "zod";
 import { LibraryVideoSegmentSchema } from "@/lib/schemas/library-video";
 
 export const ShortAspectRatioSchema = z.enum(["9:16", "4:5", "1:1", "16:9"]);
+export const MAX_VIDEO_SOURCE_FILE_BYTES = 500 * 1024 * 1024;
 export const ShortCaptionFontFamilySchema = z.enum(["sans", "condensed", "rounded", "serif"]);
 export const ShortCaptionStyleSchema = z.enum(["bold-box", "clean", "outline", "pill", "minimal"]);
 export const ShortOverlayPresetStyleSchema = z.enum([

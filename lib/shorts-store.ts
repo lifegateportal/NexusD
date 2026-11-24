@@ -265,9 +265,6 @@ export async function publishShort(projectInput: unknown): Promise<ShortProject>
     ) {
       throw new Error("Jamendo music needs valid artist and license links.");
     }
-    if (track.provider === "jamendo" && !env.JAMENDO_COMMERCIAL_USE_APPROVED) {
-      throw new Error("Confirm Jamendo commercial/API licensing before publishing Jamendo music.");
-    }
   }
 
   const catalog = await listPublicShorts();

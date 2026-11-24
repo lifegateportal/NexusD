@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { env } from "@/lib/env";
-import { MAX_TRAILER_SOURCE_FILE_BYTES } from "@/lib/schemas/trailer";
+import { MAX_VIDEO_SOURCE_FILE_BYTES } from "@/lib/schemas/video-short";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
@@ -47,7 +47,7 @@ export async function POST(request: NextRequest) {
     if (file.size === 0) {
       return NextResponse.json({ error: "The selected media file is empty." }, { status: 400 });
     }
-    if (file.size > MAX_TRAILER_SOURCE_FILE_BYTES) {
+    if (file.size > MAX_VIDEO_SOURCE_FILE_BYTES) {
       return NextResponse.json({ error: "Media files must be 500 MB or smaller." }, { status: 413 });
     }
 

@@ -27,6 +27,7 @@ import {
   type ShortProjectVersion,
   type ShortSummary,
   type ShortTranscriptCut,
+  MAX_VIDEO_SOURCE_FILE_BYTES,
 } from "@/lib/schemas/video-short";
 import {
   getDeletedTranscriptWordIndexes,
@@ -35,6 +36,7 @@ import {
   getTranscriptWordTimeRange,
   getTranscriptWords,
 } from "@/lib/short-transcript-edits";
+import { createShortSlug, createUploadedShortProject } from "@/lib/short-video-utils";
 import { DirectorVideoCatalogSchema } from "@/lib/schemas/library-video";
 import {
   ShortBrollSuggestionsResponseSchema,
@@ -47,6 +49,7 @@ import {
   ShortCaptureJobStatusResponseSchema,
   type ShortCaptureJobStatusResponse,
 } from "@/lib/schemas/short-capture";
+import { transcribeVideoSource } from "@/lib/video-transcription";
 
 const ErrorSchema = z.object({ error: z.string() });
 const CaptureHistoryResponseSchema = z.object({
@@ -169,12 +172,29 @@ function readMediaDuration(file: File, type: "audio" | "video"): Promise<number>
   });
 }
 
-function slugify(value: string): string {
-  return value
-    .toLocaleLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-|-$/g, "")
-    .slice(0, 52) || "video-short";
+function getVideoContentType(file: File): "video/mp4" | "video/webm" {
+  if (file.type === "video/mp4" || file.type === "video/webm") return file.type;
+  const filename = file.name.toLocaleLowerCase();
+  if (filename.endsWith(".mp4")) return "video/mp4";
+  if (filename.endsWith(".webm")) return "video/webm";
+  throw new Error("Choose an MP4 or WebM source video.");
+}
+
+function getAudioContentType(file: File): "audio/mpeg" | "audio/mp4" | "audio/aac" | "audio/wav" | "audio/x-wav" {
+  const declaredType: Record<string, "audio/mpeg" | "audio/mp4" | "audio/aac" | "audio/wav" | "audio/x-wav"> = {
+    "audio/mpeg": "audio/mpeg",
+    "audio/mp4": "audio/mp4",
+    "audio/aac": "audio/aac",
+    "audio/wav": "audio/wav",
+    "audio/x-wav": "audio/x-wav",
+  };
+  if (declaredType[file.type]) return declaredType[file.type];
+  const filename = file.name.toLocaleLowerCase();
+  if (filename.endsWith(".mp3")) return "audio/mpeg";
+  if (filename.endsWith(".m4a")) return "audio/mp4";
+  if (filename.endsWith(".aac")) return "audio/aac";
+  if (filename.endsWith(".wav")) return "audio/wav";
+  throw new Error("Choose an MP3, M4A, AAC, or WAV instrumental file.");
 }
 
 function getFramePosition(slot: ShortFrameSlot, timeSeconds: number): ShortCropKeyframe {
@@ -328,6 +348,7 @@ export default function ShortsStudio() {
   const [sermonBoundaryDrafts, setSermonBoundaryDrafts] = useState<Record<string, { start: string; end: string }>>({});
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
+  const [sourceTranscribing, setSourceTranscribing] = useState(false);
   const [exportProgress, setExportProgress] = useState<number | null>(null);
   const [exportDownloadUrl, setExportDownloadUrl] = useState<string | null>(null);
   const [exportFileName, setExportFileName] = useState("");
@@ -1047,19 +1068,28 @@ export default function ShortsStudio() {
       setError("A short can have up to 5 instrumental tracks.");
       return;
     }
-    const supportedAudioTypes = ["audio/mpeg", "audio/mp4", "audio/aac", "audio/wav", "audio/x-wav"];
-    if (!supportedAudioTypes.includes(file.type) || file.size > 100 * 1024 * 1024) {
+    let contentType: ReturnType<typeof getAudioContentType>;
+    try {
+      contentType = getAudioContentType(file);
+    } catch (audioError) {
+      setError(audioError instanceof Error ? audioError.message : "Choose an MP3, M4A, AAC, or WAV instrumental file.");
+      return;
+    }
+    if (file.size === 0 || file.size > 100 * 1024 * 1024) {
       setError("Choose an MP3, M4A, AAC, or WAV instrumental file up to 100 MB.");
       return;
     }
+    const audioFile = file.type === contentType
+      ? file
+      : new File([file], file.name, { type: contentType, lastModified: file.lastModified });
     setBusy(true);
     setError("");
     setNotice("");
     try {
-      const sourceDurationSeconds = await readMediaDuration(file, "audio");
+      const sourceDurationSeconds = await readMediaDuration(audioFile, "audio");
       const trackDuration = Math.min(sourceDurationSeconds, project.endSeconds - project.startSeconds);
       if (trackDuration < 0.1) throw new Error("This short does not have enough room for an instrumental track.");
-      const audioUrl = await uploadShortAsset(file);
+      const audioUrl = await uploadShortAsset(audioFile);
       const track: ShortMusicTrack = {
         id: crypto.randomUUID(),
         fileName: file.name,
@@ -1654,7 +1684,7 @@ export default function ShortsStudio() {
   }
 
   function makeProject(video: Video, startSeconds: number, endSeconds: number, title: string): ShortProject {
-    const projectSlug = `${slugify(video.title)}-${video.videoId.slice(0, 5).toLocaleLowerCase()}-${Date.now().toString(36)}`;
+    const projectSlug = `${createShortSlug(video.title)}-${video.videoId.slice(0, 5).toLocaleLowerCase()}-${Date.now().toString(36)}`;
     return ShortProjectSchema.parse({
       slug: projectSlug,
       title,
@@ -2174,6 +2204,13 @@ export default function ShortsStudio() {
 
   async function publishProject() {
     if (!project) return;
+    const unlicensedTrack = project.musicTracks.find((track) =>
+      track.provider === "jamendo" && !track.commercialLicenseConfirmed,
+    );
+    if (unlicensedTrack) {
+      setError(`Confirm the Jamendo commercial license for “${unlicensedTrack.fileName}” before publishing.`);
+      return;
+    }
     setBusy(true);
     setError("");
     setNotice("");
@@ -2250,30 +2287,96 @@ export default function ShortsStudio() {
     }
   }
 
+  async function startFromUploadedSource(file: File | undefined) {
+    if (!file) return;
+    setBusy(true);
+    setSourceTranscribing(true);
+    setError("");
+    setNotice("");
+    try {
+      if (file.size === 0 || file.size > MAX_VIDEO_SOURCE_FILE_BYTES) {
+        throw new Error("Source videos must be non-empty and 500 MB or smaller.");
+      }
+      const contentType = getVideoContentType(file);
+      const sourceFile = file.type === contentType
+        ? file
+        : new File([file], file.name, { type: contentType, lastModified: file.lastModified });
+      const durationSeconds = await readMediaDuration(sourceFile, "video");
+      const transcriptionSegments = await transcribeVideoSource(sourceFile);
+      const segments = transcriptionSegments.flatMap((segment) => {
+        if (segment.startSeconds >= durationSeconds) return [];
+        const endSeconds = Math.min(segment.endSeconds, durationSeconds);
+        return endSeconds > segment.startSeconds ? [{ ...segment, endSeconds }] : [];
+      });
+      if (segments.length === 0) {
+        throw new Error("Deepgram did not return usable speech timestamps for this video.");
+      }
+
+      const next = createUploadedShortProject(sourceFile.name, durationSeconds, segments);
+      localFileRef.current = sourceFile;
+      if (localVideoUrl?.startsWith("blob:")) URL.revokeObjectURL(localVideoUrl);
+      setLocalVideoUrl(URL.createObjectURL(sourceFile));
+      skipHistoryRef.current = true;
+      setProject(next);
+      setSelectedVideoId("");
+      setCurrentTime(next.startSeconds);
+      setSeekRequestSeconds(null);
+      setSuggestions([]);
+      setSuggestionsVideoId("");
+      setSuggestedBoundaries(null);
+
+      let storageWarning = "";
+      try {
+        await saveShortSource(next.slug, sourceFile);
+      } catch (storageError) {
+        storageWarning = storageError instanceof Error
+          ? ` The browser could not persist the source (${storageError.message}); it remains available for this session.`
+          : " The browser could not persist the source; it remains available for this session.";
+      }
+      setNotice(`Video transcribed with Deepgram. Edit the opening clip, then save or publish the short.${storageWarning}`);
+    } catch (sourceError) {
+      setError(sourceError instanceof Error ? sourceError.message : "Could not transcribe this uploaded source.");
+    } finally {
+      setSourceTranscribing(false);
+      setBusy(false);
+    }
+  }
+
   async function selectSourceFile(file: File | undefined) {
     if (!project || !file) return;
-    if (file.size > 500 * 1024 * 1024) {
-      setError("Source videos must be 500 MB or smaller.");
+    if (file.size === 0 || file.size > MAX_VIDEO_SOURCE_FILE_BYTES) {
+      setError("Source videos must be non-empty and 500 MB or smaller.");
       return;
     }
-    const contentType = file.type || (file.name.toLocaleLowerCase().endsWith(".webm") ? "video/webm" : "");
-    if (contentType !== "video/mp4" && contentType !== "video/webm") {
-      setError("Choose an MP4 or WebM video file.");
+    let contentType: "video/mp4" | "video/webm";
+    try {
+      contentType = getVideoContentType(file);
+    } catch (sourceError) {
+      setError(sourceError instanceof Error ? sourceError.message : "Choose an MP4 or WebM video file.");
       return;
     }
+    const sourceFile = file.type === contentType
+      ? file
+      : new File([file], file.name, { type: contentType, lastModified: file.lastModified });
     setBusy(true);
     setError("");
     try {
-      await saveShortSource(project.slug, file);
       if (localVideoUrl?.startsWith("blob:")) URL.revokeObjectURL(localVideoUrl);
-      const url = URL.createObjectURL(file);
-      localFileRef.current = file;
+      const url = URL.createObjectURL(sourceFile);
+      localFileRef.current = sourceFile;
       setLocalVideoUrl(url);
       updateProject({
-        source: { type: "upload", fileName: file.name },
+        source: { type: "upload", fileName: sourceFile.name },
         wordTimings: [],
       });
-      setNotice("Source saved in this browser for editing. It will upload to R2 only when you publish.");
+      try {
+        await saveShortSource(project.slug, sourceFile);
+        setNotice("Source saved in this browser for editing. It will upload to R2 only when you publish.");
+      } catch (storageError) {
+        setNotice(storageError instanceof Error
+          ? `Source is available for this session but could not be persisted in browser storage: ${storageError.message}`
+          : "Source is available for this session but could not be persisted in browser storage.");
+      }
     } catch (sourceError) {
       setError(sourceError instanceof Error ? sourceError.message : "Could not keep this source in browser storage.");
     } finally {
@@ -2343,6 +2446,29 @@ export default function ShortsStudio() {
             Start manual draft
           </button>
         </div>
+      </section>
+
+      <section className="space-y-3 rounded-2xl border border-cyan-900/70 bg-cyan-950/15 p-4 sm:p-6">
+        <div>
+          <h3 className="text-base font-semibold text-white">Start from an uploaded video</h3>
+          <p className="mt-1 text-sm leading-relaxed text-slate-400">
+            Upload an authorized MP4/WebM up to 500 MB. Deepgram transcribes it, then Shorts Studio opens a captioned, editable vertical draft. The source stays in this browser while editing and uploads to public storage only when you publish.
+          </p>
+        </div>
+        <label className="block text-sm font-medium text-slate-300">
+          Source video
+          <input
+            type="file"
+            accept="video/mp4,video/webm,.mp4,.webm"
+            disabled={busy}
+            onChange={(event) => {
+              void startFromUploadedSource(event.currentTarget.files?.[0]);
+              event.currentTarget.value = "";
+            }}
+            className="mt-2 block min-h-12 w-full text-base text-slate-300 file:mr-3 file:min-h-12 file:rounded-lg file:border-0 file:bg-slate-700 file:px-4 file:text-sm file:font-semibold file:text-white"
+          />
+        </label>
+        {sourceTranscribing && <p role="status" className="text-sm text-cyan-200">Transcribing the uploaded video with Deepgram…</p>}
       </section>
 
       <section className="space-y-3 rounded-2xl border border-violet-900/70 bg-violet-950/20 p-4 sm:p-6">
@@ -3281,7 +3407,7 @@ export default function ShortsStudio() {
                     )}
                   </section>
                   <p className="text-xs leading-relaxed text-amber-200">
-                    Web B-roll and music stream from their providers rather than being copied into storage. Jamendo requires commercial/API approval and a confirmed license for every track. A downloadable, merged video still requires an authorized source upload.
+                    Web B-roll and music stream from their providers rather than being copied into storage. Jamendo search requires API approval; publishing Jamendo music requires a confirmed commercial track license. A downloadable, merged video still requires an authorized source upload.
                   </p>
                 </div>
               </details>

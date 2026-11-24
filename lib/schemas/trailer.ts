@@ -8,7 +8,6 @@ import {
 } from "@/lib/schemas/video-short";
 
 export const TrailerSlugSchema = z.string().regex(/^[a-z0-9][a-z0-9-]{0,79}$/);
-export const MAX_TRAILER_SOURCE_FILE_BYTES = 500 * 1024 * 1024;
 export const TrailerTransitionSchema = z.enum([
   "cut",
   "fade",
