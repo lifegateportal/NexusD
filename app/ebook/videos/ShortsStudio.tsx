@@ -9,6 +9,7 @@ import { deleteShortSource, getShortSource, saveShortSource } from "@/lib/short-
 import { exportShortVideo } from "@/lib/short-video-export";
 import {
   ShortAgentSettingsSchema,
+  ShortAppearancePresetSchema,
   ShortCatalogSchema,
   GeneratedShortSuggestionsSchema,
   ShortOverlayPresetResponseSchema,
@@ -18,6 +19,7 @@ import {
   ShortTranscriptWordTimingSchema,
   ShortMusicTrackSchema,
   type ShortBrollClip,
+  type ShortAppearancePreset,
   type ShortCropKeyframe,
   type ShortFrameSlot,
   type ShortMusicTrack,
@@ -39,6 +41,10 @@ import {
 } from "@/lib/short-transcript-edits";
 import { createShortSlug, createUploadedShortProject } from "@/lib/short-video-utils";
 import { DirectorVideoCatalogSchema } from "@/lib/schemas/library-video";
+import {
+  ShortImageLibrarySchema,
+  type ShortImageAsset,
+} from "@/lib/schemas/short-assets";
 import {
   ShortBrollSuggestionsResponseSchema,
   ShortMusicFavoriteSchema,
@@ -345,12 +351,16 @@ export default function ShortsStudio() {
   const [webBrollSuggestions, setWebBrollSuggestions] = useState<ShortBrollSuggestion[]>([]);
   const [webMusicSuggestions, setWebMusicSuggestions] = useState<ShortMusicSuggestion[]>([]);
   const [musicFavorites, setMusicFavorites] = useState<ShortMusicFavorite[]>([]);
+  const [imageAssets, setImageAssets] = useState<ShortImageAsset[]>([]);
   const [manualBrollQuery, setManualBrollQuery] = useState("");
   const [mediaSuggestionsProjectSlug, setMediaSuggestionsProjectSlug] = useState("");
   const [mediaSearchKind, setMediaSearchKind] = useState<"broll" | "music" | null>(null);
   const [agentInstructions, setAgentInstructions] = useState("");
   const [overlayPresets, setOverlayPresets] = useState<ShortOverlayPreset[]>([]);
+  const [appearancePresets, setAppearancePresets] = useState<ShortAppearancePreset[]>([]);
   const [overlayBrief, setOverlayBrief] = useState("");
+  const [appearancePresetName, setAppearancePresetName] = useState("");
+  const [appearanceLogoOverlayId, setAppearanceLogoOverlayId] = useState("");
   const [captionDrafts, setCaptionDrafts] = useState<Record<number, string>>({});
   const [sermonBoundaryDrafts, setSermonBoundaryDrafts] = useState<Record<string, { start: string; end: string }>>({});
   const [loading, setLoading] = useState(true);
@@ -500,6 +510,7 @@ export default function ShortsStudio() {
         setShorts(shortCatalog.data.shorts);
         setAgentInstructions(settings.data.instructions);
         setOverlayPresets(settings.data.overlayPresets);
+        setAppearancePresets(settings.data.appearancePresets);
       }
       const generatedBody = await requestJson("/api/ebook/shorts/suggest", { cache: "no-store" });
       const generated = SuggestionResponseSchema.nullable().safeParse(generatedBody);
@@ -568,6 +579,20 @@ export default function ShortsStudio() {
       })
       .catch((libraryError: unknown) => {
         if (active) setError(libraryError instanceof Error ? libraryError.message : "Could not load saved music.");
+      });
+    return () => { active = false; };
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    requestJson("/api/ebook/shorts/image-library", { cache: "no-store" })
+      .then((body) => {
+        const parsed = ShortImageLibrarySchema.safeParse(body);
+        if (!parsed.success) throw new Error("Nexus Director returned an invalid saved image library.");
+        if (active) setImageAssets(parsed.data.images);
+      })
+      .catch((libraryError: unknown) => {
+        if (active) setError(libraryError instanceof Error ? libraryError.message : "Could not load saved images.");
       });
     return () => { active = false; };
   }, []);
@@ -796,15 +821,167 @@ export default function ShortsStudio() {
       const body = await requestJson("/api/ebook/shorts/settings", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ instructions: agentInstructions, overlayPresets }),
+        body: JSON.stringify({ instructions: agentInstructions, overlayPresets, appearancePresets }),
       });
       const parsed = ShortAgentSettingsSchema.safeParse(body);
       if (!parsed.success) throw new Error("The Shorts agent settings response is invalid.");
       setAgentInstructions(parsed.data.instructions);
       setOverlayPresets(parsed.data.overlayPresets);
+      setAppearancePresets(parsed.data.appearancePresets);
       setNotice("Reusable Shorts agent instructions saved.");
     } catch (settingsError) {
       setError(settingsError instanceof Error ? settingsError.message : "Could not save Shorts agent instructions.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function saveImageAsset(fileName: string, imageUrl: string) {
+    const body = await requestJson("/api/ebook/shorts/image-library", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "save", fileName, imageUrl }),
+    });
+    const parsed = ShortImageLibrarySchema.safeParse(body);
+    if (!parsed.success) throw new Error("The saved image library returned invalid data.");
+    setImageAssets(parsed.data.images);
+  }
+
+  function applyAppearancePreset(preset: ShortAppearancePreset) {
+    if (!project) return;
+    const nonLogoOverlays = project.overlays.filter((overlay) => overlay.type !== "image");
+    if (nonLogoOverlays.length + (preset.logo ? 1 : 0) > 20) {
+      setError("Remove an overlay layer before applying this appearance preset. Shorts can have up to 20 layers.");
+      return;
+    }
+    const currentLogo = project.overlays.find((overlay) => overlay.type === "image");
+    const logoOverlay = preset.logo ? ShortOverlaySchema.parse({
+      id: currentLogo?.id ?? crypto.randomUUID(),
+      type: "image",
+      startSeconds: project.startSeconds,
+      endSeconds: project.endSeconds,
+      left: preset.logo.left,
+      top: preset.logo.top,
+      width: preset.logo.width,
+      height: preset.logo.height,
+      opacity: preset.logo.opacity,
+      fontSize: 32,
+      textColor: "#ffffff",
+      backgroundColor: "transparent",
+      textStyle: "plain",
+      borderColor: "#22d3ee",
+      borderWidth: 0,
+      borderRadius: 8,
+      zIndex: preset.logo.zIndex,
+      imageUrl: preset.logo.imageUrl,
+      imageFit: preset.logo.imageFit,
+    }) : null;
+    updateProject({
+      frameSlots: project.frameSlots.map((slot) => ({ ...slot, aspectRatio: preset.aspectRatio })),
+      captionsEnabled: preset.captionsEnabled,
+      captionPosition: preset.captionPosition,
+      captionSize: preset.captionSize,
+      captionFontSize: preset.captionFontSize,
+      captionFontFamily: preset.captionFontFamily,
+      captionStyle: preset.captionStyle,
+      captionTextColor: preset.captionTextColor,
+      captionBackgroundColor: preset.captionBackgroundColor,
+      captionBackgroundOpacity: preset.captionBackgroundOpacity,
+      overlays: [...nonLogoOverlays, ...(logoOverlay ? [logoOverlay] : [])],
+    });
+    setNotice(`${preset.name} applied: frame, subtitles${preset.logo ? ", and logo" : ""} updated.`);
+    setError("");
+  }
+
+  async function saveAppearancePreset() {
+    if (!project || !appearancePresetName.trim()) {
+      setError("Enter a name for this appearance preset.");
+      return;
+    }
+    if (appearancePresets.length >= 20) {
+      setError("The appearance preset library is full. Remove a preset before saving another.");
+      return;
+    }
+    const logoOverlay = appearanceLogoOverlayId === "none"
+      ? undefined
+      : project.overlays.find((overlay) =>
+        overlay.id === appearanceLogoOverlayId && overlay.type === "image" && overlay.imageUrl,
+      ) ?? project.overlays.find((overlay) => overlay.type === "image" && overlay.imageUrl);
+    const logoAsset = logoOverlay?.imageUrl
+      ? imageAssets.find((asset) => asset.imageUrl === logoOverlay.imageUrl)
+      : undefined;
+    const parsedPreset = ShortAppearancePresetSchema.safeParse({
+      id: crypto.randomUUID(),
+      name: appearancePresetName.trim(),
+      aspectRatio: project.frameSlots[0]?.aspectRatio ?? "9:16",
+      captionsEnabled: project.captionsEnabled,
+      captionPosition: project.captionPosition,
+      captionSize: project.captionSize,
+      ...(project.captionFontSize === undefined ? {} : { captionFontSize: project.captionFontSize }),
+      captionFontFamily: project.captionFontFamily,
+      captionStyle: project.captionStyle,
+      captionTextColor: project.captionTextColor,
+      captionBackgroundColor: project.captionBackgroundColor,
+      captionBackgroundOpacity: project.captionBackgroundOpacity,
+      logo: logoOverlay?.imageUrl ? {
+        name: logoAsset?.fileName ?? "Logo",
+        imageUrl: logoOverlay.imageUrl,
+        left: logoOverlay.left,
+        top: logoOverlay.top,
+        width: logoOverlay.width,
+        height: logoOverlay.height,
+        opacity: logoOverlay.opacity,
+        imageFit: logoOverlay.imageFit ?? "contain",
+        zIndex: logoOverlay.zIndex,
+      } : null,
+    });
+    if (!parsedPreset.success) {
+      setError("This short's appearance settings could not be saved as a preset.");
+      return;
+    }
+    const updatedPresets = [...appearancePresets, parsedPreset.data];
+    setBusy(true);
+    setError("");
+    setNotice("");
+    try {
+      const body = await requestJson("/api/ebook/shorts/settings", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          instructions: agentInstructions,
+          overlayPresets,
+          appearancePresets: updatedPresets,
+        }),
+      });
+      const settings = ShortAgentSettingsSchema.safeParse(body);
+      if (!settings.success) throw new Error("The appearance preset library returned invalid settings.");
+      setAppearancePresets(settings.data.appearancePresets);
+      setAppearancePresetName("");
+      setNotice(`Saved “${parsedPreset.data.name}” for reuse on other shorts.`);
+    } catch (presetError) {
+      setError(presetError instanceof Error ? presetError.message : "Could not save this appearance preset.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function removeAppearancePreset(presetId: string) {
+    const remaining = appearancePresets.filter((preset) => preset.id !== presetId);
+    setBusy(true);
+    setError("");
+    setNotice("");
+    try {
+      const body = await requestJson("/api/ebook/shorts/settings", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ instructions: agentInstructions, overlayPresets, appearancePresets: remaining }),
+      });
+      const parsed = ShortAgentSettingsSchema.safeParse(body);
+      if (!parsed.success) throw new Error("The appearance preset library returned invalid settings.");
+      setAppearancePresets(parsed.data.appearancePresets);
+      setNotice("Appearance preset removed from the library. Existing shorts are unchanged.");
+    } catch (presetError) {
+      setError(presetError instanceof Error ? presetError.message : "Could not remove this appearance preset.");
     } finally {
       setBusy(false);
     }
@@ -858,6 +1035,7 @@ export default function ShortsStudio() {
         body: JSON.stringify({
           instructions: agentInstructions,
           overlayPresets: [...overlayPresets, preset],
+          appearancePresets,
         }),
       }));
       if (!updatedSettings.success) throw new Error("The generated preset could not be saved in the preset library.");
@@ -888,7 +1066,7 @@ export default function ShortsStudio() {
       const body = await requestJson("/api/ebook/shorts/settings", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ instructions: agentInstructions, overlayPresets: remaining }),
+        body: JSON.stringify({ instructions: agentInstructions, overlayPresets: remaining, appearancePresets }),
       });
       const parsed = ShortAgentSettingsSchema.safeParse(body);
       if (!parsed.success) throw new Error("The preset library returned invalid settings.");
@@ -1031,11 +1209,71 @@ export default function ShortsStudio() {
       setProject((current) => current
         ? { ...current, overlays: [...current.overlays, overlay] }
         : current);
+      let libraryError = "";
+      try {
+        await saveImageAsset(file.name, upload.data.sourceUrl);
+      } catch (saveError) {
+        libraryError = saveError instanceof Error ? saveError.message : "The image could not be saved for reuse.";
+      }
       setNotice(isFrame
         ? "Transparent frame overlay uploaded and added to the short."
         : "Image overlay uploaded and added to the short.");
+      if (libraryError) setError(`The image is in this short, but could not be saved to the reusable library: ${libraryError}`);
     } catch (uploadError) {
       setError(uploadError instanceof Error ? uploadError.message : "Could not upload this overlay image.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function addSavedImageToProject(image: ShortImageAsset) {
+    if (!project) return;
+    if (project.overlays.length >= 20) {
+      setError("A short can have up to 20 overlay layers.");
+      return;
+    }
+    const overlay: ShortOverlay = {
+      id: crypto.randomUUID(),
+      type: "image",
+      startSeconds: project.startSeconds,
+      endSeconds: project.endSeconds,
+      left: 35,
+      top: 35,
+      width: 30,
+      height: 30,
+      opacity: 1,
+      fontSize: 32,
+      textColor: "#ffffff",
+      backgroundColor: "transparent",
+      textStyle: "plain",
+      borderColor: "#22d3ee",
+      borderWidth: 0,
+      borderRadius: 8,
+      zIndex: 60,
+      imageUrl: image.imageUrl,
+      imageFit: "contain",
+    };
+    updateProject({ overlays: [...project.overlays, overlay] });
+    setNotice(`${image.fileName} added. Drag and resize it in the preview.`);
+    setError("");
+  }
+
+  async function removeSavedImage(imageId: string) {
+    setBusy(true);
+    setError("");
+    setNotice("");
+    try {
+      const body = await requestJson("/api/ebook/shorts/image-library", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "remove", id: imageId }),
+      });
+      const parsed = ShortImageLibrarySchema.safeParse(body);
+      if (!parsed.success) throw new Error("The saved image library returned invalid data.");
+      setImageAssets(parsed.data.images);
+      setNotice("Image removed from the reusable library. Existing shorts still use their saved copy.");
+    } catch (removeError) {
+      setError(removeError instanceof Error ? removeError.message : "Could not remove this saved image.");
     } finally {
       setBusy(false);
     }
@@ -1612,36 +1850,8 @@ export default function ShortsStudio() {
     };
     updateProject({ transcriptCuts: [...project.transcriptCuts, cut] });
     setNotice(wordTiming
-      ? `Removed “${word.text}” from the transcript and preview using its aligned source-audio time. Fine-tune the cut below if needed.`
-      : `Removed “${word.text}” from the transcript and preview. Its time is estimated from the caption range; fine-tune the cut below.`);
-    setError("");
-  }
-
-  function updateTranscriptCutRange(
-    cutId: string,
-    field: "startSeconds" | "endSeconds",
-    value: string,
-  ) {
-    const cut = project?.transcriptCuts.find((item) => item.id === cutId);
-    const caption = cut && project?.captions[cut.segmentIndex];
-    const next = Number(value);
-    if (!project || !cut || !caption || !Number.isFinite(next)) return;
-    const minimum = Math.max(project.startSeconds, caption.startSeconds);
-    const maximum = Math.min(project.endSeconds, caption.endSeconds);
-    if (
-      next < minimum
-      || next > maximum
-      || (field === "startSeconds" && next >= cut.endSeconds)
-      || (field === "endSeconds" && next <= cut.startSeconds)
-    ) {
-      setError("Keep each word cut inside its caption range and make its end later than its start.");
-      return;
-    }
-    updateProject({
-      transcriptCuts: project.transcriptCuts.map((item) =>
-        item.id === cutId ? { ...item, [field]: next } : item,
-      ),
-    });
+      ? `Removed “${word.text}” from the video. Tap the struck-through word to restore it.`
+      : `Removed “${word.text}” using estimated timing. Tap the struck-through word to restore it.`);
     setError("");
   }
 
@@ -3954,7 +4164,7 @@ export default function ShortsStudio() {
                     <p className="text-xs leading-relaxed text-amber-100">
                       {project.source.type === "youtube"
                         ? "YouTube link projects use text-only caption edits to avoid playback buffering. Upload the authorized source video to enable word and pause cuts."
-                        : "Delete a word in the transcript or tap it to cut its video moment. Source-aligned words use audio timestamps; unmatched words use an estimate. Fine-tune any cut below."}
+                        : "Tap a transcript word to remove its video moment. Tap the struck-through word again to restore it. This text-to-edit path is available only for uploaded videos."}
                     </p>
                     <button
                       type="button"
@@ -4081,59 +4291,22 @@ export default function ShortsStudio() {
                               );
                             })}
                           </div>
-                          <label className="block text-xs text-slate-400">
-                            {project.source.type === "youtube" ? "Caption text" : "Edited caption text"}
-                            <textarea
-                              rows={2}
-                              maxLength={2000}
-                              value={captionDrafts[index] ?? (
-                                project.source.type === "youtube"
-                                  ? caption.text
-                                  : getEditedTranscriptText(caption.text, index, removedTranscriptWords)
-                              )}
-                              onChange={(event) => setCaptionDrafts((current) => ({
-                                ...current,
-                                [index]: event.target.value,
-                              }))}
-                              onBlur={() => commitCaptionDraft(index)}
-                              className="mt-1 min-h-12 w-full rounded-lg border border-slate-700 bg-slate-900 p-2 text-base text-white"
-                            />
-                          </label>
-                          {project.source.type === "upload" && project.transcriptCuts.filter((cut) => cut.segmentIndex === index).map((cut) => (
-                            <div key={cut.id} className="grid gap-2 rounded-lg border border-rose-900/70 bg-rose-950/20 p-2 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] sm:items-end">
-                              <label className="text-xs text-rose-200">
-                                Cut “{cut.wordText}” from
-                                <input
-                                  type="number"
-                                  min={Math.max(project.startSeconds, caption.startSeconds)}
-                                  max={Math.min(project.endSeconds, caption.endSeconds)}
-                                  step="0.05"
-                                  value={cut.startSeconds}
-                                  onChange={(event) => updateTranscriptCutRange(cut.id, "startSeconds", event.target.value)}
-                                  className="mt-1 min-h-12 w-full rounded-lg border border-rose-900 bg-slate-950 px-3 text-base text-white"
-                                />
-                              </label>
-                              <label className="text-xs text-rose-200">
-                                Until
-                                <input
-                                  type="number"
-                                  min={Math.max(project.startSeconds, caption.startSeconds)}
-                                  max={Math.min(project.endSeconds, caption.endSeconds)}
-                                  step="0.05"
-                                  value={cut.endSeconds}
-                                  onChange={(event) => updateTranscriptCutRange(cut.id, "endSeconds", event.target.value)}
-                                  className="mt-1 min-h-12 w-full rounded-lg border border-rose-900 bg-slate-950 px-3 text-base text-white"
-                                />
-                              </label>
-                              <button
-                                type="button"
-                                onClick={() => toggleTranscriptWord(index, cut.wordIndex)}
-                                className="min-h-12 rounded-lg border border-rose-800 px-3 text-xs font-semibold text-rose-100"
-                              >
-                                Restore word
-                              </button>
-                            </div>
-                          ))}
+                          {project.source.type === "youtube" && (
+                            <label className="block text-xs text-slate-400">
+                              Caption text
+                              <textarea
+                                rows={2}
+                                maxLength={2000}
+                                value={captionDrafts[index] ?? caption.text}
+                                onChange={(event) => setCaptionDrafts((current) => ({
+                                  ...current,
+                                  [index]: event.target.value,
+                                }))}
+                                onBlur={() => commitCaptionDraft(index)}
+                                className="mt-1 min-h-12 w-full rounded-lg border border-slate-700 bg-slate-900 p-2 text-base text-white"
+                              />
+                            </label>
+                          )}
                         </div>
                       ))}
                     </div>
@@ -4153,6 +4326,124 @@ export default function ShortsStudio() {
                       Add text, an image/logo, or a transparent PNG frame. Set each layer’s timing and position in the short.
                     </p>
                   </div>
+                  <section className="space-y-3 rounded-xl border border-cyan-900/70 bg-cyan-950/10 p-3">
+                    <div>
+                      <h5 className="text-sm font-semibold text-cyan-100">Reusable appearance presets</h5>
+                      <p className="mt-1 text-xs leading-relaxed text-slate-400">
+                        Set your subtitle style and frame, add and position a logo, then save them together to apply to future shorts.
+                      </p>
+                    </div>
+                    <div className="grid gap-2 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] lg:items-end">
+                      <label className="block text-xs text-slate-300">
+                        Preset name
+                        <input
+                          type="text"
+                          maxLength={80}
+                          value={appearancePresetName}
+                          onChange={(event) => setAppearancePresetName(event.target.value)}
+                          placeholder="e.g. Ministry brand"
+                          className="mt-1 min-h-12 w-full rounded-lg border border-slate-700 bg-slate-900 px-3 text-base text-white"
+                        />
+                      </label>
+                      <label className="block text-xs text-slate-300">
+                        Logo to include
+                        <select
+                          value={appearanceLogoOverlayId === "none"
+                            ? "none"
+                            : project.overlays.some((overlay) => overlay.id === appearanceLogoOverlayId)
+                              ? appearanceLogoOverlayId
+                              : project.overlays.find((overlay) => overlay.type === "image")?.id ?? "none"}
+                          onChange={(event) => setAppearanceLogoOverlayId(event.target.value)}
+                          className="mt-1 min-h-12 w-full rounded-lg border border-slate-700 bg-slate-900 px-3 text-base text-white"
+                        >
+                          <option value="none">No logo</option>
+                          {project.overlays.filter((overlay) => overlay.type === "image" && overlay.imageUrl).map((overlay, index) => (
+                            <option key={overlay.id} value={overlay.id}>
+                              {imageAssets.find((asset) => asset.imageUrl === overlay.imageUrl)?.fileName ?? `Image/logo ${index + 1}`}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                      <button
+                        type="button"
+                        onClick={() => void saveAppearancePreset()}
+                        disabled={busy || !appearancePresetName.trim() || appearancePresets.length >= 20}
+                        className="min-h-12 rounded-lg bg-cyan-500 px-4 text-sm font-bold text-slate-950 disabled:opacity-50"
+                      >
+                        Save current look
+                      </button>
+                    </div>
+                    {appearancePresets.length > 0 && (
+                      <ul className="grid gap-2 lg:grid-cols-2">
+                        {appearancePresets.map((preset) => (
+                          <li key={preset.id} className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-slate-800 bg-slate-900 p-3">
+                            <div>
+                              <p className="text-sm font-semibold text-white">{preset.name}</p>
+                              <p className="text-xs text-slate-400">
+                                {preset.aspectRatio} · subtitles {preset.captionsEnabled ? "on" : "off"} · {preset.logo ? "logo included" : "no logo"}
+                              </p>
+                            </div>
+                            <div className="flex flex-wrap gap-2">
+                              <button
+                                type="button"
+                                onClick={() => applyAppearancePreset(preset)}
+                                disabled={busy}
+                                className="min-h-12 rounded-lg border border-cyan-700 px-3 text-xs font-semibold text-cyan-100 disabled:opacity-50"
+                              >
+                                Apply
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => void removeAppearancePreset(preset.id)}
+                                disabled={busy}
+                                className="min-h-12 rounded-lg border border-slate-700 px-3 text-xs font-semibold text-slate-300 disabled:opacity-50"
+                              >
+                                Remove
+                              </button>
+                            </div>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </section>
+                  <section className="space-y-2 rounded-xl border border-slate-800 bg-slate-950/50 p-3">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div>
+                        <h5 className="text-sm font-semibold text-white">Reusable image library</h5>
+                        <p className="text-xs text-slate-400">Uploaded logos and frames are saved here for other shorts.</p>
+                      </div>
+                      <span className="text-xs text-slate-500">{imageAssets.length}/200 saved</span>
+                    </div>
+                    {imageAssets.length === 0 ? (
+                      <p className="text-xs text-slate-500">Upload an image or transparent frame to add it to your library.</p>
+                    ) : (
+                      <ul className="grid gap-2 lg:grid-cols-2">
+                        {imageAssets.map((image) => (
+                          <li key={image.id} className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-slate-800 bg-slate-900 p-2">
+                            <span className="min-w-0 flex-1 truncate text-sm text-slate-200">{image.fileName}</span>
+                            <div className="flex flex-wrap gap-2">
+                              <button
+                                type="button"
+                                onClick={() => addSavedImageToProject(image)}
+                                disabled={busy || project.overlays.length >= 20}
+                                className="min-h-12 rounded-lg border border-fuchsia-800 px-3 text-xs font-semibold text-fuchsia-100 disabled:opacity-50"
+                              >
+                                Add to short
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => void removeSavedImage(image.id)}
+                                disabled={busy}
+                                className="min-h-12 rounded-lg border border-slate-700 px-3 text-xs font-semibold text-slate-300 disabled:opacity-50"
+                              >
+                                Remove
+                              </button>
+                            </div>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </section>
                   <div className="flex flex-wrap gap-2">
                     <button
                       type="button"

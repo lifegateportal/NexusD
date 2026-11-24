@@ -15,12 +15,17 @@ import {
   ShortMusicLibrarySchema,
   type ShortMusicFavorite,
 } from "@/lib/schemas/short-media";
+import {
+  ShortImageLibrarySchema,
+  type ShortImageAsset,
+} from "@/lib/schemas/short-assets";
 import { getShortThumbnailUrl } from "@/lib/short-video-utils";
 
 const PRIVATE_CATALOG_KEY = "director/shorts/index.json";
 const PUBLIC_CATALOG_KEY = "published/shorts/index.json";
 const AGENT_SETTINGS_KEY = "director/shorts/agent-settings.json";
 const MUSIC_LIBRARY_KEY = "director/shorts/music-library.json";
+const IMAGE_LIBRARY_KEY = "director/shorts/image-library.json";
 const LATEST_GENERATED_SUGGESTIONS_KEY = "director/shorts/generated-suggestions/latest.json";
 const MAX_PROJECT_VERSIONS = 20;
 
@@ -140,6 +145,17 @@ export async function readShortMusicLibrary() {
 export async function saveShortMusicLibrary(favorites: ShortMusicFavorite[]) {
   const library = ShortMusicLibrarySchema.parse({ favorites });
   await writeJsonObject(MUSIC_LIBRARY_KEY, library);
+  return library;
+}
+
+export async function readShortImageLibrary() {
+  const raw = await readJsonObject(IMAGE_LIBRARY_KEY);
+  return ShortImageLibrarySchema.parse(raw ?? { images: [] });
+}
+
+export async function saveShortImageLibrary(images: ShortImageAsset[]) {
+  const library = ShortImageLibrarySchema.parse({ images });
+  await writeJsonObject(IMAGE_LIBRARY_KEY, library);
   return library;
 }
 

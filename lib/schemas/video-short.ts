@@ -441,9 +441,44 @@ export const ShortOverlayPresetSchema = ShortOverlayPresetResponseSchema.extend(
   id: z.string().uuid(),
 });
 
+export const ShortAppearancePresetSchema = z.object({
+  id: z.string().uuid(),
+  name: z.string().trim().min(1).max(80),
+  aspectRatio: ShortAspectRatioSchema,
+  captionsEnabled: z.boolean(),
+  captionPosition: z.enum(["top", "middle", "bottom"]),
+  captionSize: z.enum(["small", "medium", "large"]),
+  captionFontSize: z.number().finite().min(3.5).max(8).optional(),
+  captionFontFamily: ShortCaptionFontFamilySchema,
+  captionStyle: ShortCaptionStyleSchema,
+  captionTextColor: z.string().regex(/^#[0-9A-Fa-f]{6}$/),
+  captionBackgroundColor: z.string().regex(/^(#[0-9A-Fa-f]{6}|transparent)$/),
+  captionBackgroundOpacity: z.number().finite().min(0).max(1),
+  logo: z.object({
+    name: z.string().trim().min(1).max(255),
+    imageUrl: z.string().url(),
+    left: z.number().finite().min(0).max(99),
+    top: z.number().finite().min(0).max(99),
+    width: z.number().finite().min(1).max(100),
+    height: z.number().finite().min(1).max(100),
+    opacity: z.number().finite().min(0).max(1),
+    imageFit: z.enum(["contain", "cover"]).default("contain"),
+    zIndex: z.number().int().min(0).max(100).default(100),
+  }).strict().nullable(),
+}).strict().superRefine((preset, context) => {
+  if (!preset.logo) return;
+  if (preset.logo.left + preset.logo.width > 100) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ["logo", "width"], message: "The saved logo must fit inside the frame." });
+  }
+  if (preset.logo.top + preset.logo.height > 100) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ["logo", "height"], message: "The saved logo must fit inside the frame." });
+  }
+});
+
 export const ShortAgentSettingsSchema = z.object({
   instructions: z.string().trim().max(4000).default(""),
   overlayPresets: z.array(ShortOverlayPresetSchema).max(20).default([]),
+  appearancePresets: z.array(ShortAppearancePresetSchema).max(20).default([]),
 }).strict();
 
 export type ShortProject = z.infer<typeof ShortProjectSchema>;
@@ -455,6 +490,7 @@ export type ShortTranscriptWordTiming = z.infer<typeof ShortTranscriptWordTiming
 export type ShortPauseCut = z.infer<typeof ShortPauseCutSchema>;
 export type ShortOverlayPreset = z.infer<typeof ShortOverlayPresetSchema>;
 export type ShortOverlayPresetLayer = z.infer<typeof ShortOverlayPresetLayerSchema>;
+export type ShortAppearancePreset = z.infer<typeof ShortAppearancePresetSchema>;
 export type ShortClipSuggestion = z.infer<typeof ShortClipSuggestionSchema>;
 export type GeneratedShortSuggestions = z.infer<typeof GeneratedShortSuggestionsSchema>;
 export type ShortSummary = z.infer<typeof ShortSummarySchema>;
