@@ -1,16 +1,14 @@
 import { DeleteObjectCommand, GetObjectCommand, PutObjectCommand } from "@aws-sdk/client-s3";
-import { z } from "zod";
 import { env } from "@/lib/env";
 import { makeR2Client } from "@/lib/r2-storage";
 import {
   PublicTrailerCatalogSchema,
   PublishedTrailerSchema,
+  TrailerPublishRequestSchema,
   TrailerCatalogSchema,
   TrailerProjectSchema,
-  TrailerSlugSchema,
   type TrailerProject,
 } from "@/lib/schemas/trailer";
-import { ShortAspectRatioSchema } from "@/lib/schemas/video-short";
 
 const TRAILER_CATALOG_KEY = "director/trailers/index.json";
 const PUBLIC_TRAILER_CATALOG_KEY = "published/trailers/index.json";
@@ -133,27 +131,30 @@ export async function saveTrailer(input: unknown): Promise<TrailerProject> {
 }
 
 export async function publishTrailer(input: unknown) {
-  const request = z.object({
-    slug: TrailerSlugSchema,
-    title: z.string().trim().min(1).max(120),
-    videoUrl: PublishedTrailerSchema.shape.videoUrl,
-    aspectRatio: ShortAspectRatioSchema,
-  }).strict().parse(input);
-  if (!env.R2_PUBLIC_URL) {
-    throw new Error("Configure R2_PUBLIC_URL before publishing a trailer.");
-  }
-  const expectedPrefix = `${env.R2_PUBLIC_URL.replace(/\/$/, "")}/published/trailers/assets/`;
-  const uploadedUrl = new URL(request.videoUrl);
-  const expectedAssetUrl = new URL(expectedPrefix);
-  if (uploadedUrl.origin !== expectedAssetUrl.origin || !uploadedUrl.pathname.startsWith(expectedAssetUrl.pathname)) {
-    throw new Error("The rendered video must be uploaded through Trailer Studio before publishing.");
-  }
+  const request = TrailerPublishRequestSchema.parse(input);
   const project = await readTrailer(request.slug);
-  if (!project?.source.uploadedFileName) {
-    throw new Error("Save a trailer with an uploaded source before publishing.");
-  }
-  if (project.title !== request.title || project.aspectRatio !== request.aspectRatio) {
+  if (!project) throw new Error("Save this trailer before publishing.");
+  const projectAspectRatio = project.moments[0].frameSlots?.[0]?.aspectRatio ?? project.aspectRatio;
+  if (project.title !== request.title || projectAspectRatio !== request.aspectRatio) {
     throw new Error("Save the latest trailer title and frame settings before publishing.");
+  }
+  if (request.sourceType === "youtube") {
+    if (!project.source.videoId || request.videoId !== project.source.videoId) {
+      throw new Error("The embedded trailer must use the YouTube video saved in this project.");
+    }
+  } else {
+    if (!project.source.uploadedFileName || !request.videoUrl) {
+      throw new Error("Upload and render a source video before publishing a rendered trailer.");
+    }
+    if (!env.R2_PUBLIC_URL) {
+      throw new Error("Configure R2_PUBLIC_URL before publishing a rendered trailer.");
+    }
+    const expectedPrefix = `${env.R2_PUBLIC_URL.replace(/\/$/, "")}/published/trailers/assets/`;
+    const uploadedUrl = new URL(request.videoUrl);
+    const expectedAssetUrl = new URL(expectedPrefix);
+    if (uploadedUrl.origin !== expectedAssetUrl.origin || !uploadedUrl.pathname.startsWith(expectedAssetUrl.pathname)) {
+      throw new Error("The rendered video must be uploaded through Trailer Studio before publishing.");
+    }
   }
 
   const catalog = await listPublicTrailers();
@@ -171,6 +172,7 @@ export async function publishTrailer(input: unknown) {
       {
         slug: published.slug,
         title: published.title,
+        sourceType: published.sourceType,
         aspectRatio: published.aspectRatio,
         updatedAt: published.updatedAt,
       },
@@ -180,7 +182,7 @@ export async function publishTrailer(input: unknown) {
   await writeJsonObject(`published/trailers/${published.slug}.json`, published, true);
   await writeJsonObject(PUBLIC_TRAILER_CATALOG_KEY, updatedCatalog, true);
   await updatePrivateTrailerStatus(published.slug, "published");
-  if (previous && previous.videoUrl !== published.videoUrl) {
+  if (previous?.videoUrl && previous.videoUrl !== published.videoUrl) {
     await deletePublishedTrailerAsset(previous.videoUrl);
   }
   return published;
@@ -193,7 +195,7 @@ export async function unpublishTrailer(slug: string): Promise<void> {
     throw new Error("This trailer is not currently published.");
   }
   const published = await readPublicTrailer(slug);
-  if (published) await deletePublishedTrailerAsset(published.videoUrl);
+  if (published?.videoUrl) await deletePublishedTrailerAsset(published.videoUrl);
   await deleteObject(`published/trailers/${slug}.json`);
   await writeJsonObject(PUBLIC_TRAILER_CATALOG_KEY, PublicTrailerCatalogSchema.parse({
     updatedAt: new Date().toISOString(),

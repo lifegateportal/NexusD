@@ -8,6 +8,41 @@ import {
 } from "@/lib/schemas/video-short";
 
 export const TrailerSlugSchema = z.string().regex(/^[a-z0-9][a-z0-9-]{0,79}$/);
+export const TrailerTransitionSchema = z.enum([
+  "cut",
+  "fade",
+  "slide-left",
+  "slide-right",
+  "slide-up",
+  "slide-down",
+  "zoom-in",
+  "zoom-out",
+]);
+
+export const TrailerMusicTrackSchema = z.object({
+  id: z.string().uuid(),
+  fileName: z.string().trim().min(1).max(255),
+  audioUrl: z.string().url(),
+  sourceDurationSeconds: z.number().finite().positive().max(3600),
+  startSeconds: z.number().finite().min(0).max(300),
+  endSeconds: z.number().finite().min(0).max(300),
+  volume: z.number().finite().min(0).max(1).default(0.25),
+  fadeInSeconds: z.number().finite().min(0).max(30).default(1),
+  fadeOutSeconds: z.number().finite().min(0).max(30).default(2),
+  duckUnderSpeech: z.boolean().default(true),
+  duckVolume: z.number().finite().min(0).max(1).default(0.15),
+  loop: z.boolean().default(true),
+  provider: z.literal("jamendo"),
+  providerPageUrl: z.string().url(),
+  creatorName: z.string().trim().min(1).max(200),
+  creatorUrl: z.string().url(),
+  licenseName: z.string().trim().min(1).max(120),
+  licenseUrl: z.string().url(),
+  commercialLicenseConfirmed: z.boolean().default(false),
+}).strict().refine((track) => track.endSeconds > track.startSeconds, {
+  message: "Music track end must be after its start.",
+  path: ["endSeconds"],
+});
 
 export const TrailerSourceSchema = z.object({
   videoId: z.string().regex(/^[A-Za-z0-9_-]{11}$/).optional(),
@@ -29,6 +64,9 @@ export const TrailerMomentSchema = z.object({
   title: z.string().trim().min(1).max(100),
   hook: z.string().trim().max(240).default(""),
   reason: z.string().trim().max(400).default(""),
+  transitionIn: TrailerTransitionSchema.default("cut"),
+  transitionOut: TrailerTransitionSchema.default("cut"),
+  transitionDurationSeconds: z.number().finite().min(0).max(3).default(0.5),
   frame: z.object({
     fit: z.enum(["cover", "contain"]),
     cropX: z.number().finite().min(0).max(100),
@@ -68,6 +106,7 @@ export const TrailerProjectSchema = z.object({
   sourceDurationSeconds: z.number().finite().positive().max(3600),
   transcript: z.array(LibraryVideoSegmentSchema).max(20000).default([]),
   moments: z.array(TrailerMomentSchema).min(1).max(24),
+  musicTracks: z.array(TrailerMusicTrackSchema).max(5).default([]),
   aspectRatio: ShortAspectRatioSchema.default("9:16"),
   fit: z.enum(["cover", "contain"]).default("cover"),
   cropX: z.number().finite().min(0).max(100).default(50),
@@ -92,9 +131,59 @@ export const TrailerProjectSchema = z.object({
   ) <= 300,
   { message: "Keep the assembled trailer at five minutes or less.", path: ["moments"] },
 ).refine(
+  (project) => {
+    const assembledDuration = project.moments.reduce(
+      (duration, moment) => duration + moment.endSeconds - moment.startSeconds,
+      0,
+    );
+    return project.musicTracks.every((track) => track.endSeconds <= assembledDuration);
+  },
+  { message: "Music tracks must stay inside the assembled trailer timeline.", path: ["musicTracks"] },
+).refine(
   (project) => new Set(project.moments.map((moment) => moment.id)).size === project.moments.length,
   { message: "Trailer moment IDs must be unique.", path: ["moments"] },
 );
+
+export const TrailerPublishRequestSchema = z.object({
+  slug: TrailerSlugSchema,
+  title: z.string().trim().min(1).max(120),
+  sourceType: z.enum(["youtube", "upload"]).default("upload"),
+  videoId: z.string().regex(/^[A-Za-z0-9_-]{11}$/).optional(),
+  videoTitle: z.string().trim().max(200).default(""),
+  videoUrl: z.string().url().optional(),
+  aspectRatio: ShortAspectRatioSchema,
+  moments: z.array(TrailerMomentSchema).max(24).default([]),
+  musicTracks: z.array(TrailerMusicTrackSchema).max(5).default([]),
+  headline: z.string().trim().max(120).default(""),
+  brandLine: z.string().trim().max(80).default(""),
+  callToAction: z.string().trim().max(120).default(""),
+}).strict();
+
+const PublishedTrailerFieldsSchema = TrailerPublishRequestSchema.extend({
+  updatedAt: z.string().datetime(),
+});
+
+export const PublishedTrailerSchema = PublishedTrailerFieldsSchema.superRefine((trailer, context) => {
+  if (trailer.sourceType === "youtube") {
+    if (!trailer.videoId) {
+      context.addIssue({ code: z.ZodIssueCode.custom, path: ["videoId"], message: "YouTube trailers need a source video ID." });
+    }
+    if (trailer.moments.length === 0) {
+      context.addIssue({ code: z.ZodIssueCode.custom, path: ["moments"], message: "YouTube trailers need at least one published moment." });
+    }
+  } else if (!trailer.videoUrl) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ["videoUrl"], message: "Rendered trailers need a published video file." });
+  }
+  trailer.musicTracks.forEach((track, index) => {
+    if (!track.commercialLicenseConfirmed) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["musicTracks", index, "commercialLicenseConfirmed"],
+        message: "Confirm the commercial license for each published soundtrack.",
+      });
+    }
+  });
+});
 
 export const TrailerCatalogSchema = z.object({
   updatedAt: z.string().datetime(),
@@ -106,17 +195,15 @@ export const TrailerCatalogSchema = z.object({
   }).strict()).max(500),
 }).strict();
 
-export const PublishedTrailerSchema = z.object({
-  slug: TrailerSlugSchema,
-  title: z.string().trim().min(1).max(120),
-  videoUrl: z.string().url(),
-  aspectRatio: ShortAspectRatioSchema,
-  updatedAt: z.string().datetime(),
-}).strict();
-
 export const PublicTrailerCatalogSchema = z.object({
   updatedAt: z.string().datetime(),
-  trailers: z.array(PublishedTrailerSchema.omit({ videoUrl: true })).max(500),
+  trailers: z.array(z.object({
+    slug: TrailerSlugSchema,
+    title: z.string().trim().min(1).max(120),
+    sourceType: z.enum(["youtube", "upload"]).default("upload"),
+    aspectRatio: ShortAspectRatioSchema,
+    updatedAt: z.string().datetime(),
+  }).strict()).max(500),
 }).strict();
 
 export const TrailerSuggestionSchema = z.object({
@@ -135,5 +222,6 @@ export const TrailerSuggestionResponseSchema = z.object({
 
 export type TrailerProject = z.infer<typeof TrailerProjectSchema>;
 export type TrailerMoment = z.infer<typeof TrailerMomentSchema>;
+export type TrailerMusicTrack = z.infer<typeof TrailerMusicTrackSchema>;
 export type TrailerSuggestion = z.infer<typeof TrailerSuggestionSchema>;
 export type PublishedTrailer = z.infer<typeof PublishedTrailerSchema>;

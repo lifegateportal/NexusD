@@ -1,5 +1,13 @@
-import { TrailerProjectSchema, type TrailerProject } from "@/lib/schemas/trailer";
-import { getTrailerFrameAtTime, getTrailerFrameSlots } from "@/lib/trailer-utils";
+import {
+  TrailerProjectSchema,
+  type TrailerMusicTrack,
+  type TrailerProject,
+} from "@/lib/schemas/trailer";
+import {
+  getTrailerFrameAtTime,
+  getTrailerFrameSlots,
+  getTrailerTransitionEffect,
+} from "@/lib/trailer-utils";
 
 const OUTPUT_FPS = 30;
 const MAX_EXPORT_MS = 6 * 60 * 1000;
@@ -57,6 +65,40 @@ function waitForVideoEvent(video: HTMLVideoElement, eventName: "loadeddata" | "s
   });
 }
 
+function waitForAudio(audio: HTMLAudioElement): Promise<void> {
+  if (audio.readyState >= 2 && Number.isFinite(audio.duration)) return Promise.resolve();
+  return new Promise((resolve, reject) => {
+    const timeout = window.setTimeout(() => {
+      cleanup();
+      reject(new Error("A suggested soundtrack did not load in time. Check the connection and try again."));
+    }, 20_000);
+    const cleanup = () => {
+      window.clearTimeout(timeout);
+      audio.removeEventListener("loadeddata", onReady);
+      audio.removeEventListener("canplay", onReady);
+      audio.removeEventListener("error", onError);
+    };
+    const onReady = () => {
+      if (audio.readyState < 2 || !Number.isFinite(audio.duration)) return;
+      cleanup();
+      resolve();
+    };
+    const onError = () => {
+      cleanup();
+      reject(new Error("A suggested soundtrack could not be loaded for export."));
+    };
+    audio.addEventListener("loadeddata", onReady);
+    audio.addEventListener("canplay", onReady);
+    audio.addEventListener("error", onError);
+  });
+}
+
+type LoadedTrailerMusic = {
+  audio: HTMLAudioElement;
+  gain: GainNode;
+  track: TrailerMusicTrack;
+};
+
 function drawWrappedText(
   context: CanvasRenderingContext2D,
   text: string,
@@ -101,6 +143,18 @@ function drawTrailerFrame(
   const slot = frameAtTime?.slot;
   const frame = frameAtTime?.position ?? { x: 50, y: 50, zoom: 1, fit: project.fit };
   const box = frameBox(width, height, slot?.aspectRatio ?? project.aspectRatio);
+  const currentMoment = project.moments[momentIndex];
+  if (currentMoment) {
+    const effect = getTrailerTransitionEffect(currentMoment, video.currentTime);
+    context.save();
+    context.globalAlpha = effect.opacity;
+    context.translate(
+      box.x + box.width / 2 + effect.translateX * box.width,
+      box.y + box.height / 2 + effect.translateY * box.height,
+    );
+    context.scale(effect.scale, effect.scale);
+    context.translate(-(box.x + box.width / 2), -(box.y + box.height / 2));
+  }
   if (video.videoWidth > 0 && video.videoHeight > 0) {
     const baseScale = frame.fit === "cover"
       ? Math.max(box.width / video.videoWidth, box.height / video.videoHeight)
@@ -121,7 +175,6 @@ function drawTrailerFrame(
     context.restore();
   }
 
-  const currentMoment = project.moments[momentIndex];
   context.save();
   context.textAlign = "center";
   context.shadowColor = "rgba(0, 0, 0, 0.9)";
@@ -172,6 +225,7 @@ function drawTrailerFrame(
     context.fillText(project.callToAction, box.x + box.width / 2, buttonY + buttonHeight * 0.67, textWidth - fontSize);
   }
   context.restore();
+  if (currentMoment) context.restore();
 }
 
 export async function exportTrailerVideo(
@@ -227,6 +281,8 @@ export async function exportTrailerVideo(
   let recorder: MediaRecorder | null = null;
   let recordingStopped = false;
   let exportError: Error | null = null;
+  let musicPlaybackErrorReported = false;
+  const music: LoadedTrailerMusic[] = [];
   const recordingChunks: Blob[] = [];
   const stopRecorder = () => {
     if (recorder?.state === "recording") recorder.stop();
@@ -251,6 +307,21 @@ export async function exportTrailerVideo(
       gain.connect(audioDestination);
       return gain;
     });
+    await Promise.all(project.musicTracks.map(async (track) => {
+      const audio = document.createElement("audio");
+      audio.crossOrigin = "anonymous";
+      audio.preload = "auto";
+      audio.loop = track.loop;
+      audio.src = track.audioUrl;
+      audio.load();
+      const source = audioContext!.createMediaElementSource(audio);
+      const gain = audioContext!.createGain();
+      gain.gain.value = 0;
+      source.connect(gain);
+      gain.connect(audioDestination);
+      music.push({ audio, gain, track });
+      await waitForAudio(audio);
+    }));
     await audioContext.resume();
 
     videoStream = canvas.captureStream(OUTPUT_FPS);
@@ -324,6 +395,57 @@ export async function exportTrailerVideo(
       });
     };
 
+    const transcriptByMoment = project.moments.map((moment) => project.transcript.filter((segment) =>
+      segment.endSeconds > moment.startSeconds && segment.startSeconds < moment.endSeconds,
+    ));
+    const transcriptIsActive = (momentIndex: number, timeSeconds: number) => {
+      const segments = transcriptByMoment[momentIndex] ?? [];
+      let low = 0;
+      let high = segments.length - 1;
+      while (low <= high) {
+        const middle = Math.floor((low + high) / 2);
+        const segment = segments[middle];
+        if (timeSeconds < segment.startSeconds) high = middle - 1;
+        else if (timeSeconds >= segment.endSeconds) low = middle + 1;
+        else return true;
+      }
+      return false;
+    };
+
+    const syncMusic = (outputTimeSeconds: number, momentIndex: number, sourceTimeSeconds: number) => {
+      const now = audioContext!.currentTime;
+      const speechActive = transcriptIsActive(momentIndex, sourceTimeSeconds);
+      for (const item of music) {
+        const { audio, gain, track } = item;
+        const active = outputTimeSeconds >= track.startSeconds && outputTimeSeconds < track.endSeconds;
+        if (!active) {
+          gain.gain.setTargetAtTime(0, now, 0.02);
+          audio.pause();
+          continue;
+        }
+        const elapsed = outputTimeSeconds - track.startSeconds;
+        const duration = Number.isFinite(audio.duration) && audio.duration > 0
+          ? audio.duration
+          : track.sourceDurationSeconds;
+        const sourceTime = track.loop ? elapsed % duration : Math.min(elapsed, duration - 0.05);
+        if (Math.abs(audio.currentTime - sourceTime) > 0.75) audio.currentTime = sourceTime;
+        const fadeIn = track.fadeInSeconds > 0 ? Math.min(1, elapsed / track.fadeInSeconds) : 1;
+        const fadeOut = track.fadeOutSeconds > 0
+          ? Math.min(1, (track.endSeconds - outputTimeSeconds) / track.fadeOutSeconds)
+          : 1;
+        const duck = track.duckUnderSpeech && speechActive ? track.duckVolume : 1;
+        gain.gain.setTargetAtTime(track.volume * fadeIn * fadeOut * duck, now, 0.03);
+        if (audio.paused) {
+          void audio.play().catch(() => {
+            if (musicPlaybackErrorReported) return;
+            musicPlaybackErrorReported = true;
+            exportError = new Error("The suggested soundtrack could not play during export. Check its provider link and try again.");
+            stopRecorder();
+          });
+        }
+      }
+    };
+
     const drawFrame = () => {
       if (performance.now() - startedAt > MAX_EXPORT_MS) {
         exportError = new Error("Trailer export took too long. Keep this tab open and in the foreground, then try again.");
@@ -355,6 +477,11 @@ export async function exportTrailerVideo(
           currentMoment.endSeconds - currentMoment.startSeconds,
           video.currentTime - currentMoment.startSeconds,
         ));
+        syncMusic(
+          completedDuration + currentDuration,
+          activeMomentIndex,
+          video.currentTime,
+        );
         onProgress(Math.min(0.99, (completedDuration + currentDuration) / totalDuration));
       } catch (error) {
         exportError = error instanceof Error ? error : new Error("Could not render a trailer frame.");
@@ -389,6 +516,11 @@ export async function exportTrailerVideo(
       video.pause();
       video.removeAttribute("src");
       video.load();
+    });
+    music.forEach(({ audio }) => {
+      audio.pause();
+      audio.removeAttribute("src");
+      audio.load();
     });
     videoStream?.getTracks().forEach((track) => track.stop());
     recordingStream?.getTracks().forEach((track) => track.stop());

@@ -8,8 +8,11 @@ import {
   saveTrailer,
   unpublishTrailer,
 } from "@/lib/trailer-store";
-import { TrailerProjectSchema, TrailerSlugSchema } from "@/lib/schemas/trailer";
-import { ShortAspectRatioSchema } from "@/lib/schemas/video-short";
+import {
+  TrailerProjectSchema,
+  TrailerPublishRequestSchema,
+  TrailerSlugSchema,
+} from "@/lib/schemas/trailer";
 
 export const runtime = "nodejs";
 
@@ -17,10 +20,7 @@ const ActionSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("save"), project: TrailerProjectSchema }).strict(),
   z.object({
     action: z.literal("publish"),
-    slug: TrailerSlugSchema,
-    title: z.string().trim().min(1).max(120),
-    videoUrl: z.string().url(),
-    aspectRatio: ShortAspectRatioSchema,
+    ...TrailerPublishRequestSchema.shape,
   }).strict(),
   z.object({ action: z.literal("unpublish"), slug: TrailerSlugSchema }).strict(),
   z.object({ action: z.literal("delete"), slug: TrailerSlugSchema }).strict(),
@@ -75,8 +75,16 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({ trailer: await publishTrailer({
           slug: action.slug,
           title: action.title,
+          sourceType: action.sourceType,
+          videoId: action.videoId,
+          videoTitle: action.videoTitle,
           videoUrl: action.videoUrl,
           aspectRatio: action.aspectRatio,
+          moments: action.moments,
+          musicTracks: action.musicTracks,
+          headline: action.headline,
+          brandLine: action.brandLine,
+          callToAction: action.callToAction,
         }) });
       case "unpublish":
         await unpublishTrailer(action.slug);

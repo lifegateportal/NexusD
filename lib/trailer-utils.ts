@@ -1,7 +1,82 @@
-import type { TrailerProject } from "@/lib/schemas/trailer";
+import {
+  TrailerProjectSchema,
+  type PublishedTrailer,
+  type TrailerMoment,
+  type TrailerProject,
+} from "@/lib/schemas/trailer";
 import type { ShortCropKeyframe, ShortFrameSlot } from "@/lib/schemas/video-short";
 
 export type TrailerFramePosition = ShortCropKeyframe & { fit: "cover" | "contain" };
+export type TrailerTransitionEffect = {
+  opacity: number;
+  translateX: number;
+  translateY: number;
+  scale: number;
+};
+
+export function createEmbeddedTrailerProject(trailer: PublishedTrailer): TrailerProject {
+  if (trailer.sourceType !== "youtube" || !trailer.videoId || trailer.moments.length === 0) {
+    throw new Error("This published trailer does not contain an embedded YouTube sequence.");
+  }
+  const firstFrame = trailer.moments[0].frameSlots?.[0];
+  const legacyFrame = trailer.moments[0].frame;
+  const sourceDurationSeconds = Math.max(...trailer.moments.map((moment) => moment.endSeconds));
+  return TrailerProjectSchema.parse({
+    slug: trailer.slug,
+    title: trailer.title,
+    source: {
+      videoId: trailer.videoId,
+      youtubeUrl: `https://www.youtube.com/watch?v=${trailer.videoId}`,
+      videoTitle: trailer.videoTitle || trailer.title,
+    },
+    sourceDurationSeconds,
+    transcript: [],
+    moments: trailer.moments,
+    aspectRatio: trailer.aspectRatio,
+    fit: firstFrame?.fit ?? legacyFrame?.fit ?? "cover",
+    cropX: legacyFrame?.cropX ?? 50,
+    cropY: legacyFrame?.cropY ?? 50,
+    zoom: legacyFrame?.zoom ?? 1,
+    musicTracks: trailer.musicTracks,
+    headline: trailer.headline,
+    brandLine: trailer.brandLine,
+    callToAction: trailer.callToAction,
+    updatedAt: trailer.updatedAt,
+  });
+}
+
+export function getTrailerTransitionEffect(
+  moment: TrailerMoment,
+  timeSeconds: number,
+): TrailerTransitionEffect {
+  const duration = moment.transitionDurationSeconds;
+  const entryProgress = duration > 0
+    ? Math.max(0, Math.min(1, (timeSeconds - moment.startSeconds) / duration))
+    : 1;
+  const exitProgress = duration > 0
+    ? Math.max(0, Math.min(1, (moment.endSeconds - timeSeconds) / duration))
+    : 1;
+  const isEntering = moment.transitionIn !== "cut" && entryProgress < 1;
+  const transition = isEntering ? moment.transitionIn : moment.transitionOut;
+  const progress = isEntering ? entryProgress : exitProgress;
+  const effect: TrailerTransitionEffect = { opacity: 1, translateX: 0, translateY: 0, scale: 1 };
+  if (transition === "fade") {
+    effect.opacity = progress;
+  } else if (transition === "slide-left") {
+    effect.translateX = progress - 1;
+  } else if (transition === "slide-right") {
+    effect.translateX = 1 - progress;
+  } else if (transition === "slide-up") {
+    effect.translateY = progress - 1;
+  } else if (transition === "slide-down") {
+    effect.translateY = 1 - progress;
+  } else if (transition === "zoom-in") {
+    effect.scale = isEntering ? 0.8 + progress * 0.2 : 1 + (1 - progress) * 0.2;
+  } else if (transition === "zoom-out") {
+    effect.scale = isEntering ? 1.2 - progress * 0.2 : 1 - (1 - progress) * 0.2;
+  }
+  return effect;
+}
 
 export function getTrailerFrameSlots(project: TrailerProject, momentIndex: number): ShortFrameSlot[] {
   const moment = project.moments[momentIndex];

@@ -7,10 +7,16 @@ import {
   TrailerCatalogSchema,
   TrailerProjectSchema,
   PublishedTrailerSchema,
+  TrailerTransitionSchema,
   TrailerSuggestionResponseSchema,
   type TrailerMoment,
+  type TrailerMusicTrack,
   type TrailerProject,
 } from "@/lib/schemas/trailer";
+import {
+  ShortMusicSuggestionsResponseSchema,
+  type ShortMusicSuggestion,
+} from "@/lib/schemas/short-media";
 import {
   LibraryVideoCatalogSchema,
   LibraryVideoRecordSchema,
@@ -49,6 +55,22 @@ const PublishedTrailerResponseSchema = z.object({ trailer: PublishedTrailerSchem
 const MAX_SOURCE_BYTES = 100 * 1024 * 1024;
 const MAX_SOURCE_DURATION_SECONDS = 3600;
 const MAX_TRAILER_SECONDS = 300;
+const SCREEN_PRESETS = [
+  { id: "vertical-social", label: "Shorts / Reels / TikTok", aspectRatio: "9:16" },
+  { id: "portrait-feed", label: "Portrait feed", aspectRatio: "4:5" },
+  { id: "square-feed", label: "Square feed", aspectRatio: "1:1" },
+  { id: "widescreen", label: "YouTube / widescreen", aspectRatio: "16:9" },
+] as const;
+const TRANSITION_OPTIONS = [
+  { id: "cut", label: "Cut" },
+  { id: "fade", label: "Fade through black" },
+  { id: "slide-left", label: "Slide from left" },
+  { id: "slide-right", label: "Slide from right" },
+  { id: "slide-up", label: "Slide from top" },
+  { id: "slide-down", label: "Slide from bottom" },
+  { id: "zoom-in", label: "Zoom in" },
+  { id: "zoom-out", label: "Zoom out" },
+] as const;
 
 type Catalog = z.infer<typeof TrailerCatalogSchema>;
 type PlayRequest = { index: number; nonce: number };
@@ -57,6 +79,29 @@ type SeekRequest = { index: number; timeSeconds: number; nonce: number };
 function projectRenderSignature(project: TrailerProject): string {
   const { updatedAt: _updatedAt, ...renderableProject } = project;
   return JSON.stringify(renderableProject);
+}
+
+function fitSoundtracksToDuration(
+  tracks: TrailerMusicTrack[],
+  previousDuration: number,
+  nextDuration: number,
+): TrailerMusicTrack[] {
+  return tracks.flatMap((track) => {
+    if (track.startSeconds >= nextDuration) return [];
+    const coversWholeTrailer = track.startSeconds <= 0.001
+      && track.endSeconds >= previousDuration - 0.05;
+    const endSeconds = coversWholeTrailer
+      ? nextDuration
+      : Math.min(track.endSeconds, nextDuration);
+    if (endSeconds - track.startSeconds < 0.1) return [];
+    const maxFadeSeconds = (endSeconds - track.startSeconds) / 2;
+    return [{
+      ...track,
+      endSeconds,
+      fadeInSeconds: Math.min(track.fadeInSeconds, maxFadeSeconds),
+      fadeOutSeconds: Math.min(track.fadeOutSeconds, maxFadeSeconds),
+    }];
+  });
 }
 
 async function requestJson(url: string, init?: RequestInit): Promise<unknown> {
@@ -89,6 +134,9 @@ function initialMoment(
     title: "Opening hook",
     hook: first?.text.slice(0, 240) ?? "",
     reason: "Edit this moment or generate an AI-curated sequence.",
+    transitionIn: "cut",
+    transitionOut: "cut",
+    transitionDurationSeconds: 0.5,
     frameSlots: createTrailerFrameSlots(startSeconds, momentEndSeconds, aspectRatio, {
       timeSeconds: startSeconds,
       x: 50,
@@ -172,6 +220,20 @@ function readVideoDuration(file: File): Promise<number> {
   });
 }
 
+async function transcribeSource(file: File): Promise<z.infer<typeof LibraryVideoSegmentSchema>[]> {
+  const form = new FormData();
+  form.append("file", file);
+  const body = await requestJson("/api/transcribe", { method: "POST", body: form });
+  const parsed = TranscriptionResponseSchema.safeParse(body);
+  if (!parsed.success) {
+    const detail = parsed.error.issues[0]?.message;
+    throw new Error(detail
+      ? `Transcription returned an invalid response: ${detail}`
+      : "Transcription service returned an invalid transcript.");
+  }
+  return parsed.data.segments;
+}
+
 function formatTime(seconds: number): string {
   const whole = Math.max(0, Math.floor(seconds));
   const minutes = Math.floor(whole / 60);
@@ -195,6 +257,9 @@ export default function TrailerStudio() {
   const [seekRequest, setSeekRequest] = useState<SeekRequest | null>(null);
   const [activeMoment, setActiveMoment] = useState(0);
   const [previewTime, setPreviewTime] = useState(0);
+  const [soundtrackSuggestions, setSoundtrackSuggestions] = useState<ShortMusicSuggestion[]>([]);
+  const [soundtrackMood, setSoundtrackMood] = useState("Catchy cinematic promotional instrumental, uplifting build, strong rhythmic hook, no vocals");
+  const [musicSearchBusy, setMusicSearchBusy] = useState(false);
   const [manualStart, setManualStart] = useState("0");
   const [manualEnd, setManualEnd] = useState("8");
   const [loading, setLoading] = useState(true);
@@ -271,6 +336,7 @@ export default function TrailerStudio() {
     setPlayRequest(null);
     setSeekRequest(null);
     setPreviewTime(0);
+    setSoundtrackSuggestions([]);
     setDownloadUrl(null);
     setSourceTitle("");
     setYoutubeUrl("");
@@ -405,6 +471,21 @@ export default function TrailerStudio() {
     setLocalVideoUrl(URL.createObjectURL(file));
     setSourceFileReady(true);
 
+    let transcript = currentProject?.transcript ?? [];
+    let transcriptionWarning = "";
+    try {
+      const transcribedSegments = await transcribeSource(file);
+      transcript = transcribedSegments.flatMap((segment) => {
+        if (segment.startSeconds >= durationSeconds) return [];
+        const endSeconds = Math.min(segment.endSeconds, durationSeconds);
+        return endSeconds > segment.startSeconds ? [{ ...segment, endSeconds }] : [];
+      });
+      if (transcript.length === 0) throw new Error("No usable speech timestamps were found in this source.");
+    } catch (transcriptionError) {
+      transcriptionWarning = transcriptionError instanceof Error
+        ? transcriptionError.message
+        : "Automatic transcription failed.";
+    }
     if (currentProject) {
       setProject({
         ...currentProject,
@@ -413,25 +494,15 @@ export default function TrailerStudio() {
           uploadedFileName: file.name,
         },
         sourceDurationSeconds: Math.max(currentProject.sourceDurationSeconds, durationSeconds),
+        ...(transcriptionWarning ? {} : { transcript }),
       });
-      setNotice("Authorized source saved in this browser. Trailer export is available while the source file is present.");
+      setNotice(transcriptionWarning
+        ? "Source saved in this browser. Existing transcript was kept; retry transcription or curate from the saved transcript."
+        : "Source saved and transcribed. You can now curate trailer moments from the uploaded video.");
+      if (transcriptionWarning) setError(`Source upload succeeded, but transcription failed: ${transcriptionWarning}`);
       return;
     }
 
-    let transcript: z.infer<typeof LibraryVideoSegmentSchema>[] = [];
-    let transcriptionWarning = "";
-    try {
-      const form = new FormData();
-      form.append("file", file);
-      const transcriptBody = await requestJson("/api/transcribe", { method: "POST", body: form });
-      const parsedTranscript = TranscriptionResponseSchema.safeParse(transcriptBody);
-      if (!parsedTranscript.success) throw new Error("Transcription service returned an invalid transcript.");
-      transcript = parsedTranscript.data.segments;
-    } catch (transcriptionError) {
-      transcriptionWarning = transcriptionError instanceof Error
-        ? transcriptionError.message
-        : "Automatic transcription failed.";
-    }
     const title = sourceTitle.trim() || file.name.replace(/\.[^.]+$/, "");
     const next = createProject({
       slug,
@@ -450,6 +521,28 @@ export default function TrailerStudio() {
       ? "Source saved in this browser. Add moments manually; AI curation needs a transcript."
       : "Source saved in this browser and transcribed. Ask AI to curate a trailer sequence.");
     if (transcriptionWarning) setError(`Source upload succeeded, but transcription failed: ${transcriptionWarning}`);
+  }
+
+  async function retranscribeSource() {
+    if (!project || !localFileRef.current) {
+      setError("Re-select the source video before retrying transcription.");
+      return;
+    }
+    setBusy(true);
+    setError("");
+    setNotice("");
+    try {
+      const segments = await transcribeSource(localFileRef.current);
+      if (segments.length === 0) throw new Error("No usable speech timestamps were found in this source.");
+      setProject((current) => current ? { ...current, transcript: segments } : current);
+      setNotice("Source transcribed. AI moment curation is ready.");
+    } catch (transcriptionError) {
+      setError(transcriptionError instanceof Error
+        ? `Transcription failed: ${transcriptionError.message}`
+        : "Could not transcribe this source.");
+    } finally {
+      setBusy(false);
+    }
   }
 
   async function handleSourceFile(file: File | undefined, input: HTMLInputElement) {
@@ -498,6 +591,11 @@ export default function TrailerStudio() {
       }
       setProject((current) => current ? {
         ...current,
+        musicTracks: fitSoundtracksToDuration(
+          current.musicTracks,
+          current.moments.reduce((duration, moment) => duration + moment.endSeconds - moment.startSeconds, 0),
+          totalDuration,
+        ),
         moments: (() => {
           const currentFrame = getTrailerFrameAtTime(current, activeMoment, previewTime);
           const position = currentFrame?.position ?? {
@@ -511,6 +609,9 @@ export default function TrailerStudio() {
           return orderedSuggestions.map((moment) => ({
             id: crypto.randomUUID(),
             ...moment,
+            transitionIn: "cut" as const,
+            transitionOut: "cut" as const,
+            transitionDurationSeconds: 0.5,
             frameSlots: createTrailerFrameSlots(
               moment.startSeconds,
               moment.endSeconds,
@@ -528,6 +629,99 @@ export default function TrailerStudio() {
     } finally {
       setBusy(false);
     }
+  }
+
+  async function findSoundtrackSuggestions() {
+      if (!project) return;
+      setMusicSearchBusy(true);
+      setError("");
+      setNotice("");
+      try {
+        const captions = project.transcript.length > 0
+          ? project.transcript.slice(0, 2000)
+          : project.moments.map((moment) => ({
+            startSeconds: moment.startSeconds,
+            endSeconds: moment.endSeconds,
+            text: [moment.title, moment.hook].filter(Boolean).join(": ").slice(0, 2000),
+          })).filter((segment) => segment.text);
+        if (captions.length === 0) throw new Error("Add a transcript or a moment hook before requesting soundtrack ideas.");
+        const body = await requestJson("/api/ebook/shorts/media-suggestions", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            kind: "music",
+            title: project.title,
+            startSeconds: 0,
+            endSeconds: project.sourceDurationSeconds,
+            frameSlots: [{
+              startSeconds: 0,
+              endSeconds: project.sourceDurationSeconds,
+              aspectRatio: project.aspectRatio,
+            }],
+            captions,
+            instructions: soundtrackMood,
+          }),
+        });
+        const parsed = ShortMusicSuggestionsResponseSchema.safeParse(body);
+        if (!parsed.success || parsed.data.suggestions.length === 0) {
+          throw new Error("AI returned invalid soundtrack suggestions.");
+        }
+        setSoundtrackSuggestions(parsed.data.suggestions);
+        setNotice("AI found instrumental options. Preview a track, add it to the trailer, then verify its license before publishing.");
+      } catch (searchError) {
+        setError(searchError instanceof Error ? searchError.message : "Could not suggest trailer soundtracks.");
+      } finally {
+        setMusicSearchBusy(false);
+      }
+  }
+
+  function addSoundtrack(suggestion: ShortMusicSuggestion) {
+    if (!project) return;
+    if (project.musicTracks.length >= 5) {
+      setError("A trailer can have up to five soundtrack layers.");
+      return;
+    }
+    const durationSeconds = project.moments.reduce(
+      (total, moment) => total + moment.endSeconds - moment.startSeconds,
+      0,
+    );
+    if (durationSeconds <= 0) {
+      setError("Add a trailer moment before adding a soundtrack.");
+      return;
+    }
+    const track: TrailerMusicTrack = {
+      id: crypto.randomUUID(),
+      fileName: suggestion.title,
+      audioUrl: suggestion.audioUrl,
+      sourceDurationSeconds: suggestion.durationSeconds,
+      startSeconds: 0,
+      endSeconds: durationSeconds,
+      volume: 0.22,
+      fadeInSeconds: Math.min(1.5, durationSeconds / 2),
+      fadeOutSeconds: Math.min(2, durationSeconds / 2),
+      duckUnderSpeech: true,
+      duckVolume: 0.14,
+      loop: true,
+      provider: "jamendo",
+      providerPageUrl: suggestion.providerPageUrl,
+      creatorName: suggestion.artistName,
+      creatorUrl: suggestion.creatorUrl,
+      licenseName: suggestion.licenseName,
+      licenseUrl: suggestion.licenseUrl,
+      commercialLicenseConfirmed: false,
+    };
+    setProject({ ...project, musicTracks: [...project.musicTracks, track] });
+    setError("");
+    setNotice("Soundtrack added to the full trailer, looped to fit, and ducked under transcript dialogue. Confirm the license before publishing.");
+  }
+
+  function updateSoundtrack(id: string, patch: Partial<TrailerMusicTrack>) {
+    setProject((current) => current ? {
+      ...current,
+      musicTracks: current.musicTracks.map((track) =>
+        track.id === id ? { ...track, ...patch } : track,
+      ),
+    } : current);
   }
 
   async function saveProject() {
@@ -676,9 +870,19 @@ export default function TrailerStudio() {
     }
   }
 
-  async function publishProject() {
-    if (!project || !exportedVideoRef.current || !downloadUrl
-      || exportedProjectSignatureRef.current !== projectRenderSignature(project)) {
+  async function publishProject(sourceType: "youtube" | "upload") {
+    if (!project) return;
+    const unlicensedTrack = project?.musicTracks.find((track) => !track.commercialLicenseConfirmed);
+    if (unlicensedTrack) {
+      setError(`Confirm the commercial license for “${unlicensedTrack.fileName}” before publishing.`);
+      return;
+    }
+    if (sourceType === "youtube" && !project.source.videoId) {
+      setError("This trailer has no YouTube source to publish as an embedded video.");
+      return;
+    }
+    if (sourceType === "upload" && (!exportedVideoRef.current || !downloadUrl
+      || exportedProjectSignatureRef.current !== projectRenderSignature(project))) {
       setError("Render the trailer again after your latest edits before publishing.");
       return;
     }
@@ -687,26 +891,6 @@ export default function TrailerStudio() {
     setNotice("");
     try {
       const validatedProject = TrailerProjectSchema.parse(project);
-      const blob = exportedVideoRef.current;
-      const contentType = blob.type.includes("mp4") ? "video/mp4" : "video/webm";
-      const uploadBody = await requestJson("/api/ebook/trailers/source", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          filename: `${validatedProject.slug}.${contentType === "video/mp4" ? "mp4" : "webm"}`,
-          contentType,
-          size: blob.size,
-        }),
-      });
-      const upload = TrailerUploadResponseSchema.safeParse(uploadBody);
-      if (!upload.success) throw new Error("Trailer upload returned an invalid response.");
-      const uploadResponse = await fetch(upload.data.presignedUrl, {
-        method: "PUT",
-        headers: { "Content-Type": upload.data.contentType },
-        body: blob,
-      });
-      if (!uploadResponse.ok) throw new Error(`Could not upload rendered trailer (HTTP ${uploadResponse.status}).`);
-
       const saveBody = await requestJson("/api/ebook/trailers", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -716,6 +900,31 @@ export default function TrailerStudio() {
       if (!saved.success) throw new Error("Trailer save returned an invalid project.");
       setProject(saved.data.project);
 
+      let videoUrl: string | undefined;
+      if (sourceType === "upload") {
+        const blob = exportedVideoRef.current;
+        if (!blob) throw new Error("Render the latest trailer before publishing the rendered video.");
+        const contentType = blob.type.includes("mp4") ? "video/mp4" : "video/webm";
+        const uploadBody = await requestJson("/api/ebook/trailers/source", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            filename: `${validatedProject.slug}.${contentType === "video/mp4" ? "mp4" : "webm"}`,
+            contentType,
+            size: blob.size,
+          }),
+        });
+        const upload = TrailerUploadResponseSchema.safeParse(uploadBody);
+        if (!upload.success) throw new Error("Trailer upload returned an invalid response.");
+        const uploadResponse = await fetch(upload.data.presignedUrl, {
+          method: "PUT",
+          headers: { "Content-Type": upload.data.contentType },
+          body: blob,
+        });
+        if (!uploadResponse.ok) throw new Error(`Could not upload rendered trailer (HTTP ${uploadResponse.status}).`);
+        videoUrl = upload.data.videoUrl;
+      }
+
       const publishBody = await requestJson("/api/ebook/trailers", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -723,8 +932,17 @@ export default function TrailerStudio() {
           action: "publish",
           slug: validatedProject.slug,
           title: validatedProject.title,
+          sourceType,
+          ...(sourceType === "youtube" ? {
+            videoId: validatedProject.source.videoId,
+            videoTitle: validatedProject.source.videoTitle,
+            moments: validatedProject.moments,
+            musicTracks: validatedProject.musicTracks,
+            headline: validatedProject.headline,
+            brandLine: validatedProject.brandLine,
+            callToAction: validatedProject.callToAction,
+          } : { videoUrl }),
           aspectRatio: getTrailerFrameSlots(validatedProject, 0)[0]?.aspectRatio ?? validatedProject.aspectRatio,
-          videoUrl: upload.data.videoUrl,
         }),
       });
       const published = PublishedTrailerResponseSchema.safeParse(publishBody);
@@ -741,7 +959,9 @@ export default function TrailerStudio() {
           ...(current?.trailers ?? []).filter((trailer) => trailer.slug !== published.data.trailer.slug),
         ],
       }));
-      setNotice(`Trailer published. Share /library/trailers/${published.data.trailer.slug} with your audience.`);
+      setNotice(sourceType === "youtube"
+        ? `YouTube trailer published. Share /library/trailers/${published.data.trailer.slug} with your audience.`
+        : `Rendered trailer published. Share /library/trailers/${published.data.trailer.slug} with your audience.`);
     } catch (publishError) {
       setError(publishError instanceof Error ? publishError.message : "Could not publish this trailer.");
     } finally {
@@ -784,12 +1004,20 @@ export default function TrailerStudio() {
       return;
     }
     let resizedFrameSlots: ReturnType<typeof getTrailerFrameSlots> | undefined;
+    let nextTrailerDuration: number | undefined;
     if (patch.startSeconds !== undefined || patch.endSeconds !== undefined) {
       try {
         resizedFrameSlots = resizeTrailerFrameSlots(
           getTrailerFrameSlots(project, index),
           nextStart,
           nextEnd,
+        );
+        nextTrailerDuration = project.moments.reduce(
+          (duration, moment, momentIndex) => duration
+            + (momentIndex === index
+              ? nextEnd - nextStart
+              : moment.endSeconds - moment.startSeconds),
+          0,
         );
       } catch (resizeError) {
         setError(resizeError instanceof Error ? resizeError.message : "Could not resize this moment's framing slots.");
@@ -798,6 +1026,13 @@ export default function TrailerStudio() {
     }
     setProject((current) => current ? {
       ...current,
+      ...(nextTrailerDuration === undefined ? {} : {
+        musicTracks: fitSoundtracksToDuration(
+          current.musicTracks,
+          current.moments.reduce((duration, moment) => duration + moment.endSeconds - moment.startSeconds, 0),
+          nextTrailerDuration,
+        ),
+      }),
       moments: current.moments.map((moment, momentIndex) => {
         if (momentIndex !== index) return moment;
         return {
@@ -861,6 +1096,9 @@ export default function TrailerStudio() {
       title: `Moment ${project.moments.length + 1}`,
       hook: transcriptText.slice(0, 240),
       reason: "Added manually.",
+      transitionIn: "cut",
+      transitionOut: "cut",
+      transitionDurationSeconds: 0.5,
       frameSlots: createTrailerFrameSlots(
         startSeconds,
         endSeconds,
@@ -868,7 +1106,15 @@ export default function TrailerStudio() {
         framePosition,
       ),
     };
-    setProject({ ...project, moments: [...project.moments, nextMoment] });
+    const previousDuration = project.moments.reduce(
+      (duration, moment) => duration + moment.endSeconds - moment.startSeconds,
+      0,
+    );
+    setProject({
+      ...project,
+      moments: [...project.moments, nextMoment],
+      musicTracks: fitSoundtracksToDuration(project.musicTracks, previousDuration, total),
+    });
     setActiveMoment(project.moments.length);
     requestPreviewSeek(project.moments.length, startSeconds);
     setError("");
@@ -880,7 +1126,19 @@ export default function TrailerStudio() {
       return;
     }
     const moments = project.moments.filter((_, momentIndex) => momentIndex !== index);
-    setProject({ ...project, moments });
+    const previousDuration = project.moments.reduce(
+      (duration, moment) => duration + moment.endSeconds - moment.startSeconds,
+      0,
+    );
+    const nextDuration = moments.reduce(
+      (duration, moment) => duration + moment.endSeconds - moment.startSeconds,
+      0,
+    );
+    setProject({
+      ...project,
+      moments,
+      musicTracks: fitSoundtracksToDuration(project.musicTracks, previousDuration, nextDuration),
+    });
     const nextActiveMoment = activeMoment > index ? activeMoment - 1 : Math.min(activeMoment, moments.length - 1);
     setActiveMoment(nextActiveMoment);
     requestPreviewSeek(nextActiveMoment, moments[nextActiveMoment].startSeconds);
@@ -896,7 +1154,11 @@ export default function TrailerStudio() {
     && project
     && exportedProjectSignatureRef.current === projectRenderSignature(project),
   );
-  const canPublish = hasCurrentExport;
+  const canPublishMusic = Boolean(
+    project?.musicTracks.every((track) => track.commercialLicenseConfirmed),
+  );
+  const canPublishEmbedded = Boolean(project?.source.videoId && canPublishMusic);
+  const canPublishRendered = Boolean(hasCurrentExport && canPublishMusic);
   const frameAtPlayhead = project
     ? getTrailerFrameAtTime(project, activeMoment, previewTime)
     : null;
@@ -906,6 +1168,14 @@ export default function TrailerStudio() {
   const selectedSlotIndex = activeFrameSlots.findIndex((slot) =>
     previewTime >= slot.startSeconds && previewTime <= slot.endSeconds,
   );
+  const projectScreenRatios = project
+    ? new Set(project.moments.flatMap((_, index) =>
+      getTrailerFrameSlots(project, index).map((slot) => slot.aspectRatio),
+    ))
+    : new Set<string>();
+  const selectedScreenPreset = projectScreenRatios.size === 1
+    ? SCREEN_PRESETS.find((preset) => projectScreenRatios.has(preset.aspectRatio))?.id ?? "custom"
+    : "custom";
 
   const setKeyframeAtTime = useCallback((
     timeSeconds: number,
@@ -988,6 +1258,20 @@ export default function TrailerStudio() {
           : moment,
       ),
     });
+  }
+
+  function applyScreenPreset(aspectRatio: z.infer<typeof ShortAspectRatioSchema>) {
+    setProject((current) => current ? {
+      ...current,
+      aspectRatio,
+      moments: current.moments.map((moment, index) => ({
+        ...moment,
+        frameSlots: getTrailerFrameSlots(current, index).map((slot) => ({
+          ...slot,
+          aspectRatio,
+        })),
+      })),
+    } : current);
   }
 
   return (
@@ -1255,6 +1539,22 @@ export default function TrailerStudio() {
                     </div>
                   </>
                 )}
+                <label className="block text-sm font-semibold text-slate-300">
+                  Screen preset · applies to every trailer moment
+                  <select
+                    value={selectedScreenPreset}
+                    onChange={(event) => {
+                      const preset = SCREEN_PRESETS.find((item) => item.id === event.target.value);
+                      if (preset) applyScreenPreset(ShortAspectRatioSchema.parse(preset.aspectRatio));
+                    }}
+                    className="mt-2 min-h-12 w-full rounded-xl border border-slate-700 bg-slate-900 px-3 text-base text-white"
+                  >
+                    <option value="custom" disabled>Custom per-slot framing</option>
+                    {SCREEN_PRESETS.map((preset) => (
+                      <option key={preset.id} value={preset.id}>{preset.label} · {preset.aspectRatio}</option>
+                    ))}
+                  </select>
+                </label>
                 <div className="grid gap-3 sm:grid-cols-2">
                   <label className="block text-sm font-semibold text-slate-300">
                     Aspect ratio
@@ -1332,6 +1632,142 @@ export default function TrailerStudio() {
                 </div>
               </section>
 
+              <section className="space-y-3 rounded-xl border border-violet-900/70 bg-violet-950/15 p-4">
+                <div>
+                  <h3 className="font-bold text-white">AI soundtrack suggestions</h3>
+                  <p className="mt-1 text-xs leading-relaxed text-slate-400">
+                    AI matches instrumental Jamendo tracks to your transcript and direction. Tracks are editable, loop to the trailer length, and duck under speech.
+                  </p>
+                </div>
+                <label className="block text-sm font-semibold text-slate-300">
+                  Music direction
+                  <textarea
+                    value={soundtrackMood}
+                    onChange={(event) => setSoundtrackMood(event.target.value)}
+                    maxLength={1000}
+                    rows={2}
+                    className="mt-2 min-h-20 w-full rounded-xl border border-slate-700 bg-slate-900 p-3 text-base text-white"
+                  />
+                </label>
+                <button
+                  type="button"
+                  onClick={() => void findSoundtrackSuggestions()}
+                  disabled={musicSearchBusy || project.musicTracks.length >= 5}
+                  className="min-h-12 w-full rounded-xl bg-violet-300 px-4 text-sm font-bold text-slate-950 disabled:opacity-50"
+                >
+                  {musicSearchBusy ? "Finding soundtrack…" : "Suggest soundtracks with AI"}
+                </button>
+                {soundtrackSuggestions.length > 0 && (
+                  <ul className="space-y-3">
+                    {soundtrackSuggestions.map((suggestion) => (
+                      <li key={suggestion.id} className="space-y-2 rounded-lg border border-slate-800 bg-slate-950/70 p-3">
+                        <div>
+                          <p className="font-semibold text-white">{suggestion.title}</p>
+                          <p className="text-xs text-slate-400">{suggestion.artistName} · {suggestion.query}</p>
+                        </div>
+                        <p className="text-xs leading-relaxed text-slate-400">{suggestion.reason}</p>
+                        <audio
+                          controls
+                          preload="none"
+                          src={suggestion.audioUrl}
+                          aria-label={`Preview ${suggestion.title} by ${suggestion.artistName}`}
+                          className="min-h-12 w-full"
+                        />
+                        <div className="flex flex-wrap items-center gap-3 text-xs text-violet-200">
+                          <a href={suggestion.providerPageUrl} target="_blank" rel="noreferrer" className="inline-flex min-h-12 items-center underline underline-offset-2">
+                            Track details
+                          </a>
+                          <a href={suggestion.licenseUrl} target="_blank" rel="noreferrer" className="inline-flex min-h-12 items-center underline underline-offset-2">
+                            License terms
+                          </a>
+                          <button
+                            type="button"
+                            onClick={() => addSoundtrack(suggestion)}
+                            disabled={project.musicTracks.length >= 5}
+                            className="min-h-12 rounded-lg border border-violet-700 px-4 font-semibold disabled:opacity-50"
+                          >
+                            Add to trailer
+                          </button>
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+                {project.musicTracks.length > 0 && (
+                  <ul className="space-y-3">
+                    {project.musicTracks.map((track) => (
+                      <li key={track.id} className="space-y-3 rounded-lg border border-violet-900/60 bg-slate-950/70 p-3">
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <div className="min-w-0">
+                            <p className="truncate font-semibold text-white">{track.fileName}</p>
+                            <a href={track.providerPageUrl} target="_blank" rel="noreferrer" className="inline-flex min-h-12 items-center text-xs text-violet-200 underline underline-offset-2">
+                              {track.creatorName} · Jamendo
+                            </a>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => setProject({
+                              ...project,
+                              musicTracks: project.musicTracks.filter((item) => item.id !== track.id),
+                            })}
+                            aria-label={`Remove soundtrack ${track.fileName}`}
+                            className="min-h-12 min-w-12 rounded-lg border border-rose-900 px-3 text-rose-200"
+                          >
+                            Remove
+                          </button>
+                        </div>
+                        <div className="grid gap-3 sm:grid-cols-3">
+                          {([
+                            ["volume", "Volume", 0, 1, 0.01],
+                            ["fadeInSeconds", "Fade in (seconds)", 0, 10, 0.1],
+                            ["fadeOutSeconds", "Fade out (seconds)", 0, 10, 0.1],
+                          ] as const).map(([field, label, min, max, step]) => (
+                            <label key={field} className="block text-xs font-semibold text-slate-300">
+                              {label}: {track[field].toFixed(field === "volume" ? 2 : 1)}
+                              <input
+                                type="range"
+                                min={min}
+                                max={max}
+                                step={step}
+                                value={track[field]}
+                                onChange={(event) => updateSoundtrack(track.id, { [field]: Number(event.target.value) })}
+                                className="mt-1 min-h-12 w-full accent-violet-300"
+                              />
+                            </label>
+                          ))}
+                        </div>
+                        <label className="flex min-h-12 items-center gap-3 text-sm text-slate-300">
+                          <input
+                            type="checkbox"
+                            checked={track.duckUnderSpeech}
+                            onChange={(event) => updateSoundtrack(track.id, { duckUnderSpeech: event.target.checked })}
+                            className="min-h-6 min-w-6 accent-violet-300"
+                          />
+                          Lower music while transcript dialogue is active
+                        </label>
+                        <label className="flex min-h-12 items-center gap-3 rounded-lg border border-amber-900/70 bg-amber-950/20 px-3 text-xs leading-relaxed text-amber-100">
+                          <input
+                            type="checkbox"
+                            checked={track.commercialLicenseConfirmed}
+                            onChange={(event) => updateSoundtrack(track.id, {
+                              commercialLicenseConfirmed: event.target.checked,
+                            })}
+                            className="min-h-6 min-w-6 accent-amber-400"
+                          />
+                          I obtained the commercial license for public use of this track.
+                        </label>
+                        {!track.commercialLicenseConfirmed && (
+                          <p className="text-xs text-amber-200">
+                            Public publishing is blocked until you obtain the track license and confirm it here.{" "}
+                            <a href={track.licenseUrl} target="_blank" rel="noreferrer" className="underline underline-offset-2">Review license</a>
+                          </p>
+                        )}
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </section>
+
               <section className="space-y-3 rounded-xl border border-slate-800 bg-slate-950/60 p-4">
                 <h3 className="font-bold text-white">Trailer copy</h3>
                 <div className="grid gap-3 sm:grid-cols-2">
@@ -1385,6 +1821,16 @@ export default function TrailerStudio() {
                 </button>
                 {project.transcript.length === 0 && (
                   <p className="text-xs text-amber-200">No transcript is saved for this project, so AI curation is unavailable. You can still add moments manually.</p>
+                )}
+                {project.source.uploadedFileName && (
+                  <button
+                    type="button"
+                    onClick={() => void retranscribeSource()}
+                    disabled={busy || !sourceFileReady}
+                    className="min-h-12 rounded-lg border border-slate-700 px-4 text-sm font-semibold text-slate-200 disabled:opacity-50"
+                  >
+                    {project.transcript.length === 0 ? "Transcribe uploaded source" : "Refresh transcript from source"}
+                  </button>
                 )}
               </section>
 
@@ -1440,6 +1886,50 @@ export default function TrailerStudio() {
                           />
                         </label>
                       </div>
+                      <div className="grid gap-2 sm:grid-cols-2">
+                        <label className="text-xs font-semibold text-slate-400">
+                          Entrance
+                          <select
+                            value={moment.transitionIn}
+                            onChange={(event) => updateMoment(index, {
+                              transitionIn: TrailerTransitionSchema.parse(event.target.value),
+                            })}
+                            className="mt-1 min-h-12 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 text-base text-white"
+                          >
+                            {TRANSITION_OPTIONS.map((transition) => (
+                              <option key={transition.id} value={transition.id}>{transition.label}</option>
+                            ))}
+                          </select>
+                        </label>
+                        <label className="text-xs font-semibold text-slate-400">
+                          Exit
+                          <select
+                            value={moment.transitionOut}
+                            onChange={(event) => updateMoment(index, {
+                              transitionOut: TrailerTransitionSchema.parse(event.target.value),
+                            })}
+                            className="mt-1 min-h-12 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 text-base text-white"
+                          >
+                            {TRANSITION_OPTIONS.map((transition) => (
+                              <option key={transition.id} value={transition.id}>{transition.label}</option>
+                            ))}
+                          </select>
+                        </label>
+                      </div>
+                      <label className="block text-xs font-semibold text-slate-400">
+                        Transition duration · {moment.transitionDurationSeconds.toFixed(1)}s
+                        <input
+                          type="range"
+                          min={0.1}
+                          max={3}
+                          step={0.1}
+                          value={moment.transitionDurationSeconds}
+                          onChange={(event) => updateMoment(index, {
+                            transitionDurationSeconds: Number(event.target.value),
+                          })}
+                          className="mt-1 min-h-12 w-full accent-cyan-300"
+                        />
+                      </label>
                       <label className="block text-xs font-semibold text-slate-400">
                         Scene title
                         <input
@@ -1539,22 +2029,58 @@ export default function TrailerStudio() {
                       Download {downloadName}
                     </a>
                   )}
+                  {project.source.videoId && (
+                    <button
+                      type="button"
+                      onClick={() => void publishProject("youtube")}
+                      disabled={busy || !canPublishEmbedded}
+                      className="min-h-12 w-full rounded-xl border border-cyan-700 px-4 text-sm font-extrabold text-cyan-100 disabled:opacity-50 sm:w-auto"
+                    >
+                      Publish embedded YouTube trailer
+                    </button>
+                  )}
                   <button
                     type="button"
-                    onClick={() => void publishProject()}
-                    disabled={busy || !canPublish}
+                    onClick={() => void publishProject("upload")}
+                    disabled={busy || !canPublishRendered}
                     className="min-h-12 w-full rounded-xl bg-cyan-300 px-4 text-sm font-extrabold text-slate-950 disabled:opacity-50 sm:w-auto"
                   >
-                    {isPublished ? "Update published trailer" : "Publish to Library"}
+                    {isPublished ? "Update rendered trailer" : "Publish rendered trailer"}
                   </button>
-                  {!hasCurrentExport && (
+                  {!hasCurrentExport && !canPublishEmbedded && (
                     <p className="text-xs text-amber-200">
                       Render the latest edits before publishing. The published page plays one continuous video file.
                     </p>
                   )}
                   <p className="text-xs leading-relaxed text-slate-500">
-                    Render uses the uploaded source and selected frame. Publishing uploads only the finished trailer, not your original source.
+                    Publish the YouTube moments as an embedded sequence without uploading a source file, or render and publish a single video file.
                   </p>
+                </section>
+              )}
+              {!project.source.uploadedFileName && (
+                <section className="space-y-3 rounded-xl border border-emerald-900/70 bg-emerald-950/20 p-4">
+                  <h3 className="font-bold text-emerald-100">Publish your trailer</h3>
+                  <p className="text-sm leading-relaxed text-slate-300">
+                    Publish this edited sequence directly as a YouTube embed. Upload an authorized source only if you also want to render and publish a single downloadable video file.
+                  </p>
+                  <div className="flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      onClick={() => void exportProject()}
+                      disabled={busy || !canExport}
+                      className="min-h-12 rounded-xl bg-emerald-300 px-4 text-sm font-extrabold text-slate-950 disabled:opacity-50"
+                    >
+                      Render video file
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void publishProject("youtube")}
+                      disabled={busy || !canPublishEmbedded}
+                      className="min-h-12 rounded-xl bg-cyan-300 px-4 text-sm font-extrabold text-slate-950 disabled:opacity-50"
+                    >
+                      Publish embedded video
+                    </button>
+                  </div>
                 </section>
               )}
             </div>

@@ -6,7 +6,7 @@ import type { TrailerMoment } from "@/lib/schemas/trailer";
 import type { TrailerProject } from "@/lib/schemas/trailer";
 import { loadYouTubeApi } from "@/lib/youtube-iframe-api";
 import type { YouTubePlayerInstance } from "@/lib/youtube-iframe-api";
-import { getTrailerFrameAtTime } from "@/lib/trailer-utils";
+import { getTrailerFrameAtTime, getTrailerTransitionEffect } from "@/lib/trailer-utils";
 
 type YouTubePlayerStateChange = { data: number };
 
@@ -20,6 +20,7 @@ type Props = {
   onCurrentTimeChange: (timeSeconds: number) => void;
   onCropChange: (timeSeconds: number, cropX: number, cropY: number, zoom: number, fit: "cover" | "contain") => void;
   onError: (message: string) => void;
+  editable?: boolean;
 };
 
 export default function TrailerVideoPreview({
@@ -32,10 +33,12 @@ export default function TrailerVideoPreview({
   onCurrentTimeChange,
   onCropChange,
   onError,
+  editable = true,
 }: Props) {
   const playerTargetRef = useRef<HTMLDivElement>(null);
   const playerRef = useRef<YouTubePlayerInstance | null>(null);
   const localVideoRef = useRef<HTMLVideoElement>(null);
+  const musicAudioRef = useRef(new Map<string, HTMLAudioElement>());
   const cropDragRef = useRef<{
     x: number;
     y: number;
@@ -59,6 +62,33 @@ export default function TrailerVideoPreview({
   momentsRef.current = project.moments;
   activeMomentRef.current = activeMoment;
 
+  const musicTrackKey = JSON.stringify(project.musicTracks.map((track) => [
+    track.id,
+    track.audioUrl,
+    track.loop,
+  ]));
+  useEffect(() => {
+    const audioElements = new Map<string, HTMLAudioElement>();
+    for (const track of project.musicTracks) {
+      const audio = document.createElement("audio");
+      audio.crossOrigin = "anonymous";
+      audio.preload = "auto";
+      audio.loop = track.loop;
+      audio.src = track.audioUrl;
+      audio.load();
+      audioElements.set(track.id, audio);
+    }
+    musicAudioRef.current = audioElements;
+    return () => {
+      audioElements.forEach((audio) => {
+        audio.pause();
+        audio.removeAttribute("src");
+        audio.load();
+      });
+      if (musicAudioRef.current === audioElements) musicAudioRef.current = new Map();
+    };
+  }, [musicTrackKey]);
+
   const setMoment = (index: number) => {
     activeMomentRef.current = index;
     onActiveMomentChange(index);
@@ -68,10 +98,56 @@ export default function TrailerVideoPreview({
 
   const reportCurrentTime = useCallback((timeSeconds: number, force = false) => {
     if (!Number.isFinite(timeSeconds)) return;
-    if (!force && Math.abs(timeSeconds - lastReportedTimeRef.current) < 0.2) return;
+    if (!force && Math.abs(timeSeconds - lastReportedTimeRef.current) < 0.05) return;
     lastReportedTimeRef.current = timeSeconds;
     onCurrentTimeChange(timeSeconds);
   }, [onCurrentTimeChange]);
+
+  const syncPreviewMusic = useCallback((
+    sourceTimeSeconds: number,
+    momentIndex: number,
+    shouldPlay: boolean,
+  ) => {
+    const moment = project.moments[momentIndex];
+    if (!moment) return;
+    const outputOffset = project.moments.slice(0, momentIndex).reduce(
+      (total, item) => total + item.endSeconds - item.startSeconds,
+      0,
+    );
+    const outputTimeSeconds = outputOffset + Math.max(
+      0,
+      Math.min(moment.endSeconds - moment.startSeconds, sourceTimeSeconds - moment.startSeconds),
+    );
+    const speechActive = project.transcript.some((segment) =>
+      sourceTimeSeconds >= segment.startSeconds && sourceTimeSeconds < segment.endSeconds,
+    );
+    for (const track of project.musicTracks) {
+      const audio = musicAudioRef.current.get(track.id);
+      if (!audio) continue;
+      const active = outputTimeSeconds >= track.startSeconds && outputTimeSeconds < track.endSeconds;
+      if (!active || !shouldPlay) {
+        audio.pause();
+        continue;
+      }
+      const elapsed = outputTimeSeconds - track.startSeconds;
+      const duration = Number.isFinite(audio.duration) && audio.duration > 0
+        ? audio.duration
+        : track.sourceDurationSeconds;
+      const target = track.loop ? elapsed % duration : Math.min(elapsed, duration - 0.05);
+      if (Math.abs(audio.currentTime - target) > 0.75) audio.currentTime = target;
+      const fadeIn = track.fadeInSeconds > 0 ? Math.min(1, elapsed / track.fadeInSeconds) : 1;
+      const fadeOut = track.fadeOutSeconds > 0
+        ? Math.min(1, (track.endSeconds - outputTimeSeconds) / track.fadeOutSeconds)
+        : 1;
+      const duck = track.duckUnderSpeech && speechActive ? track.duckVolume : 1;
+      audio.volume = Math.max(0, Math.min(1, track.volume * fadeIn * fadeOut * duck));
+      if (audio.paused) {
+        void audio.play().catch(() => {
+          onError("The soundtrack preview was blocked. Tap Play trailer again to start audio.");
+        });
+      }
+    }
+  }, [onError, project]);
 
   useEffect(() => {
     if (!project.source.videoId || localVideoUrl || !playerTargetRef.current) return;
@@ -152,6 +228,7 @@ export default function TrailerVideoPreview({
         return;
       }
       video.currentTime = moment.startSeconds;
+      syncPreviewMusic(moment.startSeconds, playRequest.index, true);
       void video.play().catch((error: unknown) => {
         onError(error instanceof Error ? error.message : "The uploaded source could not play.");
       });
@@ -164,6 +241,7 @@ export default function TrailerVideoPreview({
         return;
       }
       player.seekTo(moment.startSeconds, true);
+      syncPreviewMusic(moment.startSeconds, playRequest.index, true);
       player.playVideo();
       return;
     }
@@ -174,10 +252,11 @@ export default function TrailerVideoPreview({
       return;
     }
     video.currentTime = moment.startSeconds;
+    syncPreviewMusic(moment.startSeconds, playRequest.index, true);
     void video.play().catch((error: unknown) => {
       onError(error instanceof Error ? error.message : "The uploaded source could not play.");
     });
-  }, [localVideoReady, localVideoUrl, onError, playRequest, playerReady, project.source.videoId]);
+  }, [localVideoReady, localVideoUrl, onError, playRequest, playerReady, project.source.videoId, syncPreviewMusic]);
 
   useEffect(() => {
     if (!seekRequest || seekRequest.nonce === 0) return;
@@ -229,6 +308,7 @@ export default function TrailerVideoPreview({
       if (!player || !moment) return;
       const currentTime = player.getCurrentTime();
       reportCurrentTime(currentTime);
+      syncPreviewMusic(currentTime, activeMomentRef.current, true);
       if (currentTime < moment.endSeconds - 0.12) return;
 
       const nextIndex = activeMomentRef.current + 1;
@@ -238,9 +318,26 @@ export default function TrailerVideoPreview({
       }
       setMoment(nextIndex);
       player.seekTo(momentsRef.current[nextIndex].startSeconds, true);
-    }, 100);
+    }, 33);
     return () => window.clearInterval(interval);
-  }, [localVideoUrl, onActiveMomentChange, playing, project.source.videoId, reportCurrentTime]);
+  }, [localVideoUrl, onActiveMomentChange, playing, project.source.videoId, reportCurrentTime, syncPreviewMusic]);
+
+  useEffect(() => {
+    if (!localVideoUrl || !playing) return;
+    const interval = window.setInterval(() => {
+      const currentTime = localVideoRef.current?.currentTime;
+      if (currentTime !== undefined) {
+        reportCurrentTime(currentTime);
+        syncPreviewMusic(currentTime, activeMomentRef.current, true);
+      }
+    }, 33);
+    return () => window.clearInterval(interval);
+  }, [localVideoUrl, playing, reportCurrentTime, syncPreviewMusic]);
+
+  useEffect(() => {
+    if (playing) return;
+    musicAudioRef.current.forEach((audio) => audio.pause());
+  }, [playing]);
 
   function handleLocalTimeUpdate() {
     const video = localVideoRef.current;
@@ -285,6 +382,13 @@ export default function TrailerVideoPreview({
     top: `${(100 - heightPercent) * frame.y / 100}%`,
     border: 0,
     pointerEvents: "none" as const,
+  };
+  const transitionEffect = project.moments[activeMoment]
+    ? getTrailerTransitionEffect(project.moments[activeMoment], currentTime)
+    : { opacity: 1, translateX: 0, translateY: 0, scale: 1 };
+  const transitionStyle = {
+    opacity: transitionEffect.opacity,
+    transform: `translate(${transitionEffect.translateX * 100}%, ${transitionEffect.translateY * 100}%) scale(${transitionEffect.scale})`,
   };
 
   useEffect(() => {
@@ -332,68 +436,70 @@ export default function TrailerVideoPreview({
   return (
     <div className="space-y-3">
       <div
-        className="relative mx-auto w-full max-w-xl touch-none overflow-hidden rounded-xl border border-slate-700 bg-black"
+        className={`relative mx-auto w-full max-w-xl overflow-hidden rounded-xl border border-slate-700 bg-black ${editable ? "touch-none" : ""}`}
         style={{ aspectRatio: aspectRatio.replace(":", "/") }}
-        onPointerDown={startCropDrag}
-        onPointerMove={moveCropDrag}
-        onPointerUp={() => { cropDragRef.current = null; }}
-        onPointerCancel={() => { cropDragRef.current = null; }}
-        aria-label="Drag the video to adjust its crop"
+        onPointerDown={editable ? startCropDrag : undefined}
+        onPointerMove={editable ? moveCropDrag : undefined}
+        onPointerUp={editable ? () => { cropDragRef.current = null; } : undefined}
+        onPointerCancel={editable ? () => { cropDragRef.current = null; } : undefined}
+        aria-label={editable ? "Drag the video to adjust its crop" : undefined}
       >
-        {localVideoUrl ? (
-          <video
-            ref={localVideoRef}
-            src={localVideoUrl}
-            playsInline
-            onLoadedMetadata={() => {
-              const video = localVideoRef.current;
-              if (video && video.videoHeight > 0) {
-                setSourceAspectRatio(video.videoWidth / video.videoHeight);
-              }
-              setLocalVideoReady(true);
-              reportCurrentTime(video?.currentTime ?? 0, true);
-            }}
-            onError={() => onError("The uploaded source could not be decoded for preview. Re-select the source file and try again.")}
-            onPlay={() => setPlaying(true)}
-            onPause={() => setPlaying(false)}
-            onTimeUpdate={handleLocalTimeUpdate}
-            className="pointer-events-none"
-            style={playerStyle}
-          />
-        ) : project.source.videoId ? (
-          <div className="absolute inset-0 overflow-hidden">
+        <div className="absolute inset-0 overflow-hidden" style={transitionStyle}>
+          {localVideoUrl ? (
+            <video
+              ref={localVideoRef}
+              src={localVideoUrl}
+              playsInline
+              onLoadedMetadata={() => {
+                const video = localVideoRef.current;
+                if (video && video.videoHeight > 0) {
+                  setSourceAspectRatio(video.videoWidth / video.videoHeight);
+                }
+                setLocalVideoReady(true);
+                reportCurrentTime(video?.currentTime ?? 0, true);
+              }}
+              onError={() => onError("The uploaded source could not be decoded for preview. Re-select the source file and try again.")}
+              onPlay={() => setPlaying(true)}
+              onPause={() => setPlaying(false)}
+              onTimeUpdate={handleLocalTimeUpdate}
+              className="pointer-events-none"
+              style={playerStyle}
+            />
+          ) : project.source.videoId ? (
             <div ref={playerTargetRef} style={playerStyle} />
-          </div>
-        ) : (
-          <div className="flex h-full items-center justify-center p-6 text-center text-sm text-slate-400">
-            Upload or re-select a source file to preview it here.
-          </div>
-        )}
-        {project.brandLine && (
-          <p className="pointer-events-none absolute left-3 right-3 top-3 z-10 text-center text-xs font-bold uppercase tracking-widest text-cyan-200 drop-shadow-[0_2px_4px_rgba(0,0,0,0.95)] sm:text-sm">
-            {project.brandLine}
-          </p>
-        )}
-        {project.headline && (
-          <p className="pointer-events-none absolute left-4 right-4 top-[18%] z-10 text-center text-lg font-black text-white drop-shadow-[0_2px_5px_rgba(0,0,0,0.95)] sm:text-2xl">
-            {project.headline}
-          </p>
-        )}
-        {project.moments[activeMoment]?.title && (
-          <p className={`pointer-events-none absolute left-4 right-4 z-10 text-center text-base font-bold text-white drop-shadow-[0_2px_5px_rgba(0,0,0,0.95)] sm:text-xl ${project.callToAction ? "bottom-[28%]" : "bottom-[18%]"}`}>
-            {project.moments[activeMoment].title}
-          </p>
-        )}
-        {project.moments[activeMoment]?.hook && (
-          <p className={`pointer-events-none absolute left-4 right-4 z-10 max-h-24 overflow-hidden text-center text-sm font-medium text-white drop-shadow-[0_2px_5px_rgba(0,0,0,0.95)] sm:text-base ${project.callToAction ? "bottom-[17%]" : "bottom-[8%]"}`}>
-            {project.moments[activeMoment].hook}
-          </p>
-        )}
-        {project.callToAction && activeMoment === project.moments.length - 1 && (
-          <p className="pointer-events-none absolute bottom-3 left-1/2 z-10 max-w-[88%] -translate-x-1/2 rounded-full bg-cyan-300 px-4 py-2 text-center text-xs font-extrabold text-slate-950 sm:text-sm">
-            {project.callToAction}
-          </p>
-        )}
+          ) : (
+            <div className="flex h-full items-center justify-center p-6 text-center text-sm text-slate-400">
+              Upload or re-select a source file to preview it here.
+            </div>
+          )}
+        </div>
+        <div className="pointer-events-none absolute inset-0" style={transitionStyle}>
+          {project.brandLine && (
+            <p className="pointer-events-none absolute left-3 right-3 top-3 z-10 text-center text-xs font-bold uppercase tracking-widest text-cyan-200 drop-shadow-[0_2px_4px_rgba(0,0,0,0.95)] sm:text-sm">
+              {project.brandLine}
+            </p>
+          )}
+          {project.headline && (
+            <p className="pointer-events-none absolute left-4 right-4 top-[18%] z-10 text-center text-lg font-black text-white drop-shadow-[0_2px_5px_rgba(0,0,0,0.95)] sm:text-2xl">
+              {project.headline}
+            </p>
+          )}
+          {project.moments[activeMoment]?.title && (
+            <p className={`pointer-events-none absolute left-4 right-4 z-10 text-center text-base font-bold text-white drop-shadow-[0_2px_5px_rgba(0,0,0,0.95)] sm:text-xl ${project.callToAction ? "bottom-[28%]" : "bottom-[18%]"}`}>
+              {project.moments[activeMoment].title}
+            </p>
+          )}
+          {project.moments[activeMoment]?.hook && (
+            <p className={`pointer-events-none absolute left-4 right-4 z-10 max-h-24 overflow-hidden text-center text-sm font-medium text-white drop-shadow-[0_2px_5px_rgba(0,0,0,0.95)] sm:text-base ${project.callToAction ? "bottom-[17%]" : "bottom-[8%]"}`}>
+              {project.moments[activeMoment].hook}
+            </p>
+          )}
+          {project.callToAction && activeMoment === project.moments.length - 1 && (
+            <p className="pointer-events-none absolute bottom-3 left-1/2 z-10 max-w-[88%] -translate-x-1/2 rounded-full bg-cyan-300 px-4 py-2 text-center text-xs font-extrabold text-slate-950 sm:text-sm">
+              {project.callToAction}
+            </p>
+          )}
+        </div>
       </div>
       <div className="flex flex-wrap items-center gap-2">
         <button
@@ -403,7 +509,9 @@ export default function TrailerVideoPreview({
               const video = localVideoRef.current;
               if (!video || !localVideoReady || momentsRef.current.length === 0) return;
               setMoment(0);
-              video.currentTime = momentsRef.current[0].startSeconds;
+              const startSeconds = momentsRef.current[0].startSeconds;
+              video.currentTime = startSeconds;
+              syncPreviewMusic(startSeconds, 0, true);
               void video.play().catch((error: unknown) => {
                 onError(error instanceof Error ? error.message : "The uploaded source could not play.");
               });
@@ -416,14 +524,18 @@ export default function TrailerVideoPreview({
                 return;
               }
               setMoment(0);
-              player.seekTo(momentsRef.current[0]?.startSeconds ?? 0, true);
+              const startSeconds = momentsRef.current[0]?.startSeconds ?? 0;
+              player.seekTo(startSeconds, true);
+              syncPreviewMusic(startSeconds, 0, true);
               player.playVideo();
               return;
             }
             const video = localVideoRef.current;
             if (!video || momentsRef.current.length === 0) return;
             setMoment(0);
-            video.currentTime = momentsRef.current[0].startSeconds;
+            const startSeconds = momentsRef.current[0].startSeconds;
+            video.currentTime = startSeconds;
+            syncPreviewMusic(startSeconds, 0, true);
             void video.play().catch((error: unknown) => {
               onError(error instanceof Error ? error.message : "The uploaded source could not play.");
             });
