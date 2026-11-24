@@ -1519,7 +1519,7 @@ export default function TrailerStudio() {
               <p className="text-xs leading-relaxed text-slate-500">
                 {localVideoUrl
                   ? "The uploaded source powers local montage playback and rendering. Captions already baked into its video pixels cannot be removed."
-                  : "YouTube stays embedded and may buffer between moments. Trailer Studio suppresses the YouTube caption module where supported; captions burned into the source cannot be removed."}
+                  : "YouTube stays embedded and may buffer between moments. Trailer Studio hides supported controls, annotations, and captions; YouTube may still briefly show its title or related-video overlays when seeking, which embeds cannot fully disable."}
               </p>
               <section className="space-y-3 rounded-xl border border-slate-800 bg-slate-950/60 p-4">
                 <div>
