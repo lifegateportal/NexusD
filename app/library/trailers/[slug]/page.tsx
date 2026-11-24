@@ -8,6 +8,7 @@ import PublishedTrailerPlayer from "../PublishedTrailerPlayer";
 import { createEmbeddedTrailerProject } from "@/lib/trailer-utils";
 
 export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
 
 type Props = { params: Promise<{ slug: string }> };
 

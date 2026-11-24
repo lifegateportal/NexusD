@@ -3,6 +3,7 @@ import LibraryNav from "../LibraryNav";
 import { listPublicTrailers } from "@/lib/trailer-store";
 
 export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
 export const metadata = {
   title: "Trailers | Nexus Library",
   description: "Watch published promotional trailers from Nexus Library.",
@@ -18,7 +19,7 @@ export default async function LibraryTrailersPage() {
           <p className="text-[10px] font-bold uppercase tracking-[0.25em] text-cyan-300">Watch · Share · Discover</p>
           <h1 className="mt-2 text-3xl font-bold tracking-tight text-white sm:text-4xl">Trailers</h1>
           <p className="mt-2 max-w-2xl text-sm leading-relaxed text-slate-400">
-            Watch published trailers as continuous rendered videos.
+            Watch published embedded YouTube sequences and rendered video trailers.
           </p>
         </header>
         {catalog.trailers.length === 0 ? (

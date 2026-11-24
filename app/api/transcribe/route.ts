@@ -1,15 +1,17 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { env } from "@/lib/env";
+import { MAX_TRAILER_SOURCE_FILE_BYTES } from "@/lib/schemas/trailer";
 
 export const runtime = "nodejs";
-export const maxDuration = 120; // large files can take time
+export const maxDuration = 300;
 
-const MAX_FILE_BYTES = 100 * 1024 * 1024;
 const DeepgramResponseSchema = z.object({
   err_msg: z.string().optional(),
+  message: z.string().optional(),
   results: z.object({
     channels: z.array(z.object({
+      detected_language: z.string().optional(),
       alternatives: z.array(z.object({
         transcript: z.string().optional(),
         words: z.array(z.object({
@@ -45,35 +47,46 @@ export async function POST(request: NextRequest) {
     if (file.size === 0) {
       return NextResponse.json({ error: "The selected media file is empty." }, { status: 400 });
     }
-    if (file.size > MAX_FILE_BYTES) {
-      return NextResponse.json({ error: "Media files must be 100 MB or smaller." }, { status: 413 });
+    if (file.size > MAX_TRAILER_SOURCE_FILE_BYTES) {
+      return NextResponse.json({ error: "Media files must be 500 MB or smaller." }, { status: 413 });
     }
 
-    const buffer = Buffer.from(await file.arrayBuffer());
-    const mimeType = file.type || "application/octet-stream";
+    const mimeType = file.type === "video/mp4" || file.type === "video/webm"
+      ? file.type
+      : file.name.toLowerCase().endsWith(".mp4")
+        ? "video/mp4"
+        : file.name.toLowerCase().endsWith(".webm")
+          ? "video/webm"
+          : null;
+    if (!mimeType) {
+      return NextResponse.json({ error: "Choose an MP4 or WebM source video." }, { status: 415 });
+    }
 
     const params = new URLSearchParams({
-      model: "nova-3",
+      model: "nova-2",
       smart_format: "true",
       punctuate: "true",
       paragraphs: "true",
       utterances: "true",
-      language: "en",
+      language: "multi",
+      detect_language: "true",
     });
-    const response = await fetch(`https://api.deepgram.com/v1/listen?${params}`, {
+    const requestOptions: RequestInit & { duplex: "half" } = {
       method: "POST",
       headers: {
         Authorization: `Token ${env.DEEPGRAM_API_KEY}`,
         "Content-Type": mimeType,
       },
-      body: buffer,
-      signal: AbortSignal.timeout(110_000),
-    });
+      body: file.stream(),
+      duplex: "half",
+      signal: AbortSignal.timeout(280_000),
+    };
+    const response = await fetch(`https://api.deepgram.com/v1/listen?${params}`, requestOptions);
     const responseBody: unknown = await response.json();
     const parsedResponse = DeepgramResponseSchema.safeParse(responseBody);
     if (!response.ok) {
       const detail = parsedResponse.success
-        ? parsedResponse.data.err_msg ?? `Deepgram returned HTTP ${response.status}.`
+        ? parsedResponse.data.err_msg ?? parsedResponse.data.message ?? `Deepgram returned HTTP ${response.status}.`
         : `Deepgram returned HTTP ${response.status} with an invalid error response.`;
       throw new Error(detail);
     }
@@ -131,8 +144,12 @@ export async function POST(request: NextRequest) {
   } catch (err) {
     const message = err instanceof Error ? err.message : "Unknown error";
     return NextResponse.json(
-      { error: `Transcription failed: ${message}` },
-      { status: 500 }
+      {
+        error: err instanceof Error && err.name === "TimeoutError"
+          ? "Deepgram transcription timed out. Try a smaller/compressed video or retry."
+          : `Transcription failed: ${message}`,
+      },
+      { status: err instanceof Error && err.name === "TimeoutError" ? 504 : 500 }
     );
   }
 }

@@ -9,6 +9,7 @@ import {
   PublishedTrailerSchema,
   TrailerTransitionSchema,
   TrailerSuggestionResponseSchema,
+  MAX_TRAILER_SOURCE_FILE_BYTES,
   type TrailerMoment,
   type TrailerMusicTrack,
   type TrailerProject,
@@ -55,7 +56,6 @@ const TrailerUploadResponseSchema = z.object({
   contentType: z.enum(["video/mp4", "video/webm"]),
 }).strict();
 const PublishedTrailerResponseSchema = z.object({ trailer: PublishedTrailerSchema }).strict();
-const MAX_SOURCE_BYTES = 100 * 1024 * 1024;
 const MAX_SOURCE_DURATION_SECONDS = 3600;
 const MAX_TRAILER_SECONDS = 300;
 const SCREEN_PRESETS = [
@@ -225,7 +225,7 @@ function readVideoDuration(file: File): Promise<number> {
 
 async function transcribeSource(file: File): Promise<z.infer<typeof LibraryVideoSegmentSchema>[]> {
   const form = new FormData();
-  form.append("file", file);
+  form.append("file", new File([file], file.name, { type: getFileContentType(file) }));
   const body = await requestJson("/api/transcribe", { method: "POST", body: form });
   const parsed = TranscriptionResponseSchema.safeParse(body);
   if (!parsed.success) {
@@ -460,19 +460,27 @@ export default function TrailerStudio() {
   }
 
   async function uploadSource(file: File, currentProject?: TrailerProject) {
-    getFileContentType(file);
-    if (file.size === 0 || file.size > MAX_SOURCE_BYTES) {
-      throw new Error("Source videos must be non-empty and 100 MB or smaller so they can be transcribed for AI curation.");
+    if (file.size === 0 || file.size > MAX_TRAILER_SOURCE_FILE_BYTES) {
+      throw new Error("Source videos must be non-empty and 500 MB or smaller.");
     }
+    getFileContentType(file);
     const durationSeconds = await readVideoDuration(file);
     if (currentProject && currentProject.moments.some((moment) => moment.endSeconds > durationSeconds)) {
       throw new Error("This source is shorter than one or more trailer moments. Upload the matching source or adjust the moments first.");
     }
     const slug = currentProject?.slug ?? createSlug();
-    await saveShortSource(slug, file);
     localFileRef.current = file;
     setLocalVideoUrl(URL.createObjectURL(file));
     setSourceFileReady(true);
+
+    let sourceStorageWarning = "";
+    try {
+      await saveShortSource(slug, file);
+    } catch (storageError) {
+      sourceStorageWarning = storageError instanceof Error
+        ? `The browser could not store a source copy (${storageError.message}); the file remains available for this session.`
+        : "The browser could not store a source copy; the file remains available for this session.";
+    }
 
     let transcript = currentProject?.transcript ?? [];
     let transcriptionWarning = "";
@@ -500,9 +508,11 @@ export default function TrailerStudio() {
         ...(transcriptionWarning ? {} : { transcript }),
       });
       setNotice(transcriptionWarning
-        ? "Source saved in this browser. Existing transcript was kept; retry transcription or curate from the saved transcript."
-        : "Source saved and transcribed. You can now curate trailer moments from the uploaded video.");
-      if (transcriptionWarning) setError(`Source upload succeeded, but transcription failed: ${transcriptionWarning}`);
+        ? "Source is available in this session. Existing transcript was kept; retry transcription or curate from the saved transcript."
+        : "Source transcribed. You can now curate trailer moments from the uploaded video.");
+      const warnings = [sourceStorageWarning, transcriptionWarning && `Transcription failed: ${transcriptionWarning}`]
+        .filter(Boolean);
+      if (warnings.length > 0) setError(warnings.join(" "));
       return;
     }
 
@@ -521,9 +531,11 @@ export default function TrailerStudio() {
     setActiveMoment(0);
     requestPreviewSeek(0, next.moments[0].startSeconds);
     setNotice(transcriptionWarning
-      ? "Source saved in this browser. Add moments manually; AI curation needs a transcript."
-      : "Source saved in this browser and transcribed. Ask AI to curate a trailer sequence.");
-    if (transcriptionWarning) setError(`Source upload succeeded, but transcription failed: ${transcriptionWarning}`);
+      ? "Source is available in this session. Add moments manually; AI curation needs a transcript."
+      : "Source transcribed. Ask AI to curate a trailer sequence.");
+    const warnings = [sourceStorageWarning, transcriptionWarning && `Transcription failed: ${transcriptionWarning}`]
+      .filter(Boolean);
+    if (warnings.length > 0) setError(warnings.join(" "));
   }
 
   async function retranscribeSource() {
@@ -1380,7 +1392,7 @@ export default function TrailerStudio() {
           <div>
             <h2 className="text-lg font-bold text-white">Start from an uploaded source</h2>
             <p className="mt-1 text-sm leading-relaxed text-slate-400">
-                Select your authorized MP4/WebM source (up to 100 MB) to transcribe, edit, render, and publish a trailer.
+                Select your authorized MP4/WebM source (up to 500 MB) to transcribe with Deepgram, edit, render, and publish a trailer.
             </p>
           </div>
           <input
@@ -1391,7 +1403,7 @@ export default function TrailerStudio() {
             className="block min-h-12 w-full text-base text-slate-300 file:mr-3 file:min-h-12 file:rounded-lg file:border-0 file:bg-slate-700 file:px-4 file:text-sm file:font-semibold file:text-white"
           />
           <p className="text-xs leading-relaxed text-slate-500">
-            The source file stays in this browser’s IndexedDB. For smooth montage preview and publishing, use the matching source file; the embedded YouTube preview may buffer at cuts.
+            The source stays in this browser when storage allows. If it cannot be saved locally, transcription still runs and the source remains available until this page is closed.
           </p>
         </div>
       </section>}
