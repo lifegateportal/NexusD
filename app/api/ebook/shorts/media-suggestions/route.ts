@@ -6,6 +6,8 @@ import { env } from "@/lib/env";
 import { LibraryVideoSegmentSchema } from "@/lib/schemas/library-video";
 import { ShortAspectRatioSchema } from "@/lib/schemas/video-short";
 import {
+  SHORT_MEDIA_SUGGESTION_MAX_CAPTIONS,
+  SHORT_MEDIA_SUGGESTION_MAX_TRANSCRIPT_CHARACTERS,
   ShortBrollSuggestionsResponseSchema,
   ShortMusicSuggestionsResponseSchema,
 } from "@/lib/schemas/short-media";
@@ -23,7 +25,7 @@ const RequestSchema = z.object({
     endSeconds: z.number().finite().min(0),
     aspectRatio: ShortAspectRatioSchema,
   }).strict()).min(1).max(100),
-  captions: z.array(LibraryVideoSegmentSchema).min(1).max(2000),
+  captions: z.array(LibraryVideoSegmentSchema).min(1).max(SHORT_MEDIA_SUGGESTION_MAX_CAPTIONS),
   instructions: z.string().trim().max(4000).default(""),
 }).strict().superRefine((input, context) => {
   if (input.endSeconds <= input.startSeconds) {
@@ -43,7 +45,7 @@ const RequestSchema = z.object({
   )) {
     context.addIssue({ code: z.ZodIssueCode.custom, path: ["frameSlots"], message: "Frame slots must be inside the short range." });
   }
-  if (input.captions.reduce((total, caption) => total + caption.text.length, 0) > 40000) {
+  if (input.captions.reduce((total, caption) => total + caption.text.length, 0) > SHORT_MEDIA_SUGGESTION_MAX_TRANSCRIPT_CHARACTERS) {
     context.addIssue({ code: z.ZodIssueCode.custom, path: ["captions"], message: "The short transcript exceeds the AI search limit." });
   }
 });
@@ -223,7 +225,11 @@ export async function POST(request: NextRequest) {
     input = RequestSchema.parse(await request.json() as unknown);
   } catch (error) {
     return NextResponse.json(
-      { error: error instanceof Error ? error.message : "Invalid Shorts media-search request." },
+      {
+        error: error instanceof z.ZodError
+          ? error.issues.map((issue) => `${issue.path.join(".") || "request"}: ${issue.message}`).join("; ")
+          : error instanceof Error ? error.message : "Invalid Shorts media-search request.",
+      },
       { status: 400 },
     );
   }

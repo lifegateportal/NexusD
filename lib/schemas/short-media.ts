@@ -1,5 +1,8 @@
 import { z } from "zod";
 
+export const SHORT_MEDIA_SUGGESTION_MAX_CAPTIONS = 2000;
+export const SHORT_MEDIA_SUGGESTION_MAX_TRANSCRIPT_CHARACTERS = 40_000;
+
 export const ShortBrollSuggestionSchema = z.object({
   id: z.string().min(1).max(100),
   title: z.string().trim().min(1).max(200),

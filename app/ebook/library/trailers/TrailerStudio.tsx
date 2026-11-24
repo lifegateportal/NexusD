@@ -14,6 +14,8 @@ import {
   type TrailerProject,
 } from "@/lib/schemas/trailer";
 import {
+  SHORT_MEDIA_SUGGESTION_MAX_CAPTIONS,
+  SHORT_MEDIA_SUGGESTION_MAX_TRANSCRIPT_CHARACTERS,
   ShortMusicSuggestionsResponseSchema,
   type ShortMusicSuggestion,
 } from "@/lib/schemas/short-media";
@@ -29,6 +31,7 @@ import {
   createTrailerFrameSlots,
   getTrailerFrameAtTime,
   getTrailerFrameSlots,
+  prepareTrailerMusicSearchCaptions,
   resizeTrailerFrameSlots,
   setTrailerFrameKeyframe,
   splitTrailerFrameSlot as splitTrailerFrameSlots,
@@ -632,47 +635,54 @@ export default function TrailerStudio() {
   }
 
   async function findSoundtrackSuggestions() {
-      if (!project) return;
-      setMusicSearchBusy(true);
-      setError("");
-      setNotice("");
-      try {
-        const captions = project.transcript.length > 0
-          ? project.transcript.slice(0, 2000)
-          : project.moments.map((moment) => ({
-            startSeconds: moment.startSeconds,
-            endSeconds: moment.endSeconds,
-            text: [moment.title, moment.hook].filter(Boolean).join(": ").slice(0, 2000),
-          })).filter((segment) => segment.text);
-        if (captions.length === 0) throw new Error("Add a transcript or a moment hook before requesting soundtrack ideas.");
-        const body = await requestJson("/api/ebook/shorts/media-suggestions", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            kind: "music",
-            title: project.title,
+    if (!project) return;
+    setMusicSearchBusy(true);
+    setError("");
+    setNotice("");
+    try {
+      const sourceCaptions = project.transcript.length > 0
+        ? project.transcript
+        : project.moments.map((moment) => ({
+          startSeconds: moment.startSeconds,
+          endSeconds: moment.endSeconds,
+          text: [moment.title, moment.hook].filter(Boolean).join(": ").slice(0, 2000),
+        })).filter((segment) => segment.text);
+      const captions = prepareTrailerMusicSearchCaptions(sourceCaptions);
+      if (captions.length === 0) throw new Error("Add a transcript or a moment hook before requesting soundtrack ideas.");
+      if (
+        captions.length > SHORT_MEDIA_SUGGESTION_MAX_CAPTIONS
+        || captions.reduce((total, caption) => total + caption.text.length, 0) > SHORT_MEDIA_SUGGESTION_MAX_TRANSCRIPT_CHARACTERS
+      ) {
+        throw new Error("The transcript could not be reduced to the soundtrack search limit. Try again or use fewer transcript segments.");
+      }
+      const body = await requestJson("/api/ebook/shorts/media-suggestions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          kind: "music",
+          title: project.title,
+          startSeconds: 0,
+          endSeconds: project.sourceDurationSeconds,
+          frameSlots: [{
             startSeconds: 0,
             endSeconds: project.sourceDurationSeconds,
-            frameSlots: [{
-              startSeconds: 0,
-              endSeconds: project.sourceDurationSeconds,
-              aspectRatio: project.aspectRatio,
-            }],
-            captions,
-            instructions: soundtrackMood,
-          }),
-        });
-        const parsed = ShortMusicSuggestionsResponseSchema.safeParse(body);
-        if (!parsed.success || parsed.data.suggestions.length === 0) {
-          throw new Error("AI returned invalid soundtrack suggestions.");
-        }
-        setSoundtrackSuggestions(parsed.data.suggestions);
-        setNotice("AI found instrumental options. Preview a track, add it to the trailer, then verify its license before publishing.");
-      } catch (searchError) {
-        setError(searchError instanceof Error ? searchError.message : "Could not suggest trailer soundtracks.");
-      } finally {
-        setMusicSearchBusy(false);
+            aspectRatio: project.aspectRatio,
+          }],
+          captions,
+          instructions: soundtrackMood,
+        }),
+      });
+      const parsed = ShortMusicSuggestionsResponseSchema.safeParse(body);
+      if (!parsed.success || parsed.data.suggestions.length === 0) {
+        throw new Error("AI returned invalid soundtrack suggestions.");
       }
+      setSoundtrackSuggestions(parsed.data.suggestions);
+      setNotice("AI found instrumental options. Preview a track, add it to the trailer, then verify its license before publishing.");
+    } catch (searchError) {
+      setError(searchError instanceof Error ? searchError.message : "Could not suggest trailer soundtracks.");
+    } finally {
+      setMusicSearchBusy(false);
+    }
   }
 
   function addSoundtrack(suggestion: ShortMusicSuggestion) {

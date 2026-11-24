@@ -4,6 +4,11 @@ import {
   type TrailerMoment,
   type TrailerProject,
 } from "@/lib/schemas/trailer";
+import {
+  SHORT_MEDIA_SUGGESTION_MAX_CAPTIONS,
+  SHORT_MEDIA_SUGGESTION_MAX_TRANSCRIPT_CHARACTERS,
+} from "@/lib/schemas/short-media";
+import type { LibraryVideoSegment } from "@/lib/schemas/library-video";
 import type { ShortCropKeyframe, ShortFrameSlot } from "@/lib/schemas/video-short";
 
 export type TrailerFramePosition = ShortCropKeyframe & { fit: "cover" | "contain" };
@@ -13,6 +18,43 @@ export type TrailerTransitionEffect = {
   translateY: number;
   scale: number;
 };
+
+export function prepareTrailerMusicSearchCaptions(
+  captions: LibraryVideoSegment[],
+): LibraryVideoSegment[] {
+  const totalCharacters = captions.reduce((total, caption) => total + caption.text.length, 0);
+  if (
+    captions.length <= SHORT_MEDIA_SUGGESTION_MAX_CAPTIONS
+    && totalCharacters <= SHORT_MEDIA_SUGGESTION_MAX_TRANSCRIPT_CHARACTERS
+  ) {
+    return captions;
+  }
+
+  const sampleCount = Math.min(
+    captions.length,
+    SHORT_MEDIA_SUGGESTION_MAX_CAPTIONS,
+    Math.max(
+      1,
+      Math.floor(
+        captions.length * SHORT_MEDIA_SUGGESTION_MAX_TRANSCRIPT_CHARACTERS
+          / Math.max(1, totalCharacters),
+      ),
+    ),
+  );
+  const selected: LibraryVideoSegment[] = [];
+  let charactersRemaining = SHORT_MEDIA_SUGGESTION_MAX_TRANSCRIPT_CHARACTERS;
+  for (let index = 0; index < sampleCount && charactersRemaining > 0; index += 1) {
+    const sourceIndex = sampleCount === 1
+      ? 0
+      : Math.floor(index * (captions.length - 1) / (sampleCount - 1));
+    const caption = captions[sourceIndex];
+    const text = caption.text.slice(0, charactersRemaining).trim();
+    if (!text) continue;
+    selected.push({ ...caption, text });
+    charactersRemaining -= text.length;
+  }
+  return selected;
+}
 
 export function createEmbeddedTrailerProject(trailer: PublishedTrailer): TrailerProject {
   if (trailer.sourceType !== "youtube" || !trailer.videoId || trailer.moments.length === 0) {
