@@ -1811,8 +1811,10 @@ export default function ShortsStudio() {
     }
   }
 
-  function updateProject(patch: Partial<ShortProject>) {
-    setProject((current) => current ? { ...current, ...patch } : current);
+  function updateProject(patch: Partial<ShortProject>, baseProject?: ShortProject) {
+    setProject((current) => baseProject
+      ? { ...baseProject, ...patch }
+      : current ? { ...current, ...patch } : current);
   }
 
   function beginRangeDraft() {
@@ -1896,55 +1898,63 @@ export default function ShortsStudio() {
     value: string,
     rangeOverride?: { startSeconds: number; endSeconds: number },
     title?: string,
+    projectOverride?: ShortProject,
   ) {
-    if (!project || value.trim() === "") return;
+    const activeProject = projectOverride ?? project;
+    if (!activeProject || value.trim() === "") return;
     const nextValue = Number(value);
     const startSeconds = rangeOverride?.startSeconds
-      ?? (field === "startSeconds" ? nextValue : project.startSeconds);
+      ?? (field === "startSeconds" ? nextValue : activeProject.startSeconds);
     const endSeconds = rangeOverride?.endSeconds
-      ?? (field === "endSeconds" ? nextValue : project.endSeconds);
+      ?? (field === "endSeconds" ? nextValue : activeProject.endSeconds);
     if (!Number.isFinite(nextValue) || startSeconds < 0 || endSeconds <= startSeconds) {
       setError("Enter a valid start and end time; the end must be after the start.");
       return;
     }
-    if (sourceVideoBounds && (
-      startSeconds < sourceVideoBounds.start
-      || endSeconds > sourceVideoBounds.end
-    )) {
+    const activeTranscript = activeProject.sourceTranscript ?? selectedVideo?.segments ?? [];
+    const activeBounds = activeProject.sourceDurationSeconds
+      ? { start: 0, end: activeProject.sourceDurationSeconds }
+      : activeTranscript.length
+        ? {
+          start: activeTranscript[0].startSeconds,
+          end: activeTranscript[activeTranscript.length - 1].endSeconds,
+        }
+        : sourceVideoBounds;
+    if (activeBounds && (startSeconds < activeBounds.start || endSeconds > activeBounds.end)) {
       setError("Keep the short inside the available transcript/video time range.");
       return;
     }
-    const frameSlots = resizeFrameSlots(project.frameSlots, startSeconds, endSeconds);
+    const frameSlots = resizeFrameSlots(activeProject.frameSlots, startSeconds, endSeconds);
     if (frameSlots.length === 0 || frameSlots.length > 100) {
       setError("The clip range could not be applied to its framing slots.");
       return;
     }
-    const overlays = project.overlays.flatMap((overlay) => {
+    const overlays = activeProject.overlays.flatMap((overlay) => {
       const overlayStart = Math.max(startSeconds, overlay.startSeconds);
       const overlayEnd = Math.min(endSeconds, overlay.endSeconds);
       return overlayEnd > overlayStart
         ? [{ ...overlay, startSeconds: overlayStart, endSeconds: overlayEnd }]
         : [];
     });
-    const brollClips = project.brollClips.flatMap((clip) => {
+    const brollClips = activeProject.brollClips.flatMap((clip) => {
       const clipStart = Math.max(startSeconds, clip.startSeconds);
       const clipEnd = Math.min(endSeconds, clip.endSeconds);
       return clipEnd - clipStart >= 0.1
         ? [{ ...clip, startSeconds: clipStart, endSeconds: clipEnd }]
         : [];
     });
-    const musicTracks = project.musicTracks.flatMap((track) => {
+    const musicTracks = activeProject.musicTracks.flatMap((track) => {
       const trackStart = Math.max(startSeconds, track.startSeconds);
       const trackEnd = Math.min(endSeconds, track.endSeconds);
       return trackEnd - trackStart >= 0.1
         ? [{ ...track, startSeconds: trackStart, endSeconds: trackEnd }]
         : [];
     });
-    const captions = (project.sourceTranscript ?? selectedVideo?.segments ?? [])
+    const captions = (activeProject.sourceTranscript ?? selectedVideo?.segments ?? [])
       .filter((segment) => segment.endSeconds > startSeconds && segment.startSeconds < endSeconds)
       .slice(0, 5000);
-    const transcriptCuts = project.transcriptCuts.flatMap((cut) => {
-      const sourceCaption = project.captions[cut.segmentIndex];
+    const transcriptCuts = activeProject.transcriptCuts.flatMap((cut) => {
+      const sourceCaption = activeProject.captions[cut.segmentIndex];
       if (!sourceCaption) return [];
       const segmentIndex = captions.findIndex((caption) =>
         caption.startSeconds === sourceCaption.startSeconds
@@ -1956,8 +1966,8 @@ export default function ShortsStudio() {
       const cutEnd = Math.min(cut.endSeconds, endSeconds);
       return cutEnd > cutStart ? [{ ...cut, segmentIndex, startSeconds: cutStart, endSeconds: cutEnd }] : [];
     });
-    const wordTimings = project.wordTimings.flatMap((timing) => {
-      const sourceCaption = project.captions[timing.segmentIndex];
+    const wordTimings = activeProject.wordTimings.flatMap((timing) => {
+      const sourceCaption = activeProject.captions[timing.segmentIndex];
       if (!sourceCaption) return [];
       const segmentIndex = captions.findIndex((caption) =>
         caption.startSeconds === sourceCaption.startSeconds
@@ -1970,7 +1980,7 @@ export default function ShortsStudio() {
         ? [{ ...timing, segmentIndex }]
         : [];
     });
-    const pauseCuts = project.pauseCuts.flatMap((cut) => {
+    const pauseCuts = activeProject.pauseCuts.flatMap((cut) => {
       const start = Math.max(startSeconds, cut.startSeconds);
       const end = Math.min(endSeconds, cut.endSeconds);
       return end > start ? [{ ...cut, startSeconds: start, endSeconds: end }] : [];
@@ -1987,15 +1997,15 @@ export default function ShortsStudio() {
       overlays,
       brollClips,
       musicTracks,
-    });
+    }, projectOverride);
     setWebBrollSuggestions([]);
     setWebMusicSuggestions([]);
     setMediaSuggestionsProjectSlug("");
     setCurrentTime((time) => Math.max(startSeconds, Math.min(endSeconds, time)));
     if (
-      overlays.length !== project.overlays.length
-      || brollClips.length !== project.brollClips.length
-      || musicTracks.length !== project.musicTracks.length
+      overlays.length !== activeProject.overlays.length
+      || brollClips.length !== activeProject.brollClips.length
+      || musicTracks.length !== activeProject.musicTracks.length
     ) {
       setNotice("Layers outside the new clip range were removed.");
     }
@@ -2108,6 +2118,7 @@ export default function ShortsStudio() {
       setSuggestions(parsed.data.suggestions);
       setSuggestionsVideoId(parsed.data.videoId ?? "");
       setSuggestionsSourceSlug(parsed.data.sourceSlug ?? "");
+      if (parsed.data.videoId) setSelectedVideoId(parsed.data.videoId);
       setSuggestedBoundaries({
         videoStartSeconds: parsed.data.videoStartSeconds,
         videoEndSeconds: parsed.data.videoEndSeconds,
@@ -2122,41 +2133,80 @@ export default function ShortsStudio() {
     }
   }
 
-  function useSuggestion(suggestion: Suggestion) {
-    if (
-      suggestionsSourceSlug
-      && project?.source.type === "upload"
-      && project.slug === suggestionsSourceSlug
-    ) {
-      updateRange(
-        "startSeconds",
-        String(suggestion.startSeconds),
-        { startSeconds: suggestion.startSeconds, endSeconds: suggestion.endSeconds },
-        suggestion.title,
-      );
-      setCurrentTime(suggestion.startSeconds);
-      setError("");
-      setNotice("AI moment applied to the uploaded source. Your framing, captions, and edit layers remain editable.");
-      setScrollEditorOnUpdate(true);
-      return;
-    }
-    const video = videos.find((item) => item.videoId === suggestionsVideoId);
-    if (!video) {
-      setError("Choose the source video for this AI suggestion first.");
-      return;
-    }
+  async function useSuggestion(suggestion: Suggestion) {
+    setError("");
+    let recoveringSource = false;
     try {
+      if (suggestionsSourceSlug) {
+        let uploadProject = project?.source.type === "upload"
+          && project.slug === suggestionsSourceSlug
+          ? project
+          : null;
+        if (!uploadProject) {
+          recoveringSource = true;
+          setBusy(true);
+          const body = await requestJson(
+            `/api/ebook/shorts/${encodeURIComponent(suggestionsSourceSlug)}`,
+            { cache: "no-store" },
+          );
+          const parsed = ShortProjectSchema.safeParse(body);
+          if (!parsed.success) throw new Error("The uploaded source draft for this AI moment has an invalid format.");
+          const restoredProject = parsed.data;
+          if (restoredProject.source.type !== "upload") {
+            throw new Error("The AI moment does not point to an uploaded source draft.");
+          }
+          uploadProject = restoredProject;
+          setSeekRequestSeconds(null);
+          setSelectedVideoId("");
+          if (restoredProject.source.sourceUrl) {
+            localFileRef.current = null;
+            setLocalVideoUrl(null);
+          } else {
+            const blob = await getShortSource(restoredProject.slug);
+            if (!blob) throw new Error("The uploaded source file is no longer available in this browser.");
+            const file = new File([blob], restoredProject.source.fileName, { type: blob.type });
+            localFileRef.current = file;
+            setLocalVideoUrl(URL.createObjectURL(blob));
+          }
+        }
+        updateRange(
+          "startSeconds",
+          String(suggestion.startSeconds),
+          { startSeconds: suggestion.startSeconds, endSeconds: suggestion.endSeconds },
+          suggestion.title,
+          uploadProject,
+        );
+        setCurrentTime(suggestion.startSeconds);
+        setNotice("AI moment opened in its uploaded source draft. Your framing, captions, and edit layers remain editable.");
+        setScrollEditorOnUpdate(true);
+        return;
+      }
+
+      let video = videos.find((item) => item.videoId === suggestionsVideoId);
+      if (!video && suggestionsVideoId) {
+        recoveringSource = true;
+        setBusy(true);
+        const body = await requestJson("/api/ebook/videos", { cache: "no-store" });
+        const catalog = DirectorVideoCatalogSchema.safeParse(body);
+        if (!catalog.success) throw new Error("The saved video catalog could not be restored.");
+        setVideos(catalog.data.videos);
+        video = catalog.data.videos.find((item) => item.videoId === suggestionsVideoId);
+      }
+      if (!video) {
+        throw new Error("The source transcript for this AI moment is no longer available.");
+      }
       setProject(makeProject(video, suggestion.startSeconds, suggestion.endSeconds, suggestion.title));
       setSeekRequestSeconds(null);
       setSelectedVideoId(video.videoId);
       setLocalVideoUrl(null);
       localFileRef.current = null;
       setCurrentTime(suggestion.startSeconds);
-      setError("");
       setNotice("AI moment opened as a new draft. Adjust the clip, then save or publish it.");
       setScrollEditorOnUpdate(true);
     } catch (selectionError) {
       setError(selectionError instanceof Error ? selectionError.message : "Could not open this AI suggestion.");
+    } finally {
+      if (recoveringSource) setBusy(false);
     }
   }
 
