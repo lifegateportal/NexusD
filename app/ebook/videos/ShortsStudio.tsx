@@ -330,6 +330,7 @@ export default function ShortsStudio() {
   const [seekRequestSeconds, setSeekRequestSeconds] = useState<number | null>(null);
   const [suggestions, setSuggestions] = useState<Suggestion[]>([]);
   const [suggestionsVideoId, setSuggestionsVideoId] = useState("");
+  const [suggestionsSourceSlug, setSuggestionsSourceSlug] = useState("");
   const [suggestedBoundaries, setSuggestedBoundaries] = useState<SuggestedBoundaries | null>(null);
   const [cleanupSuggestions, setCleanupSuggestions] = useState<CleanupSuggestion[]>([]);
   const [savedVersions, setSavedVersions] = useState<ShortProjectVersion[]>([]);
@@ -379,10 +380,13 @@ export default function ShortsStudio() {
   const captureSourceKey = project
     ? `${project.slug}:${project.source.type === "youtube" ? project.source.videoId : "upload"}`
     : "";
-  const sourceVideoBounds = selectedVideo?.segments.length
+  const sourceSegments = project?.sourceTranscript ?? selectedVideo?.segments ?? [];
+  const sourceVideoBounds = project?.sourceDurationSeconds
+    ? { start: 0, end: project.sourceDurationSeconds }
+    : sourceSegments.length
     ? {
-      start: selectedVideo.segments[0].startSeconds,
-      end: selectedVideo.segments[selectedVideo.segments.length - 1].endSeconds,
+      start: sourceSegments[0].startSeconds,
+      end: sourceSegments[sourceSegments.length - 1].endSeconds,
     }
     : null;
   const displayedRange = {
@@ -500,11 +504,13 @@ export default function ShortsStudio() {
       if (
         active
         && savedGeneration
+        && savedGeneration.videoId
         && videoCatalog.data.videos.some((video) => video.videoId === savedGeneration.videoId)
       ) {
         setSelectedVideoId(savedGeneration.videoId);
         setSuggestions(savedGeneration.suggestions);
         setSuggestionsVideoId(savedGeneration.videoId);
+        setSuggestionsSourceSlug("");
         setSuggestedBoundaries({
           videoStartSeconds: savedGeneration.videoStartSeconds,
           videoEndSeconds: savedGeneration.videoEndSeconds,
@@ -532,6 +538,7 @@ export default function ShortsStudio() {
         const generation = parsed.data;
         setSuggestions(generation?.suggestions ?? []);
         setSuggestionsVideoId(generation?.videoId ?? "");
+        setSuggestionsSourceSlug("");
         setSuggestedBoundaries(generation ? {
           videoStartSeconds: generation.videoStartSeconds,
           videoEndSeconds: generation.videoEndSeconds,
@@ -544,6 +551,31 @@ export default function ShortsStudio() {
       });
     return () => { active = false; };
   }, [selectedVideoId]);
+
+  useEffect(() => {
+    if (project?.source.type !== "upload" || !project.sourceTranscript?.length) return;
+    let active = true;
+    requestJson(`/api/ebook/shorts/suggest?sourceSlug=${encodeURIComponent(project.slug)}`, { cache: "no-store" })
+      .then((body) => {
+        const parsed = SuggestionResponseSchema.nullable().safeParse(body);
+        if (!parsed.success) throw new Error("Nexus Director returned invalid saved upload suggestions.");
+        if (!active) return;
+        const generation = parsed.data;
+        setSuggestions(generation?.suggestions ?? []);
+        setSuggestionsVideoId("");
+        setSuggestionsSourceSlug(generation?.sourceSlug ?? "");
+        setSuggestedBoundaries(generation ? {
+          videoStartSeconds: generation.videoStartSeconds,
+          videoEndSeconds: generation.videoEndSeconds,
+          sermonStartSeconds: generation.sermonStartSeconds,
+          sermonEndSeconds: generation.sermonEndSeconds,
+        } : null);
+      })
+      .catch((loadError: unknown) => {
+        if (active) setError(loadError instanceof Error ? loadError.message : "Could not load saved upload suggestions.");
+      });
+    return () => { active = false; };
+  }, [project?.slug, project?.source.type, project?.sourceTranscript?.length]);
 
   useEffect(() => () => {
     if (localVideoUrl?.startsWith("blob:")) URL.revokeObjectURL(localVideoUrl);
@@ -1739,6 +1771,7 @@ export default function ShortsStudio() {
     setCurrentTime(startSeconds);
     setSuggestions([]);
     setSuggestionsVideoId("");
+    setSuggestionsSourceSlug("");
     setSuggestedBoundaries(null);
     setError("");
     setNotice("");
@@ -1759,6 +1792,7 @@ export default function ShortsStudio() {
       setCurrentTime(parsed.data.startSeconds);
       setSuggestions([]);
       setSuggestionsVideoId("");
+      setSuggestionsSourceSlug("");
       setSuggestedBoundaries(null);
       setLocalVideoUrl(null);
       localFileRef.current = null;
@@ -1857,11 +1891,18 @@ export default function ShortsStudio() {
     }
   }
 
-  function updateRange(field: "startSeconds" | "endSeconds", value: string) {
+  function updateRange(
+    field: "startSeconds" | "endSeconds",
+    value: string,
+    rangeOverride?: { startSeconds: number; endSeconds: number },
+    title?: string,
+  ) {
     if (!project || value.trim() === "") return;
     const nextValue = Number(value);
-    const startSeconds = field === "startSeconds" ? nextValue : project.startSeconds;
-    const endSeconds = field === "endSeconds" ? nextValue : project.endSeconds;
+    const startSeconds = rangeOverride?.startSeconds
+      ?? (field === "startSeconds" ? nextValue : project.startSeconds);
+    const endSeconds = rangeOverride?.endSeconds
+      ?? (field === "endSeconds" ? nextValue : project.endSeconds);
     if (!Number.isFinite(nextValue) || startSeconds < 0 || endSeconds <= startSeconds) {
       setError("Enter a valid start and end time; the end must be after the start.");
       return;
@@ -1899,7 +1940,9 @@ export default function ShortsStudio() {
         ? [{ ...track, startSeconds: trackStart, endSeconds: trackEnd }]
         : [];
     });
-    const captions = filterCaptions(selectedVideo, startSeconds, endSeconds);
+    const captions = (project.sourceTranscript ?? selectedVideo?.segments ?? [])
+      .filter((segment) => segment.endSeconds > startSeconds && segment.startSeconds < endSeconds)
+      .slice(0, 5000);
     const transcriptCuts = project.transcriptCuts.flatMap((cut) => {
       const sourceCaption = project.captions[cut.segmentIndex];
       if (!sourceCaption) return [];
@@ -1933,7 +1976,9 @@ export default function ShortsStudio() {
       return end > start ? [{ ...cut, startSeconds: start, endSeconds: end }] : [];
     });
     updateProject({
-      [field]: nextValue,
+      ...(title ? { title } : {}),
+      startSeconds,
+      endSeconds,
       frameSlots,
       captions,
       transcriptCuts,
@@ -2029,8 +2074,14 @@ export default function ShortsStudio() {
   }
 
   async function addAiSuggestions() {
-    if (!selectedVideo || selectedVideo.segments.length === 0) {
-      setError("Choose a video with a saved timestamped transcript first.");
+    const uploadProject = project?.source.type === "upload"
+      && project.sourceTranscript?.length
+      ? project
+      : null;
+    const video = uploadProject ? undefined : selectedVideo;
+    const segments = uploadProject?.sourceTranscript ?? video?.segments;
+    if (!segments?.length) {
+      setError("Choose a video or uploaded short with a timestamped transcript first.");
       return;
     }
     setBusy(true);
@@ -2038,22 +2089,25 @@ export default function ShortsStudio() {
     setNotice("");
     setSuggestions([]);
     setSuggestionsVideoId("");
+    setSuggestionsSourceSlug("");
     setSuggestedBoundaries(null);
     try {
       const body = await requestJson("/api/ebook/shorts/suggest", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          videoId: selectedVideo.videoId,
-          title: selectedVideo.title,
-          segments: selectedVideo.segments,
+          ...(uploadProject
+            ? { sourceSlug: uploadProject.slug, title: uploadProject.title }
+            : { videoId: video?.videoId, title: video?.title }),
+          segments,
           instructions: agentInstructions,
         }),
       });
       const parsed = SuggestionResponseSchema.safeParse(body);
       if (!parsed.success) throw new Error("AI returned invalid short suggestions.");
       setSuggestions(parsed.data.suggestions);
-      setSuggestionsVideoId(parsed.data.videoId);
+      setSuggestionsVideoId(parsed.data.videoId ?? "");
+      setSuggestionsSourceSlug(parsed.data.sourceSlug ?? "");
       setSuggestedBoundaries({
         videoStartSeconds: parsed.data.videoStartSeconds,
         videoEndSeconds: parsed.data.videoEndSeconds,
@@ -2069,6 +2123,23 @@ export default function ShortsStudio() {
   }
 
   function useSuggestion(suggestion: Suggestion) {
+    if (
+      suggestionsSourceSlug
+      && project?.source.type === "upload"
+      && project.slug === suggestionsSourceSlug
+    ) {
+      updateRange(
+        "startSeconds",
+        String(suggestion.startSeconds),
+        { startSeconds: suggestion.startSeconds, endSeconds: suggestion.endSeconds },
+        suggestion.title,
+      );
+      setCurrentTime(suggestion.startSeconds);
+      setError("");
+      setNotice("AI moment applied to the uploaded source. Your framing, captions, and edit layers remain editable.");
+      setScrollEditorOnUpdate(true);
+      return;
+    }
     const video = videos.find((item) => item.videoId === suggestionsVideoId);
     if (!video) {
       setError("Choose the source video for this AI suggestion first.");
@@ -2323,6 +2394,7 @@ export default function ShortsStudio() {
       setSeekRequestSeconds(null);
       setSuggestions([]);
       setSuggestionsVideoId("");
+      setSuggestionsSourceSlug("");
       setSuggestedBoundaries(null);
 
       let storageWarning = "";
@@ -2413,6 +2485,7 @@ export default function ShortsStudio() {
               localFileRef.current = null;
               setSuggestions([]);
               setSuggestionsVideoId("");
+              setSuggestionsSourceSlug("");
               setSuggestedBoundaries(null);
               setError("");
               setNotice("");
@@ -2432,7 +2505,9 @@ export default function ShortsStudio() {
           <button
             type="button"
             onClick={addAiSuggestions}
-            disabled={busy || !selectedVideo?.segments.length}
+            disabled={busy || !(project?.source.type === "upload"
+              ? project.sourceTranscript?.length
+              : selectedVideo?.segments.length)}
             className="min-h-12 rounded-xl bg-violet-500 px-5 text-sm font-bold text-white disabled:opacity-50"
           >
             {busy ? "Finding AI moments…" : "Find AI moments"}
@@ -2536,7 +2611,7 @@ export default function ShortsStudio() {
                 <button
                   type="button"
                   onClick={() => useSuggestion(suggestion)}
-                  disabled={busy || !suggestionsVideoId}
+                  disabled={busy || (!suggestionsVideoId && !suggestionsSourceSlug)}
                   aria-label={`Edit ${suggestion.title} in Shorts Studio`}
                   className="block min-h-48 w-full cursor-pointer rounded-xl border border-cyan-700 bg-cyan-950/40 p-4 text-left text-white shadow-sm transition-colors hover:border-cyan-400 hover:bg-cyan-950/70 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-cyan-300 disabled:cursor-wait disabled:opacity-50"
                 >
@@ -2798,10 +2873,10 @@ export default function ShortsStudio() {
                     Trim start · {formatTime(displayedRange.startSeconds)}
                     <input
                       type="range"
-                      min={Math.max(sourceVideoBounds?.start ?? 0, project.startSeconds - 30)}
+                      min={sourceVideoBounds?.start ?? 0}
                       max={Math.max(
-                        Math.max(sourceVideoBounds?.start ?? 0, project.startSeconds - 30),
-                        Math.min(project.endSeconds - 0.1, project.startSeconds + 30),
+                        sourceVideoBounds?.start ?? 0,
+                        Math.min(project.endSeconds - 0.1, sourceVideoBounds?.end ?? project.endSeconds),
                       )}
                       step="0.1"
                       value={displayedRange.startSeconds}
@@ -2818,11 +2893,8 @@ export default function ShortsStudio() {
                     Trim end · {formatTime(displayedRange.endSeconds)}
                     <input
                       type="range"
-                      min={Math.max(project.startSeconds + 0.1, project.endSeconds - 30)}
-                      max={Math.max(
-                        Math.max(project.startSeconds + 0.1, project.endSeconds - 30),
-                        Math.min(sourceVideoBounds?.end ?? project.endSeconds + 30, project.endSeconds + 30),
-                      )}
+                      min={project.startSeconds + 0.1}
+                      max={Math.max(project.startSeconds + 0.1, sourceVideoBounds?.end ?? project.endSeconds)}
                       step="0.1"
                       value={displayedRange.endSeconds}
                       onPointerDown={beginRangeDraft}
@@ -2839,7 +2911,7 @@ export default function ShortsStudio() {
                   Clip length: {formatTime(project.endSeconds - project.startSeconds)} · limited by available source video
                 </p>
                 <p className="text-xs text-slate-500">
-                  Sliders fine-tune within 30 seconds; use the seconds fields for larger jumps.
+                  Sliders cover the full source; use the seconds fields for precise timing.
                 </p>
                 <div className="flex flex-wrap items-center gap-2">
                   <button
@@ -4223,7 +4295,7 @@ export default function ShortsStudio() {
                     Delete draft
                   </button>
                 )}
-                <button type="button" onClick={addAiSuggestions} disabled={busy || !selectedVideo?.segments.length} className="min-h-12 rounded-xl border border-violet-800 px-4 text-sm font-semibold text-violet-200 disabled:opacity-50">
+                <button type="button" onClick={addAiSuggestions} disabled={busy || !(project.source.type === "upload" ? project.sourceTranscript?.length : selectedVideo?.segments.length)} className="min-h-12 rounded-xl border border-violet-800 px-4 text-sm font-semibold text-violet-200 disabled:opacity-50">
                   {busy ? "Working…" : "Suggest moments with AI"}
                 </button>
                 {project.status === "published" && (

@@ -205,7 +205,8 @@ export const ShortClipSuggestionSchema = z.object({
 });
 
 export const GeneratedShortSuggestionsSchema = z.object({
-  videoId: z.string().regex(/^[A-Za-z0-9_-]{11}$/),
+  videoId: z.string().regex(/^[A-Za-z0-9_-]{11}$/).optional(),
+  sourceSlug: ShortSlugSchema.optional(),
   videoTitle: z.string().trim().min(1).max(200),
   generatedAt: z.string().datetime(),
   videoStartSeconds: z.number().finite().min(0),
@@ -214,6 +215,13 @@ export const GeneratedShortSuggestionsSchema = z.object({
   sermonEndSeconds: z.number().finite().min(0).nullable(),
   suggestions: z.array(ShortClipSuggestionSchema).min(1).max(12),
 }).strict().superRefine((generation, context) => {
+  if (Boolean(generation.videoId) === Boolean(generation.sourceSlug)) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["sourceSlug"],
+      message: "Generated suggestions must identify exactly one YouTube video or uploaded short.",
+    });
+  }
   if (generation.videoEndSeconds <= generation.videoStartSeconds) {
     context.addIssue({
       code: z.ZodIssueCode.custom,
@@ -259,6 +267,8 @@ export const ShortProjectSchema = z.object({
   thumbnailUrl: z.string().url().optional(),
   sourceVideoId: z.string().regex(/^[A-Za-z0-9_-]{11}$/).optional(),
   source: ShortSourceSchema,
+  sourceDurationSeconds: z.number().finite().positive().max(3600).optional(),
+  sourceTranscript: z.array(LibraryVideoSegmentSchema).max(20000).optional(),
   startSeconds: z.number().finite().min(0),
   endSeconds: z.number().finite().min(0),
   frameSlots: z.array(ShortFrameSlotSchema).min(1).max(100),
@@ -336,6 +346,13 @@ export const ShortProjectSchema = z.object({
     (track) => track.startSeconds >= project.startSeconds && track.endSeconds <= project.endSeconds,
   ),
   { message: "Music tracks must be inside the short's time range.", path: ["musicTracks"] },
+).refine(
+  (project) => !project.sourceDurationSeconds || project.endSeconds <= project.sourceDurationSeconds,
+  { message: "Short end must be inside the source video duration.", path: ["endSeconds"] },
+).refine(
+  (project) => !project.sourceTranscript || project.sourceTranscript.reduce((total, segment) =>
+    total + segment.text.length, 0) <= 1_000_000,
+  { message: "The source transcript exceeds the storage limit.", path: ["sourceTranscript"] },
 ).refine((project) => {
   const slots = [...project.frameSlots].sort((a, b) => a.startSeconds - b.startSeconds);
   if (

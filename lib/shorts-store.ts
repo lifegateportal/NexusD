@@ -19,8 +19,8 @@ const AGENT_SETTINGS_KEY = "director/shorts/agent-settings.json";
 const LATEST_GENERATED_SUGGESTIONS_KEY = "director/shorts/generated-suggestions/latest.json";
 const MAX_PROJECT_VERSIONS = 20;
 
-function generatedSuggestionsKey(videoId: string): string {
-  return `director/shorts/generated-suggestions/${videoId}.json`;
+function generatedSuggestionsKey(sourceKey: string): string {
+  return `director/shorts/generated-suggestions/${sourceKey}.json`;
 }
 
 function historyIndexKey(slug: string): string {
@@ -127,17 +127,21 @@ export async function saveShortAgentSettings(input: unknown) {
   return settings;
 }
 
-export async function readGeneratedShortSuggestions(videoId?: string) {
+export async function readGeneratedShortSuggestions(sourceKey?: string) {
   const raw = await readJsonObject(
-    videoId ? generatedSuggestionsKey(videoId) : LATEST_GENERATED_SUGGESTIONS_KEY,
+    sourceKey ? generatedSuggestionsKey(sourceKey) : LATEST_GENERATED_SUGGESTIONS_KEY,
   );
   return raw ? GeneratedShortSuggestionsSchema.parse(raw) : null;
 }
 
 export async function saveGeneratedShortSuggestions(input: unknown) {
   const generation = GeneratedShortSuggestionsSchema.parse(input);
+  const sourceKey = generation.sourceSlug
+    ? `upload-${generation.sourceSlug}`
+    : generation.videoId;
+  if (!sourceKey) throw new Error("Generated suggestions need a source identifier.");
   await Promise.all([
-    writeJsonObject(generatedSuggestionsKey(generation.videoId), generation),
+    writeJsonObject(generatedSuggestionsKey(sourceKey), generation),
     writeJsonObject(LATEST_GENERATED_SUGGESTIONS_KEY, generation),
   ]);
   return generation;
@@ -271,7 +275,9 @@ export async function publishShort(projectInput: unknown): Promise<ShortProject>
   if (!catalog.shorts.some((short) => short.slug === project.slug) && catalog.shorts.length >= 500) {
     throw new Error("The public video shorts catalog has reached its 500-short limit.");
   }
-  const published = ShortProjectSchema.parse({ ...project, updatedAt: new Date().toISOString() });
+  const publicProject = { ...project };
+  delete publicProject.sourceTranscript;
+  const published = ShortProjectSchema.parse({ ...publicProject, updatedAt: new Date().toISOString() });
   await writeJsonObject(`published/shorts/${published.slug}.json`, published, true);
   await writeJsonObject(PUBLIC_CATALOG_KEY, PublicShortCatalogSchema.parse({
     updatedAt: new Date().toISOString(),
@@ -280,8 +286,8 @@ export async function publishShort(projectInput: unknown): Promise<ShortProject>
       ...catalog.shorts.filter((short) => short.slug !== published.slug),
     ],
   }), true);
-  await savePrivateShort(published, "published");
-  return published;
+  await savePrivateShort(project, "published");
+  return ShortProjectSchema.parse({ ...project, status: "published", updatedAt: published.updatedAt });
 }
 
 export async function listPublicShorts() {

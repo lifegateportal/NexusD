@@ -3,7 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { deepSeekModel } from "@/lib/ai-providers";
 import { LibraryVideoSegmentSchema } from "@/lib/schemas/library-video";
-import { GeneratedShortSuggestionsSchema } from "@/lib/schemas/video-short";
+import { GeneratedShortSuggestionsSchema, ShortSlugSchema } from "@/lib/schemas/video-short";
 import {
   hasShortStorageConfiguration,
   readGeneratedShortSuggestions,
@@ -14,11 +14,15 @@ export const runtime = "nodejs";
 export const maxDuration = 30;
 
 const RequestSchema = z.object({
-  videoId: z.string().regex(/^[A-Za-z0-9_-]{11}$/),
+  videoId: z.string().regex(/^[A-Za-z0-9_-]{11}$/).optional(),
+  sourceSlug: ShortSlugSchema.optional(),
   title: z.string().trim().max(200).default(""),
   segments: z.array(LibraryVideoSegmentSchema).min(1).max(20000),
   instructions: z.string().trim().max(4000).default(""),
 }).strict().refine(
+  (input) => Boolean(input.videoId) !== Boolean(input.sourceSlug),
+  { message: "Identify exactly one YouTube video or uploaded short.", path: ["sourceSlug"] },
+).refine(
   (input) => input.segments.every((segment) => segment.endSeconds > segment.startSeconds),
   { message: "Every transcript segment must end after it starts.", path: ["segments"] },
 ).refine(
@@ -39,6 +43,7 @@ const SuggestionSchema = z.object({
 
 const QuerySchema = z.object({
   videoId: z.string().regex(/^[A-Za-z0-9_-]{11}$/).optional(),
+  sourceSlug: ShortSlugSchema.optional(),
 }).strict();
 
 type BoundaryCandidate = {
@@ -207,7 +212,7 @@ export async function POST(request: NextRequest) {
       : boundaryById.get(generatedSuggestions.sermonEndCandidateId);
     const validSermonBounds = sermonStart && sermonEnd && sermonEnd.endSeconds > sermonStart.startSeconds;
     const generation = GeneratedShortSuggestionsSchema.parse({
-      videoId: input.videoId,
+      ...(input.videoId ? { videoId: input.videoId } : { sourceSlug: input.sourceSlug }),
       videoTitle: input.title || "Untitled video",
       generatedAt: new Date().toISOString(),
       videoStartSeconds: input.segments[0].startSeconds,
@@ -243,7 +248,10 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: "Invalid generated Shorts query." }, { status: 400 });
   }
   try {
-    return NextResponse.json(await readGeneratedShortSuggestions(query.data.videoId), {
+    const sourceKey = query.data.sourceSlug
+      ? `upload-${query.data.sourceSlug}`
+      : query.data.videoId;
+    return NextResponse.json(await readGeneratedShortSuggestions(sourceKey), {
       headers: { "Cache-Control": "private, no-store" },
     });
   } catch (error) {

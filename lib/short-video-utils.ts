@@ -20,7 +20,8 @@ export function createUploadedShortProject(
   const baseTitle = fileName.replace(/\.[^.]+$/, "").trim().slice(0, 120) || "Uploaded video";
   const startSeconds = Math.min(segments[0]?.startSeconds ?? 0, Math.max(0, durationSeconds - 0.1));
   const endSeconds = Math.min(durationSeconds, startSeconds + 60);
-  const captions = segments.flatMap((segment) => {
+  const sourceTranscript = segments.slice(0, 20000);
+  const captions = sourceTranscript.flatMap((segment) => {
     if (segment.endSeconds <= startSeconds || segment.startSeconds >= endSeconds) return [];
     return [{
       ...segment,
@@ -33,6 +34,8 @@ export function createUploadedShortProject(
     title: `${baseTitle} Short`.slice(0, 120),
     description: "",
     source: { type: "upload", fileName },
+    sourceDurationSeconds: durationSeconds,
+    sourceTranscript,
     startSeconds,
     endSeconds,
     frameSlots: [{
