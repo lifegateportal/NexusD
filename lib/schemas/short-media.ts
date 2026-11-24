@@ -46,5 +46,32 @@ export const ShortMusicSuggestionsResponseSchema = z.object({
   suggestions: z.array(ShortMusicSuggestionSchema).max(12),
 }).strict();
 
+export const ShortMusicFavoriteSchema = z.object({
+  id: z.string().uuid(),
+  fileName: z.string().trim().min(1).max(255),
+  audioUrl: z.string().url(),
+  sourceDurationSeconds: z.number().finite().positive().max(3600),
+  volume: z.number().finite().min(0).max(1).default(0.12),
+  provider: z.enum(["upload", "jamendo"]),
+  providerPageUrl: z.string().url().optional(),
+  creatorName: z.string().trim().min(1).max(200).optional(),
+  creatorUrl: z.string().url().optional(),
+  licenseName: z.string().trim().min(1).max(120).optional(),
+  licenseUrl: z.string().url().optional(),
+}).strict().superRefine((favorite, context) => {
+  if (favorite.provider === "jamendo") {
+    for (const field of ["providerPageUrl", "creatorName", "creatorUrl", "licenseName", "licenseUrl"] as const) {
+      if (!favorite[field]) {
+        context.addIssue({ code: z.ZodIssueCode.custom, path: [field], message: "Jamendo favorites need creator and license attribution." });
+      }
+    }
+  }
+});
+
+export const ShortMusicLibrarySchema = z.object({
+  favorites: z.array(ShortMusicFavoriteSchema).max(100),
+}).strict();
+
 export type ShortBrollSuggestion = z.infer<typeof ShortBrollSuggestionSchema>;
 export type ShortMusicSuggestion = z.infer<typeof ShortMusicSuggestionSchema>;
+export type ShortMusicFavorite = z.infer<typeof ShortMusicFavoriteSchema>;

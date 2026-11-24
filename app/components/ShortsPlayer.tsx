@@ -10,6 +10,7 @@ import {
   getRemovedTranscriptWordIndexes,
   getTranscriptCutAtTime,
 } from "@/lib/short-transcript-edits";
+import { getShortMediaProxyUrl } from "@/lib/short-media-proxy";
 
 type Props = {
   project: ShortProject;
@@ -85,6 +86,12 @@ export default function ShortsPlayer({
   const stageRef = useRef<HTMLDivElement>(null);
   const brollVideoRefs = useRef(new Map<string, HTMLVideoElement>());
   const musicTrackRefs = useRef(new Map<string, HTMLAudioElement>());
+  const musicAudioContextRef = useRef<AudioContext | null>(null);
+  const musicGainNodesRef = useRef(new Map<string, {
+    audio: HTMLAudioElement;
+    source: MediaElementAudioSourceNode;
+    gain: GainNode;
+  }>());
   const musicTrackIdsRef = useRef(new Set(project.musicTracks.map((track) => track.id)));
   const transcriptCutsRef = useRef(
     project.source.type === "upload" ? [...project.transcriptCuts, ...project.pauseCuts] : [],
@@ -344,6 +351,36 @@ export default function ShortsPlayer({
     setCurrentTime(timeSeconds);
   }, [seekRequestSeconds, project.startSeconds, project.endSeconds]);
 
+  const getMusicGainNode = useCallback((trackId: string, audio: HTMLAudioElement): GainNode | null => {
+    const existing = musicGainNodesRef.current.get(trackId);
+    if (existing?.audio === audio) return existing.gain;
+    if (existing) {
+      existing.source.disconnect();
+      existing.gain.disconnect();
+      musicGainNodesRef.current.delete(trackId);
+    }
+    if (!window.AudioContext) {
+      setPlayerError("This browser cannot apply the music level consistently. Update the browser and retry.");
+      return null;
+    }
+    try {
+      const audioContext = musicAudioContextRef.current ?? new window.AudioContext();
+      musicAudioContextRef.current = audioContext;
+      void audioContext.resume().catch((error: unknown) => {
+        setPlayerError(error instanceof Error ? error.message : "Could not enable audio mixing.");
+      });
+      const source = audioContext.createMediaElementSource(audio);
+      const gain = audioContext.createGain();
+      source.connect(gain);
+      gain.connect(audioContext.destination);
+      musicGainNodesRef.current.set(trackId, { audio, source, gain });
+      return gain;
+    } catch (error) {
+      setPlayerError(error instanceof Error ? `Could not apply the music level: ${error.message}` : "Could not apply the music level.");
+      return null;
+    }
+  }, []);
+
   const syncAuxiliaryMedia = useCallback((timeSeconds: number, shouldPlay: boolean) => {
     const speechActive = project.captions.some((caption) =>
       timeSeconds >= caption.startSeconds && timeSeconds < caption.endSeconds,
@@ -374,8 +411,12 @@ export default function ShortsPlayer({
       const audio = musicTrackRefs.current.get(track.id);
       if (!audio) continue;
       const audioShouldPlay = shouldPlay && !requireUserPlayAfterMusicAddRef.current;
+      const gain = audioShouldPlay
+        ? getMusicGainNode(track.id, audio)
+        : musicGainNodesRef.current.get(track.id)?.gain;
       const active = timeSeconds >= track.startSeconds && timeSeconds < track.endSeconds;
       if (!active || !audioShouldPlay) {
+        if (gain) gain.gain.value = 0;
         audio.pause();
         continue;
       }
@@ -388,7 +429,13 @@ export default function ShortsPlayer({
         ? Math.min(1, remaining / track.fadeOutSeconds)
         : 1;
       const speechGain = track.duckUnderSpeech && speechActive ? track.duckVolume : 1;
-      audio.volume = Math.max(0, Math.min(1, track.volume * fadeInGain * fadeOutGain * speechGain));
+      const level = Math.max(0, Math.min(1, track.volume * fadeInGain * fadeOutGain * speechGain));
+      if (gain) {
+        gain.gain.value = level;
+        audio.volume = 1;
+      } else {
+        audio.volume = level;
+      }
       if (audio.readyState >= 1 && Math.abs(audio.currentTime - elapsed) > 0.75) {
         audio.currentTime = elapsed;
       }
@@ -404,7 +451,27 @@ export default function ShortsPlayer({
         audio.pause();
       }
     }
-  }, [project.brollClips, project.captions, project.musicTracks]);
+  }, [getMusicGainNode, project.brollClips, project.captions, project.musicTracks]);
+
+  useEffect(() => {
+    const currentTrackIds = new Set(project.musicTracks.map((track) => track.id));
+    for (const [trackId, node] of musicGainNodesRef.current) {
+      if (currentTrackIds.has(trackId)) continue;
+      node.source.disconnect();
+      node.gain.disconnect();
+      musicGainNodesRef.current.delete(trackId);
+    }
+  }, [project.musicTracks]);
+
+  useEffect(() => () => {
+    for (const node of musicGainNodesRef.current.values()) {
+      node.source.disconnect();
+      node.gain.disconnect();
+    }
+    musicGainNodesRef.current.clear();
+    void musicAudioContextRef.current?.close();
+    musicAudioContextRef.current = null;
+  }, []);
 
   useEffect(() => {
     const currentTrackIds = new Set(project.musicTracks.map((track) => track.id));
@@ -696,7 +763,7 @@ export default function ShortsPlayer({
         className={`relative touch-none overflow-hidden bg-black ${
           captureMode ? "h-full w-full rounded-none" :
           isFullscreen ? "flex items-center justify-center rounded-none" : "rounded-xl"
-        } ${compactPreview ? "mx-auto w-[min(100%,var(--preview-width-mobile))] lg:w-[min(100%,var(--preview-width-desktop))]" : "w-full"} ${editable && !isFullscreen ? "cursor-move" : ""}`}
+        } ${compactPreview ? "mx-auto shrink-0 w-[min(100%,var(--preview-width-mobile))] lg:w-[min(100%,var(--preview-width-desktop))]" : "w-full"} ${editable && !isFullscreen ? "cursor-move" : ""}`}
         style={previewStyle}
         onPointerDown={isFullscreen ? undefined : onPointerDown}
         onPointerMove={isFullscreen ? undefined : onPointerMove}
@@ -788,7 +855,8 @@ export default function ShortsPlayer({
                 if (element) musicTrackRefs.current.set(track.id, element);
                 else musicTrackRefs.current.delete(track.id);
               }}
-              src={track.audioUrl}
+              src={getShortMediaProxyUrl(track.audioUrl)}
+              crossOrigin="anonymous"
               preload="metadata"
               aria-label={`Instrumental: ${track.fileName}`}
               onLoadedMetadata={() => syncAuxiliaryMedia(currentTime, playing)}
@@ -1029,7 +1097,7 @@ export default function ShortsPlayer({
         </p>
       )}
       {(project.brollClips.some((clip) => clip.provider === "pexels")
-        || project.musicTracks.some((track) => track.provider === "jamendo")) && !captureMode && (
+        || project.musicTracks.some((track) => track.provider === "jamendo")) && !captureMode && !compactPreview && (
         <div className="mt-2 border-t border-slate-800 pt-2 text-xs leading-relaxed text-slate-400">
           <p className="font-semibold text-slate-300">Media credits</p>
           {project.brollClips.filter((clip) => clip.provider === "pexels").map((clip) => (

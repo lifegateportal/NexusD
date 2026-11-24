@@ -16,6 +16,7 @@ import {
   ShortProjectSchema,
   ShortProjectVersionIndexSchema,
   ShortTranscriptWordTimingSchema,
+  ShortMusicTrackSchema,
   type ShortBrollClip,
   type ShortCropKeyframe,
   type ShortFrameSlot,
@@ -40,8 +41,11 @@ import { createShortSlug, createUploadedShortProject } from "@/lib/short-video-u
 import { DirectorVideoCatalogSchema } from "@/lib/schemas/library-video";
 import {
   ShortBrollSuggestionsResponseSchema,
+  ShortMusicFavoriteSchema,
+  ShortMusicLibrarySchema,
   ShortMusicSuggestionsResponseSchema,
   type ShortBrollSuggestion,
+  type ShortMusicFavorite,
   type ShortMusicSuggestion,
 } from "@/lib/schemas/short-media";
 import {
@@ -340,6 +344,8 @@ export default function ShortsStudio() {
   const [hasPendingHistory, setHasPendingHistory] = useState(false);
   const [webBrollSuggestions, setWebBrollSuggestions] = useState<ShortBrollSuggestion[]>([]);
   const [webMusicSuggestions, setWebMusicSuggestions] = useState<ShortMusicSuggestion[]>([]);
+  const [musicFavorites, setMusicFavorites] = useState<ShortMusicFavorite[]>([]);
+  const [manualBrollQuery, setManualBrollQuery] = useState("");
   const [mediaSuggestionsProjectSlug, setMediaSuggestionsProjectSlug] = useState("");
   const [mediaSearchKind, setMediaSearchKind] = useState<"broll" | "music" | null>(null);
   const [agentInstructions, setAgentInstructions] = useState("");
@@ -551,6 +557,20 @@ export default function ShortsStudio() {
       });
     return () => { active = false; };
   }, [selectedVideoId]);
+
+  useEffect(() => {
+    let active = true;
+    requestJson("/api/ebook/shorts/music-library", { cache: "no-store" })
+      .then((body) => {
+        const parsed = ShortMusicLibrarySchema.safeParse(body);
+        if (!parsed.success) throw new Error("Nexus Director returned an invalid saved music library.");
+        if (active) setMusicFavorites(parsed.data.favorites);
+      })
+      .catch((libraryError: unknown) => {
+        if (active) setError(libraryError instanceof Error ? libraryError.message : "Could not load saved music.");
+      });
+    return () => { active = false; };
+  }, []);
 
   useEffect(() => {
     if (project?.source.type !== "upload" || !project.sourceTranscript?.length) return;
@@ -1129,11 +1149,11 @@ export default function ShortsStudio() {
         sourceDurationSeconds,
         startSeconds: project.startSeconds,
         endSeconds: project.startSeconds + trackDuration,
-        volume: 0.25,
+        volume: 0.12,
         fadeInSeconds: Math.min(1, trackDuration / 2),
         fadeOutSeconds: Math.min(2, trackDuration / 2),
-        duckUnderSpeech: false,
-        duckVolume: 0.12,
+        duckUnderSpeech: true,
+        duckVolume: 0.15,
         provider: "upload",
         commercialLicenseConfirmed: false,
       };
@@ -1148,12 +1168,12 @@ export default function ShortsStudio() {
     }
   }
 
-  async function findWebMedia(kind: "broll" | "music") {
+  async function findWebMedia(kind: "broll" | "music", manualQuery?: string) {
     if (!project) {
       setError("Open a short draft before searching for web media.");
       return;
     }
-    if (project.captions.length === 0) {
+    if (!manualQuery && project.captions.length === 0) {
       setError("AI media search needs timestamped transcript captions for this short.");
       return;
     }
@@ -1169,6 +1189,7 @@ export default function ShortsStudio() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           kind,
+          ...(manualQuery ? { manualQuery } : {}),
           title: project.title,
           startSeconds: project.startSeconds,
           endSeconds: project.endSeconds,
@@ -1187,7 +1208,9 @@ export default function ShortsStudio() {
           throw new Error("AI returned invalid web B-roll suggestions.");
         }
         setWebBrollSuggestions(parsed.data.suggestions);
-        setNotice("AI matched Pexels footage to transcript moments. Preview a clip, then add it to the editable timeline.");
+        setNotice(manualQuery
+          ? "Manual Pexels search results are ready. Preview a clip, then add it to the editable timeline."
+          : "AI matched Pexels footage to transcript moments. Preview a clip, then add it to the editable timeline.");
       } else {
         const parsed = ShortMusicSuggestionsResponseSchema.safeParse(body);
         if (!parsed.success || parsed.data.suggestions.length === 0) {
@@ -1257,11 +1280,11 @@ export default function ShortsStudio() {
       sourceDurationSeconds: suggestion.durationSeconds,
       startSeconds: project.startSeconds,
       endSeconds: project.startSeconds + trackDuration,
-      volume: 0.25,
+      volume: 0.12,
       fadeInSeconds: Math.min(1, trackDuration / 2),
       fadeOutSeconds: Math.min(2, trackDuration / 2),
-      duckUnderSpeech: false,
-      duckVolume: 0.12,
+      duckUnderSpeech: true,
+      duckVolume: 0.15,
       provider: "jamendo",
       providerPageUrl: suggestion.providerPageUrl,
       creatorName: suggestion.artistName,
@@ -1273,6 +1296,88 @@ export default function ShortsStudio() {
     updateProject({ musicTracks: [...project.musicTracks, track] });
     setNotice("Jamendo instrumental added. Press Play to start the preview with music. Obtain and confirm its commercial license before publishing.");
     setError("");
+  }
+
+  async function saveMusicFavorite(track: ShortMusicTrack) {
+    const favorite = ShortMusicFavoriteSchema.parse({
+      id: crypto.randomUUID(),
+      fileName: track.fileName,
+      audioUrl: track.audioUrl,
+      sourceDurationSeconds: track.sourceDurationSeconds,
+      volume: track.volume,
+      provider: track.provider,
+      ...(track.providerPageUrl ? { providerPageUrl: track.providerPageUrl } : {}),
+      ...(track.creatorName ? { creatorName: track.creatorName } : {}),
+      ...(track.creatorUrl ? { creatorUrl: track.creatorUrl } : {}),
+      ...(track.licenseName ? { licenseName: track.licenseName } : {}),
+      ...(track.licenseUrl ? { licenseUrl: track.licenseUrl } : {}),
+    });
+    if (musicFavorites.some((item) => item.audioUrl === favorite.audioUrl)) {
+      setNotice("This sound is already in your reusable music library.");
+      return;
+    }
+    setBusy(true);
+    setError("");
+    try {
+      const body = await requestJson("/api/ebook/shorts/music-library", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "save", favorite }),
+      });
+      const parsed = ShortMusicLibrarySchema.safeParse(body);
+      if (!parsed.success) throw new Error("The Shorts music library returned an invalid response.");
+      setMusicFavorites(parsed.data.favorites);
+      setNotice(`Saved “${favorite.fileName}” to your reusable music library.`);
+    } catch (saveError) {
+      setError(saveError instanceof Error ? saveError.message : "Could not save this sound.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function removeMusicFavorite(id: string) {
+    setBusy(true);
+    setError("");
+    try {
+      const body = await requestJson("/api/ebook/shorts/music-library", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "remove", id }),
+      });
+      const parsed = ShortMusicLibrarySchema.safeParse(body);
+      if (!parsed.success) throw new Error("The Shorts music library returned an invalid response.");
+      setMusicFavorites(parsed.data.favorites);
+    } catch (removeError) {
+      setError(removeError instanceof Error ? removeError.message : "Could not remove this saved sound.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function addSavedMusicFavorite(favorite: ShortMusicFavorite) {
+    if (!project) return;
+    if (project.musicTracks.length >= 5) {
+      setError("A short can have up to 5 instrumental tracks.");
+      return;
+    }
+    const duration = Math.min(favorite.sourceDurationSeconds, project.endSeconds - project.startSeconds);
+    if (duration < 0.1) {
+      setError("This saved sound is too short for the current video range.");
+      return;
+    }
+    const track = ShortMusicTrackSchema.parse({
+      ...favorite,
+      id: crypto.randomUUID(),
+      startSeconds: project.startSeconds,
+      endSeconds: project.startSeconds + duration,
+      fadeInSeconds: Math.min(1, duration / 2),
+      fadeOutSeconds: Math.min(2, duration / 2),
+      duckUnderSpeech: true,
+      duckVolume: 0.15,
+      commercialLicenseConfirmed: false,
+    });
+    updateProject({ musicTracks: [...project.musicTracks, track] });
+    setNotice("Saved sound added at a low level with speech ducking. Adjust its timeline and volume as needed.");
   }
 
   function changeBrollRange(id: string, field: "startSeconds" | "endSeconds", value: string) {
@@ -3163,7 +3268,7 @@ export default function ShortsStudio() {
                       <div>
                         <h4 className="text-sm font-semibold text-white">B-roll cutaways</h4>
                         <p className="mt-1 text-xs leading-relaxed text-slate-400">
-                          AI searches Pexels using this short&apos;s transcript and suggests when each cutaway fits. Selected web clips play over the YouTube picture while sermon audio continues.
+                          Find transcript-matched cutaways with AI or search Pexels directly. Preview each result before adding it to the timeline.
                         </p>
                       </div>
                       <div className="flex flex-wrap gap-2">
@@ -3190,6 +3295,27 @@ export default function ShortsStudio() {
                         </label>
                       </div>
                     </div>
+                    <label className="block text-xs font-medium text-slate-300">
+                      Manual Pexels search
+                      <div className="mt-1 flex flex-col gap-2 sm:flex-row">
+                        <input
+                          type="search"
+                          value={manualBrollQuery}
+                          onChange={(event) => setManualBrollQuery(event.target.value)}
+                          maxLength={120}
+                          placeholder="e.g. sunrise over mountains"
+                          className="min-h-12 min-w-0 flex-1 rounded-lg border border-slate-700 bg-slate-900 px-3 text-base text-white"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => void findWebMedia("broll", manualBrollQuery.trim())}
+                          disabled={busy || mediaSearchKind !== null || manualBrollQuery.trim().length < 2 || project.brollClips.length >= 10}
+                          className="min-h-12 rounded-lg border border-cyan-700 px-4 text-sm font-semibold text-cyan-100 disabled:opacity-50"
+                        >
+                          Search B-roll
+                        </button>
+                      </div>
+                    </label>
                     {mediaSuggestionsProjectSlug === project.slug && webBrollSuggestions.length > 0 && (
                       <ul className="grid gap-3 sm:grid-cols-2">
                         {webBrollSuggestions.map((suggestion) => (
@@ -3382,10 +3508,85 @@ export default function ShortsStudio() {
                             >
                               Add to timeline
                             </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const duration = Math.min(suggestion.durationSeconds, project.endSeconds - project.startSeconds);
+                                const track = ShortMusicTrackSchema.parse({
+                                  id: crypto.randomUUID(),
+                                  fileName: suggestion.title,
+                                  audioUrl: suggestion.audioUrl,
+                                  sourceDurationSeconds: suggestion.durationSeconds,
+                                  startSeconds: project.startSeconds,
+                                  endSeconds: project.startSeconds + duration,
+                                  volume: 0.12,
+                                  fadeInSeconds: Math.min(1, duration / 2),
+                                  fadeOutSeconds: Math.min(2, duration / 2),
+                                  duckUnderSpeech: true,
+                                  duckVolume: 0.15,
+                                  provider: "jamendo",
+                                  providerPageUrl: suggestion.providerPageUrl,
+                                  creatorName: suggestion.artistName,
+                                  creatorUrl: suggestion.creatorUrl,
+                                  licenseName: suggestion.licenseName,
+                                  licenseUrl: suggestion.licenseUrl,
+                                  commercialLicenseConfirmed: false,
+                                });
+                                void saveMusicFavorite(track);
+                              }}
+                              disabled={busy || musicFavorites.some((item) => item.audioUrl === suggestion.audioUrl)}
+                              className="min-h-12 w-full rounded-lg border border-emerald-800 px-3 text-sm font-semibold text-emerald-100 disabled:opacity-50"
+                            >
+                              {musicFavorites.some((item) => item.audioUrl === suggestion.audioUrl)
+                                ? "Saved to music library"
+                                : "Save sound for reuse"}
+                            </button>
                           </li>
                         ))}
                       </ul>
                     )}
+                    <section className="space-y-3 rounded-lg border border-violet-900/70 bg-violet-950/10 p-3">
+                      <div>
+                        <h5 className="text-sm font-semibold text-violet-100">Reusable music library</h5>
+                        <p className="mt-1 text-xs text-slate-400">Save sounds once, then add them to any short from your library.</p>
+                      </div>
+                      {musicFavorites.length === 0 ? (
+                        <p className="text-xs text-slate-500">No saved sounds yet. Save a search result or timeline track to reuse it.</p>
+                      ) : (
+                        <ul className="space-y-2">
+                          {musicFavorites.map((favorite) => (
+                            <li key={favorite.id} className="space-y-2 rounded-lg border border-slate-800 bg-slate-900 p-3">
+                              <div className="flex items-start justify-between gap-2">
+                                <div className="min-w-0">
+                                  <p className="truncate text-sm font-semibold text-white">{favorite.fileName}</p>
+                                  <p className="text-xs text-slate-400">
+                                    {favorite.creatorName ? `${favorite.creatorName} · ` : ""}
+                                    {favorite.provider === "jamendo" ? "Jamendo" : "Uploaded"} · {formatTime(favorite.sourceDurationSeconds)}
+                                  </p>
+                                </div>
+                                <button
+                                  type="button"
+                                  onClick={() => void removeMusicFavorite(favorite.id)}
+                                  disabled={busy}
+                                  className="min-h-12 min-w-12 rounded-lg border border-rose-900 px-3 text-xs font-semibold text-rose-200 disabled:opacity-50"
+                                >
+                                  Remove
+                                </button>
+                              </div>
+                              <audio src={favorite.audioUrl} controls preload="none" aria-label={`Preview saved sound ${favorite.fileName}`} className="w-full" />
+                              <button
+                                type="button"
+                                onClick={() => addSavedMusicFavorite(favorite)}
+                                disabled={busy || project.musicTracks.length >= 5}
+                                className="min-h-12 w-full rounded-lg border border-violet-700 px-3 text-sm font-semibold text-violet-100 disabled:opacity-50"
+                              >
+                                Add saved sound to timeline
+                              </button>
+                            </li>
+                          ))}
+                        </ul>
+                      )}
+                    </section>
                     {project.musicTracks.length === 0 ? (
                       <p className="text-xs text-slate-500">No instrumental tracks on the timeline yet.</p>
                     ) : (
@@ -3412,6 +3613,16 @@ export default function ShortsStudio() {
                                 Remove
                               </button>
                             </div>
+                            <button
+                              type="button"
+                              onClick={() => void saveMusicFavorite(track)}
+                              disabled={busy || musicFavorites.some((item) => item.audioUrl === track.audioUrl)}
+                              className="min-h-12 w-full rounded-lg border border-emerald-800 px-3 text-sm font-semibold text-emerald-100 disabled:opacity-50"
+                            >
+                              {musicFavorites.some((item) => item.audioUrl === track.audioUrl)
+                                ? "Saved to reusable music library"
+                                : "Save sound for reuse"}
+                            </button>
                             {track.provider === "jamendo" && (
                               <>
                                 {!track.commercialLicenseConfirmed && (

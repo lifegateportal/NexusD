@@ -3,6 +3,7 @@ import {
   getRemovedTranscriptWordIndexes,
   getTranscriptCutAtTime,
 } from "@/lib/short-transcript-edits";
+import { getShortMediaProxyUrl } from "@/lib/short-media-proxy";
 import type { ShortProject, ShortFrameSlot, ShortCropKeyframe } from "@/lib/schemas/video-short";
 
 type ExportProgress = (progress: number) => void;
@@ -397,7 +398,7 @@ export async function exportShortVideo(
       const audio = document.createElement("audio");
       audio.crossOrigin = "anonymous";
       audio.preload = "auto";
-      audio.src = track.audioUrl;
+      audio.src = getShortMediaProxyUrl(track.audioUrl);
       audio.load();
       const source = audioContext.createMediaElementSource(audio);
       const gain = audioContext.createGain();
@@ -425,7 +426,7 @@ export async function exportShortVideo(
       element.preload = "auto";
       element.muted = true;
       element.playsInline = true;
-      element.src = clip.videoUrl;
+      element.src = getShortMediaProxyUrl(clip.videoUrl);
       element.load();
       await waitForMedia(element, 2);
       broll.push({
@@ -436,7 +437,9 @@ export async function exportShortVideo(
       });
     }
     for (const overlay of project.overlays) {
-      if (overlay.imageUrl) images.set(overlay.id, await loadImage(overlay.imageUrl));
+      if (overlay.imageUrl) {
+        images.set(overlay.id, await loadImage(getShortMediaProxyUrl(overlay.imageUrl)));
+      }
     }
     await Promise.all(music.map((track) => waitForMedia(track.audio, 1)));
     if ((await Promise.all(musicStartPromises)).some((started) => !started)) {

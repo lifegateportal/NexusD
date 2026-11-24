@@ -17,6 +17,7 @@ export const maxDuration = 30;
 
 const RequestSchema = z.object({
   kind: z.enum(["broll", "music"]),
+  manualQuery: z.string().trim().min(2).max(120).optional(),
   title: z.string().trim().min(1).max(200),
   startSeconds: z.number().finite().min(0),
   endSeconds: z.number().finite().min(0),
@@ -25,13 +26,19 @@ const RequestSchema = z.object({
     endSeconds: z.number().finite().min(0),
     aspectRatio: ShortAspectRatioSchema,
   }).strict()).min(1).max(100),
-  captions: z.array(LibraryVideoSegmentSchema).min(1).max(SHORT_MEDIA_SUGGESTION_MAX_CAPTIONS),
+  captions: z.array(LibraryVideoSegmentSchema).max(SHORT_MEDIA_SUGGESTION_MAX_CAPTIONS).default([]),
   instructions: z.string().trim().max(4000).default(""),
 }).strict().superRefine((input, context) => {
   if (input.endSeconds <= input.startSeconds) {
     context.addIssue({ code: z.ZodIssueCode.custom, path: ["endSeconds"], message: "Short end must be after its start." });
   }
-  if (input.captions.some((caption) =>
+  if (input.kind === "broll" && !input.manualQuery && input.captions.length === 0) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ["captions"], message: "AI media search needs transcript captions." });
+  }
+  if (input.kind === "music" && (input.manualQuery || input.captions.length === 0)) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ["manualQuery"], message: "Music search needs transcript captions and does not accept a manual B-roll query." });
+  }
+  if (!input.manualQuery && input.captions.some((caption) =>
     caption.endSeconds <= caption.startSeconds
     || caption.startSeconds < input.startSeconds
     || caption.endSeconds > input.endSeconds,
@@ -45,7 +52,7 @@ const RequestSchema = z.object({
   )) {
     context.addIssue({ code: z.ZodIssueCode.custom, path: ["frameSlots"], message: "Frame slots must be inside the short range." });
   }
-  if (input.captions.reduce((total, caption) => total + caption.text.length, 0) > SHORT_MEDIA_SUGGESTION_MAX_TRANSCRIPT_CHARACTERS) {
+  if (!input.manualQuery && input.captions.reduce((total, caption) => total + caption.text.length, 0) > SHORT_MEDIA_SUGGESTION_MAX_TRANSCRIPT_CHARACTERS) {
     context.addIssue({ code: z.ZodIssueCode.custom, path: ["captions"], message: "The short transcript exceeds the AI search limit." });
   }
 });
@@ -250,6 +257,48 @@ export async function POST(request: NextRequest) {
       .join("\n");
 
     if (input.kind === "broll") {
+      if (input.manualQuery) {
+        const videos = await searchPexels(
+          input.manualQuery,
+          orientationFor(input.startSeconds, input.frameSlots),
+        );
+        const suggestions = videos.flatMap((video) => {
+          if (!isHttpsUrlFromDomain(video.url, "pexels.com") || !isHttpsUrlFromDomain(video.user.url, "pexels.com")) return [];
+          const file = video.video_files
+            .filter((candidate) =>
+              candidate.file_type === "video/mp4"
+              && isHttpsUrlFromDomain(candidate.link, "videos.pexels.com"),
+            )
+            .sort((first, second) =>
+              Math.abs(Math.max(first.width, first.height) - 1080)
+              - Math.abs(Math.max(second.width, second.height) - 1080),
+            )[0];
+          const endSeconds = Math.min(input.endSeconds, input.startSeconds + video.duration);
+          if (!file || endSeconds - input.startSeconds < 2) return [];
+          return [{
+            id: `pexels-${video.id}`,
+            title: `Pexels clip by ${video.user.name}`,
+            query: input.manualQuery,
+            reason: "Selected from your manual B-roll search.",
+            videoUrl: file.link,
+            previewUrl: video.image,
+            durationSeconds: video.duration,
+            startSeconds: input.startSeconds,
+            endSeconds,
+            providerPageUrl: video.url,
+            creatorName: video.user.name,
+            creatorUrl: video.user.url,
+            licenseName: "Pexels License",
+            licenseUrl: PEXELS_LICENSE_URL,
+          }];
+        }).slice(0, 12);
+        if (suggestions.length === 0) {
+          return NextResponse.json({ error: "Pexels found no playable MP4 clips that fit this short." }, { status: 422 });
+        }
+        return NextResponse.json(ShortBrollSuggestionsResponseSchema.parse({ suggestions }), {
+          headers: { "Cache-Control": "private, no-store" },
+        });
+      }
       const candidates = buildBrollCandidates(input.captions, input.startSeconds, input.endSeconds);
       if (candidates.length === 0) {
         return NextResponse.json({ error: "No usable transcript moments were found for B-roll." }, { status: 422 });

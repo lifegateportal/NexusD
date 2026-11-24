@@ -11,11 +11,16 @@ import {
   ShortProjectVersionIndexSchema,
   type ShortProject,
 } from "@/lib/schemas/video-short";
+import {
+  ShortMusicLibrarySchema,
+  type ShortMusicFavorite,
+} from "@/lib/schemas/short-media";
 import { getShortThumbnailUrl } from "@/lib/short-video-utils";
 
 const PRIVATE_CATALOG_KEY = "director/shorts/index.json";
 const PUBLIC_CATALOG_KEY = "published/shorts/index.json";
 const AGENT_SETTINGS_KEY = "director/shorts/agent-settings.json";
+const MUSIC_LIBRARY_KEY = "director/shorts/music-library.json";
 const LATEST_GENERATED_SUGGESTIONS_KEY = "director/shorts/generated-suggestions/latest.json";
 const MAX_PROJECT_VERSIONS = 20;
 
@@ -125,6 +130,17 @@ export async function saveShortAgentSettings(input: unknown) {
   const settings = ShortAgentSettingsSchema.parse(input);
   await writeJsonObject(AGENT_SETTINGS_KEY, settings);
   return settings;
+}
+
+export async function readShortMusicLibrary() {
+  const raw = await readJsonObject(MUSIC_LIBRARY_KEY);
+  return ShortMusicLibrarySchema.parse(raw ?? { favorites: [] });
+}
+
+export async function saveShortMusicLibrary(favorites: ShortMusicFavorite[]) {
+  const library = ShortMusicLibrarySchema.parse({ favorites });
+  await writeJsonObject(MUSIC_LIBRARY_KEY, library);
+  return library;
 }
 
 export async function readGeneratedShortSuggestions(sourceKey?: string) {
