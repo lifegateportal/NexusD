@@ -6,13 +6,17 @@ import Link from "next/link";
 import { NexusNav } from "@/app/components/NexusNav";
 import DirectorFaqs from "@/app/ebook/faqs/DirectorFaqs";
 import VideoWorkspace from "@/app/ebook/videos/VideoWorkspace";
+import LibraryAppearanceEditor from "./LibraryAppearanceEditor";
+import type { LibraryBranding } from "@/lib/schemas/library-branding";
 
-type LibrarySection = "faqs" | "videos";
+type LibrarySection = "faqs" | "videos" | "appearance";
 
 export default function DirectorLibraryWorkspace({
   initialSection,
+  initialBranding,
 }: {
   initialSection: LibrarySection;
+  initialBranding: LibraryBranding;
 }) {
   const [section, setSection] = useState<LibrarySection>(initialSection);
   const router = useRouter();
@@ -30,7 +34,7 @@ export default function DirectorLibraryWorkspace({
             <p className="text-[10px] font-bold uppercase tracking-[0.25em] text-cyan-300">Nexus Director · Library</p>
             <h1 className="mt-2 text-3xl font-bold tracking-tight text-white sm:text-4xl">Library studio</h1>
             <p className="mt-3 max-w-3xl text-sm leading-relaxed text-slate-400 sm:text-base">
-              Manage published video content and curated answers from one workspace.
+              Manage the public PJDL appearance, published video content, and curated answers from one workspace.
             </p>
             <Link
               href="/ebook/library/trailers"
@@ -38,12 +42,21 @@ export default function DirectorLibraryWorkspace({
             >
               Open Trailer Studio
             </Link>
+            <Link
+              href="/library"
+              target="_blank"
+              rel="noreferrer"
+              className="ml-3 mt-4 inline-flex min-h-12 items-center rounded-xl border border-slate-700 px-4 text-sm font-semibold text-slate-200"
+            >
+              Preview public library
+            </Link>
           </header>
 
           <div role="tablist" aria-label="Library tools" className="mb-5 flex gap-2 border-b border-slate-800">
             {([
               ["faqs", "FAQs"],
               ["videos", "Video Studio"],
+              ["appearance", "Appearance"],
             ] as const).map(([value, label]) => (
               <button
                 key={value}
@@ -82,6 +95,14 @@ export default function DirectorLibraryWorkspace({
             hidden={section !== "videos"}
           >
             {section === "videos" && <VideoWorkspace />}
+          </section>
+          <section
+            id="director-library-panel-appearance"
+            role="tabpanel"
+            aria-labelledby="director-library-tab-appearance"
+            hidden={section !== "appearance"}
+          >
+            {section === "appearance" && <LibraryAppearanceEditor initialBranding={initialBranding} />}
           </section>
         </div>
       </main>

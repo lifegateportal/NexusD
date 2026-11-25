@@ -33,9 +33,27 @@ const ACCENT_BADGE: Record<string, string> = {
   slate:   "bg-slate-500/20 text-slate-300 border-slate-500/30",
 };
 
+const ACCENT_BADGE_LIGHT: Record<keyof typeof ACCENT_BADGE, string> = {
+  amber: "bg-amber-50 text-amber-800 border-amber-200",
+  cyan: "bg-cyan-50 text-cyan-800 border-cyan-200",
+  emerald: "bg-emerald-50 text-emerald-800 border-emerald-200",
+  rose: "bg-rose-50 text-rose-800 border-rose-200",
+  violet: "bg-violet-50 text-violet-800 border-violet-200",
+  slate: "bg-slate-100 text-slate-700 border-slate-300",
+};
+
 // ── Book card ─────────────────────────────────────────────────────────────────
 
-function BookCard({ book }: { book: PublishedBookEntry }) {
+function BookCard({
+  book,
+  colorMode,
+  accentColor,
+}: {
+  book: PublishedBookEntry;
+  colorMode: "dark" | "light";
+  accentColor: keyof typeof ACCENT_BADGE;
+}) {
+  const light = colorMode === "light";
   const accent = book.coverAccent ?? "amber";
   const grad   = COVER_GRADIENT[accent] ?? COVER_GRADIENT.amber;
   const title  = COVER_TITLE[accent]    ?? COVER_TITLE.amber;
@@ -91,14 +109,14 @@ function BookCard({ book }: { book: PublishedBookEntry }) {
 
       {/* Below-cover metadata */}
       <div className="px-0.5">
-        <h3 className="mb-1 font-semibold leading-snug text-slate-100 transition-colors group-hover:text-white">
+        <h3 className={`mb-1 font-semibold leading-snug transition-colors ${light ? "text-slate-900 group-hover:text-black" : "text-slate-100 group-hover:text-white"}`}>
           {book.title}
         </h3>
-        <p className="mb-3 line-clamp-2 text-sm leading-relaxed text-slate-400">
+        <p className={`mb-3 line-clamp-2 text-sm leading-relaxed ${light ? "text-slate-600" : "text-slate-400"}`}>
           {book.synopsis}
         </p>
         <div className="flex flex-wrap gap-1.5">
-          <span className={`inline-flex items-center rounded-full border px-2.5 py-1 text-xs font-medium ${badge}`}>
+          <span className={`inline-flex items-center rounded-full border px-2.5 py-1 text-xs font-medium ${light ? ACCENT_BADGE_LIGHT[accentColor] : ACCENT_BADGE[accentColor] ?? badge}`}>
             {book.chapterCount} ch
           </span>
           <span className="inline-flex items-center rounded-full border border-slate-700/50 px-2.5 py-1 text-xs font-medium text-slate-500">
@@ -115,7 +133,16 @@ function BookCard({ book }: { book: PublishedBookEntry }) {
 
 // ── Grid with search ──────────────────────────────────────────────────────────
 
-export default function LibraryGrid({ books }: { books: PublishedBookEntry[] }) {
+export default function LibraryGrid({
+  books,
+  colorMode,
+  accentColor,
+}: {
+  books: PublishedBookEntry[];
+  colorMode: "dark" | "light";
+  accentColor: keyof typeof ACCENT_BADGE;
+}) {
+  const light = colorMode === "light";
   const [query, setQuery] = useState("");
 
   const filtered = query.trim()
@@ -147,22 +174,22 @@ export default function LibraryGrid({ books }: { books: PublishedBookEntry[] }) 
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           placeholder="Search books, authors…"
-          className="w-full rounded-xl border border-slate-700/60 bg-slate-900/60 py-3 pl-11 pr-4 text-base text-slate-200 placeholder-slate-600 outline-none transition focus:border-slate-500 focus:ring-1 focus:ring-slate-600"
+          className={`w-full rounded-xl border py-3 pl-11 pr-4 text-base outline-none transition focus:ring-1 ${light ? "border-slate-300 bg-white text-slate-900 placeholder-slate-500 focus:border-slate-500 focus:ring-slate-400" : "border-slate-700/60 bg-slate-900/60 text-slate-200 placeholder-slate-600 focus:border-slate-500 focus:ring-slate-600"}`}
         />
       </div>
 
       {/* Book count */}
-      <p className="mb-8 text-xs font-medium text-slate-600">
+      <p className={`mb-8 text-xs font-medium ${light ? "text-slate-600" : "text-slate-400"}`}>
         {filtered.length} {filtered.length === 1 ? "book" : "books"}
         {query ? ` matching "${query}"` : " published"}
       </p>
 
       {filtered.length === 0 ? (
         <div className="flex min-h-[30vh] flex-col items-center justify-center text-center">
-          <p className="mb-1 text-slate-400">No books match your search.</p>
+          <p className={`mb-1 ${light ? "text-slate-700" : "text-slate-400"}`}>No books match your search.</p>
           <button
             onClick={() => setQuery("")}
-            className="mt-3 inline-flex min-h-12 items-center px-4 text-sm text-slate-400 underline-offset-2 transition hover:text-white hover:underline"
+            className={`mt-3 inline-flex min-h-12 items-center px-4 text-sm underline-offset-2 transition hover:underline ${light ? "text-slate-700 hover:text-black" : "text-slate-400 hover:text-white"}`}
           >
             Clear search
           </button>
@@ -170,7 +197,7 @@ export default function LibraryGrid({ books }: { books: PublishedBookEntry[] }) 
       ) : (
         <div className="grid gap-10 sm:grid-cols-2 lg:grid-cols-3">
           {filtered.map((book) => (
-            <BookCard key={book.slug} book={book} />
+            <BookCard key={book.slug} book={book} colorMode={colorMode} accentColor={accentColor} />
           ))}
         </div>
       )}

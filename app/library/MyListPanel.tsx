@@ -39,7 +39,8 @@ function MiniCover({ entry }: { entry: ReadingListEntry }) {
   );
 }
 
-export default function MyListPanel() {
+export default function MyListPanel({ colorMode }: { colorMode: "dark" | "light" }) {
+  const light = colorMode === "light";
   const [list, setList] = useState<ReadingListEntry[]>([]);
   const [open, setOpen] = useState(false);
 
@@ -55,23 +56,23 @@ export default function MyListPanel() {
   if (list.length === 0 && !open) return null;
 
   return (
-    <section className="border-b border-slate-800/50 py-8">
+    <section className={`border-b py-8 ${light ? "border-slate-200" : "border-slate-800/50"}`}>
       {/* Header row */}
       <button
         onClick={() => setOpen((v) => !v)}
-        className="flex w-full items-center justify-between"
+        className="flex min-h-12 w-full items-center justify-between"
       >
         <div className="flex items-center gap-3">
-          <p className="text-[10px] font-bold uppercase tracking-[0.22em] text-slate-400">My Reading List</p>
+          <p className={`text-[10px] font-bold uppercase tracking-[0.22em] ${light ? "text-slate-600" : "text-slate-400"}`}>My Reading List</p>
           {list.length > 0 && (
-            <span className="rounded-full bg-slate-800 px-2 py-0.5 text-[10px] font-bold text-slate-400">
+            <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${light ? "bg-slate-200 text-slate-700" : "bg-slate-800 text-slate-400"}`}>
               {list.length}
             </span>
           )}
         </div>
         <svg
           viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.75}
-          className={`h-4 w-4 text-slate-500 transition-transform ${open ? "rotate-180" : ""}`}
+          className={`h-4 w-4 transition-transform ${light ? "text-slate-600" : "text-slate-500"} ${open ? "rotate-180" : ""}`}
         >
           <path d="M6 9l6 6 6-6" strokeLinecap="round" strokeLinejoin="round" />
         </svg>
@@ -80,29 +81,29 @@ export default function MyListPanel() {
       {open && (
         <div className="mt-5">
           {list.length === 0 ? (
-            <div className="rounded-2xl border border-slate-800/60 bg-slate-900/40 px-6 py-10 text-center">
-              <p className="mb-1 text-sm font-semibold text-slate-400">Your list is empty</p>
-              <p className="text-xs text-slate-600">Open any book and tap &ldquo;Save to List&rdquo; to add it here.</p>
+            <div className={`rounded-2xl border px-6 py-10 text-center ${light ? "border-slate-200 bg-white" : "border-slate-800/60 bg-slate-900/40"}`}>
+              <p className={`mb-1 text-sm font-semibold ${light ? "text-slate-600" : "text-slate-400"}`}>Your list is empty</p>
+              <p className={`text-xs ${light ? "text-slate-500" : "text-slate-600"}`}>Open any book and tap &ldquo;Save to List&rdquo; to add it here.</p>
             </div>
           ) : (
             <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
               {list.map((entry) => {
                 const accentT = ACCENT_TEXT[entry.coverAccent] ?? ACCENT_TEXT.amber;
                 return (
-                  <div key={entry.slug} className="group flex items-center gap-4 rounded-2xl border border-slate-800/60 bg-slate-900/40 p-4 transition hover:border-slate-700/60">
+                  <div key={entry.slug} className={`group flex items-center gap-4 rounded-2xl border p-4 transition hover:border-slate-700/60 ${light ? "border-slate-200 bg-white" : "border-slate-800/60 bg-slate-900/40"}`}>
                     <Link href={`/library/${entry.slug}`} className="contents">
                       <MiniCover entry={entry} />
                       <div className="min-w-0 flex-1">
-                        <p className={`mb-0.5 text-[10px] font-semibold uppercase tracking-wider ${accentT}`}>
+                        <p className={`mb-0.5 text-[10px] font-semibold uppercase tracking-wider ${light ? "text-slate-700" : accentT}`}>
                           {entry.authorName}
                         </p>
-                        <h3 className="line-clamp-2 text-sm font-bold leading-tight text-slate-100" style={{ fontFamily: "Georgia, serif" }}>
+                        <h3 className={`line-clamp-2 text-sm font-bold leading-tight ${light ? "text-slate-900" : "text-slate-100"}`} style={{ fontFamily: "Georgia, serif" }}>
                           {entry.title}
                         </h3>
                         {entry.subtitle && (
-                          <p className="mt-0.5 line-clamp-1 text-xs text-slate-500">{entry.subtitle}</p>
+                          <p className={`mt-0.5 line-clamp-1 text-xs ${light ? "text-slate-600" : "text-slate-500"}`}>{entry.subtitle}</p>
                         )}
-                        <p className="mt-2 text-xs font-semibold text-slate-500">
+                        <p className={`mt-2 text-xs font-semibold ${light ? "text-slate-600" : "text-slate-500"}`}>
                           {new Date(entry.addedAt).toLocaleDateString(undefined, { month: "short", day: "numeric" })}
                         </p>
                       </div>

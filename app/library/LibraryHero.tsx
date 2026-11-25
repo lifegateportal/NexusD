@@ -1,200 +1,112 @@
-"use client";
-
-import { useEffect, useRef, useState, type ChangeEvent } from "react";
 import Link from "next/link";
-import { z } from "zod";
-import {
-  LibraryBrandingSchema,
-  LibraryCoverUploadResponseSchema,
-} from "@/lib/schemas/library-branding";
+import type { LibraryBranding } from "@/lib/schemas/library-branding";
 
-const MAX_COVER_BYTES = 10 * 1024 * 1024;
-const COVER_IMAGE_TYPES = ["image/jpeg", "image/png", "image/webp"];
-const ErrorResponseSchema = z.object({ error: z.string() }).strict();
+const ACCENT_STYLES: Record<LibraryBranding["accentColor"], { badgeDark: string; badgeLight: string; button: string; glow: string }> = {
+  amber: { badgeDark: "border-amber-400/25 text-amber-300", badgeLight: "border-amber-600/30 text-amber-800", button: "bg-amber-400 hover:bg-amber-300", glow: "from-amber-500/10" },
+  cyan: { badgeDark: "border-cyan-400/25 text-cyan-300", badgeLight: "border-cyan-600/30 text-cyan-800", button: "bg-cyan-400 hover:bg-cyan-300", glow: "from-cyan-500/10" },
+  emerald: { badgeDark: "border-emerald-400/25 text-emerald-300", badgeLight: "border-emerald-600/30 text-emerald-800", button: "bg-emerald-400 hover:bg-emerald-300", glow: "from-emerald-500/10" },
+  rose: { badgeDark: "border-rose-400/25 text-rose-300", badgeLight: "border-rose-600/30 text-rose-800", button: "bg-rose-400 hover:bg-rose-300", glow: "from-rose-500/10" },
+  violet: { badgeDark: "border-violet-400/25 text-violet-300", badgeLight: "border-violet-600/30 text-violet-800", button: "bg-violet-400 hover:bg-violet-300", glow: "from-violet-500/10" },
+};
 
-async function parseApiResponse<T>(response: Response, schema: z.ZodType<T>, invalidResponseMessage: string): Promise<T> {
-  let body: unknown;
-  try {
-    body = await response.json();
-  } catch {
-    throw new Error(`The library service returned an unreadable response (HTTP ${response.status}).`);
-  }
-  if (!response.ok) {
-    const error = ErrorResponseSchema.safeParse(body);
-    throw new Error(error.success ? error.data.error : `Cover image request failed (HTTP ${response.status}).`);
-  }
-  const parsed = schema.safeParse(body);
-  if (!parsed.success) throw new Error(invalidResponseMessage);
-  return parsed.data;
+function HeroActions({ accent, light }: { accent: LibraryBranding["accentColor"]; light: boolean }) {
+  return (
+    <div className="mt-7 flex flex-wrap gap-3">
+      <Link href="/library/ask" className={`inline-flex min-h-12 items-center justify-center rounded-xl px-5 text-base font-bold text-slate-950 transition-colors ${ACCENT_STYLES[accent].button}`}>
+        Ask the library
+      </Link>
+      <Link href="/library/videos" className={`inline-flex min-h-12 items-center justify-center rounded-xl border px-5 text-base font-semibold transition-colors ${light ? "border-slate-300 bg-white/70 text-slate-800 hover:bg-white" : "border-white/20 bg-slate-950/40 text-white hover:bg-slate-950/70"}`}>
+        Browse videos
+      </Link>
+      <Link href="/library/faqs" className={`inline-flex min-h-12 items-center justify-center rounded-xl border px-5 text-base font-semibold transition-colors ${light ? "border-slate-300 bg-white/70 text-slate-800 hover:bg-white" : "border-white/20 bg-slate-950/40 text-white hover:bg-slate-950/70"}`}>
+        Browse FAQs
+      </Link>
+    </div>
+  );
 }
 
-export default function LibraryHero() {
-  const inputRef = useRef<HTMLInputElement>(null);
-  const [coverImageUrl, setCoverImageUrl] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
-  const [notice, setNotice] = useState("");
+function BrandCopy({ branding, light }: { branding: LibraryBranding; light: boolean }) {
+  return (
+    <div className="max-w-3xl">
+      <div className={`mb-5 inline-flex items-center gap-2 rounded-full border px-3 py-1.5 ${light ? "bg-white/80" : "bg-slate-950/60"} ${light ? ACCENT_STYLES[branding.accentColor].badgeLight : ACCENT_STYLES[branding.accentColor].badgeDark}`}>
+        <span className="text-[10px] font-black uppercase tracking-[0.2em]">{branding.shortName}</span>
+        <span aria-hidden className="h-1 w-1 rounded-full bg-current opacity-70" />
+        <span className={`text-[10px] font-semibold uppercase tracking-[0.14em] ${light ? "text-slate-600" : "text-slate-300"}`}>{branding.tagline}</span>
+      </div>
+      <h2 className={`max-w-2xl text-4xl font-bold leading-[1.05] tracking-tight sm:text-5xl lg:text-6xl ${light ? "text-slate-950" : "text-white"}`}>
+        {branding.title}
+      </h2>
+      <p className={`mt-4 max-w-xl text-sm leading-relaxed sm:text-base ${light ? "text-slate-700" : "text-slate-300"}`}>
+        {branding.description}
+      </p>
+      <HeroActions accent={branding.accentColor} light={light} />
+    </div>
+  );
+}
 
-  useEffect(() => {
-    let active = true;
-    void fetch("/api/library/branding", { cache: "no-store" })
-      .then((response) => parseApiResponse(response, LibraryBrandingSchema, "The PJDL cover settings returned an invalid response."))
-      .then((branding) => {
-        if (active) setCoverImageUrl(branding.coverImageUrl);
-      })
-      .catch((loadError: unknown) => {
-        if (active) setError(loadError instanceof Error ? loadError.message : "Could not load the PJDL cover image.");
-      });
-    return () => {
-      active = false;
-    };
-  }, []);
+export default function LibraryHero({ branding }: { branding: LibraryBranding }) {
+  const light = branding.colorMode === "light";
+  const baseClass = light
+    ? "border-slate-200 bg-white shadow-slate-900/10"
+    : "border-white/10 bg-slate-900 shadow-black/30";
+  const image = branding.coverImageUrl ? (
+    // eslint-disable-next-line @next/next/no-img-element
+    <img src={branding.coverImageUrl} alt="" className="h-full w-full object-cover" />
+  ) : null;
 
-  async function handleCoverChange(event: ChangeEvent<HTMLInputElement>) {
-    const file = event.target.files?.[0];
-    event.target.value = "";
-    if (!file) return;
-    if (!COVER_IMAGE_TYPES.includes(file.type) || file.size > MAX_COVER_BYTES || file.size === 0) {
-      setError("Choose a JPEG, PNG, or WebP image up to 10 MB.");
-      setNotice("");
-      return;
-    }
-
-    setBusy(true);
-    setError("");
-    setNotice("");
-    try {
-      const prepareResponse = await fetch("/api/library/branding", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ contentType: file.type, size: file.size }),
-      });
-      const upload = await parseApiResponse(
-        prepareResponse,
-        LibraryCoverUploadResponseSchema,
-        "The PJDL cover upload returned an invalid response.",
-      );
-      if (upload.contentType !== file.type) throw new Error("The cover upload service returned the wrong image format.");
-      const uploadResponse = await fetch(upload.presignedUrl, {
-        method: "PUT",
-        headers: { "Content-Type": file.type },
-        body: file,
-      });
-      if (!uploadResponse.ok) throw new Error(`Cover image upload failed (HTTP ${uploadResponse.status}).`);
-      const saveResponse = await fetch("/api/library/branding", {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ coverImageUrl: upload.coverImageUrl }),
-      });
-      const branding = await parseApiResponse(
-        saveResponse,
-        LibraryBrandingSchema,
-        "The PJDL cover settings returned an invalid response.",
-      );
-      setCoverImageUrl(branding.coverImageUrl);
-      setNotice("PJDL cover image updated.");
-    } catch (uploadError) {
-      setError(uploadError instanceof Error ? uploadError.message : "Could not upload the PJDL cover image.");
-    } finally {
-      setBusy(false);
-    }
+  if (branding.heroLayout === "split") {
+    return (
+      <section className="mx-auto max-w-6xl px-5 pb-8 pt-6 sm:pt-8 lg:pb-10">
+        <div className={`grid overflow-hidden rounded-3xl border shadow-2xl lg:grid-cols-[minmax(0,1.1fr)_minmax(280px,0.9fr)] ${baseClass}`}>
+          <div className="flex min-h-[340px] items-center p-5 sm:p-8 lg:p-12">
+            <BrandCopy branding={branding} light={light} />
+          </div>
+          <div className={`relative min-h-56 overflow-hidden lg:min-h-[420px] ${light ? "bg-slate-100" : "bg-slate-950"}`}>
+            {image ? (
+              <div className="absolute inset-0">{image}</div>
+            ) : (
+              <div className={`absolute inset-0 bg-gradient-to-br ${ACCENT_STYLES[branding.accentColor].glow} to-transparent`} />
+            )}
+            <div className={`absolute inset-0 ${light ? "bg-gradient-to-t from-white/20 to-transparent" : "bg-gradient-to-t from-slate-950/30 to-transparent"}`} />
+          </div>
+        </div>
+      </section>
+    );
   }
 
-  async function removeCover() {
-    setBusy(true);
-    setError("");
-    setNotice("");
-    try {
-      const response = await fetch("/api/library/branding", { method: "DELETE" });
-      const branding = await parseApiResponse(response, LibraryBrandingSchema, "The PJDL cover settings returned an invalid response.");
-      setCoverImageUrl(branding.coverImageUrl);
-      setNotice("PJDL cover image removed.");
-    } catch (removeError) {
-      setError(removeError instanceof Error ? removeError.message : "Could not remove the PJDL cover image.");
-    } finally {
-      setBusy(false);
-    }
+  if (branding.heroLayout === "simple") {
+    return (
+      <section className="mx-auto max-w-6xl px-5 pb-8 pt-6 sm:pt-8 lg:pb-10">
+        <div className={`relative isolate overflow-hidden rounded-3xl border shadow-xl ${baseClass}`}>
+          {image && (
+            <div aria-hidden className="absolute inset-y-0 right-0 hidden w-1/3 overflow-hidden opacity-20 sm:block">{image}</div>
+          )}
+          <div className={`absolute inset-0 z-0 bg-gradient-to-r ${ACCENT_STYLES[branding.accentColor].glow} to-transparent`} />
+          <div className="relative z-10 p-5 sm:p-8 lg:p-10">
+            <BrandCopy branding={branding} light={light} />
+          </div>
+        </div>
+      </section>
+    );
   }
 
   return (
     <section className="mx-auto max-w-6xl px-5 pb-8 pt-6 sm:pt-8 lg:pb-10">
-      <div className="relative isolate overflow-hidden rounded-3xl border border-white/10 bg-slate-900 shadow-2xl shadow-black/30">
+      <div className={`relative isolate overflow-hidden rounded-3xl border shadow-2xl ${baseClass}`}>
         <div aria-hidden className="pointer-events-none absolute inset-0">
-          {coverImageUrl && (
+          {image && (
             <>
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img src={coverImageUrl} alt="" className="absolute inset-0 h-full w-full object-cover opacity-45" />
-              <div className="absolute inset-0 bg-gradient-to-r from-slate-950 via-slate-950/85 to-slate-950/45" />
+              <div className="absolute inset-0 opacity-45">{image}</div>
+              <div className={`absolute inset-0 ${light ? "bg-gradient-to-r from-white via-white/85 to-white/40" : "bg-gradient-to-r from-slate-950 via-slate-950/85 to-slate-950/45"}`} />
             </>
           )}
-          <div className="absolute inset-0 bg-gradient-to-br from-amber-500/10 via-transparent to-cyan-500/10" />
-          <div className="absolute inset-0 bg-gradient-to-t from-slate-950/80 via-transparent to-slate-950/10" />
+          <div className={`absolute inset-0 bg-gradient-to-br ${ACCENT_STYLES[branding.accentColor].glow} via-transparent to-cyan-500/10`} />
+          <div className={`absolute inset-0 ${light ? "bg-gradient-to-t from-white/70 via-transparent to-white/10" : "bg-gradient-to-t from-slate-950/80 via-transparent to-slate-950/10"}`} />
         </div>
-
-        <div className="relative grid min-h-[430px] items-center gap-8 p-5 sm:p-8 lg:min-h-[400px] lg:grid-cols-[minmax(0,1fr)_auto] lg:gap-10 lg:p-12">
-          <div className="max-w-3xl">
-            <div className="mb-5 inline-flex items-center gap-2 rounded-full border border-amber-400/25 bg-slate-950/60 px-3 py-1.5">
-              <span className="text-[10px] font-black uppercase tracking-[0.2em] text-amber-300">PJDL</span>
-              <span aria-hidden className="h-1 w-1 rounded-full bg-amber-300/70" />
-              <span className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-300">Read · Listen · Discover</span>
-            </div>
-            <h2 className="max-w-2xl text-4xl font-bold leading-[1.05] tracking-tight text-white sm:text-5xl lg:text-6xl">
-              Pastor Josh Digital Library
-            </h2>
-            <p className="mt-4 max-w-xl text-sm leading-relaxed text-slate-300 sm:text-base">
-              Explore books, teaching, and ideas in one place. Find a new read, listen in, or ask questions grounded in the source material.
-            </p>
-            <div className="mt-7 flex flex-wrap gap-3">
-              <Link href="/library/ask" className="inline-flex min-h-12 items-center justify-center rounded-xl bg-amber-400 px-5 text-base font-bold text-slate-950 transition-colors hover:bg-amber-300">
-                Ask the library
-              </Link>
-              <Link href="/library/videos" className="inline-flex min-h-12 items-center justify-center rounded-xl border border-white/20 bg-slate-950/40 px-5 text-base font-semibold text-white transition-colors hover:bg-slate-950/70">
-                Browse videos
-              </Link>
-              <Link href="/library/faqs" className="inline-flex min-h-12 items-center justify-center rounded-xl border border-white/20 bg-slate-950/40 px-5 text-base font-semibold text-white transition-colors hover:bg-slate-950/70">
-                Browse FAQs
-              </Link>
-            </div>
-          </div>
-
-          <div className="flex flex-wrap items-center gap-3 lg:max-w-56 lg:flex-col lg:items-stretch">
-            <input
-              ref={inputRef}
-              type="file"
-              accept="image/jpeg,image/png,image/webp"
-              aria-label="Choose a PJDL cover image"
-              className="sr-only"
-              onChange={(event) => void handleCoverChange(event)}
-            />
-            <button
-              type="button"
-              disabled={busy}
-              onClick={() => inputRef.current?.click()}
-              className="inline-flex min-h-12 items-center justify-center gap-2 rounded-xl border border-white/20 bg-slate-950/70 px-4 text-base font-semibold text-white transition-colors hover:bg-slate-900 disabled:cursor-wait disabled:opacity-60"
-            >
-              <svg aria-hidden viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.7} className="h-5 w-5">
-                <path d="M12 16V4m0 0L7.5 8.5M12 4l4.5 4.5M5 14.5v4A1.5 1.5 0 0 0 6.5 20h11a1.5 1.5 0 0 0 1.5-1.5v-4" strokeLinecap="round" strokeLinejoin="round" />
-              </svg>
-              {busy ? "Saving cover…" : coverImageUrl ? "Change cover image" : "Add cover image"}
-            </button>
-            {coverImageUrl && (
-              <button
-                type="button"
-                disabled={busy}
-                onClick={() => void removeCover()}
-                className="inline-flex min-h-12 items-center justify-center rounded-xl border border-white/15 px-4 text-base font-medium text-slate-300 transition-colors hover:bg-white/10 disabled:cursor-wait disabled:opacity-60"
-              >
-                Remove cover
-              </button>
-            )}
-            <p className="w-full text-xs leading-relaxed text-slate-400 lg:text-center">
-              JPEG, PNG, or WebP · up to 10 MB
-            </p>
-          </div>
+        <div className="relative flex min-h-[400px] items-center p-5 sm:p-8 lg:min-h-[420px] lg:p-12">
+          <BrandCopy branding={branding} light={light} />
         </div>
       </div>
-      {error && <p role="alert" className="mt-3 rounded-xl border border-rose-900/70 bg-rose-950/40 px-4 py-3 text-sm text-rose-200">{error}</p>}
-      {notice && <p role="status" className="mt-3 text-sm text-emerald-300">{notice}</p>}
     </section>
   );
 }
