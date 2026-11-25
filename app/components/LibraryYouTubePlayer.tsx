@@ -245,19 +245,18 @@ export default function LibraryYouTubePlayer({
     <div
       ref={containerRef}
       className={isFullscreen
-        ? "fixed inset-0 z-[100] flex h-dvh w-full flex-col justify-center bg-black p-3"
+        ? "fixed inset-0 z-[100] h-dvh w-full overflow-hidden bg-black"
         : "w-full"}
       onPointerDown={revealControls}
       onPointerMove={revealControls}
     >
       <div
         ref={playerFrameRef}
-        className="relative mx-auto aspect-video w-full overflow-hidden bg-black"
+        className={isFullscreen
+          ? "absolute inset-0 h-full w-full overflow-hidden bg-black"
+          : "relative mx-auto aspect-video w-full overflow-hidden bg-black"}
         style={isFullscreen
-          ? {
-            width: `min(100%, calc((100dvh - ${controlsVisible ? "6rem" : "2rem"}) * 16 / 9))`,
-            aspectRatio: "16 / 9",
-          }
+          ? { width: "100%", height: "100%", aspectRatio: "auto" }
           : undefined}
       >
         <div ref={playerHostRef} className="absolute inset-0 h-full w-full" />
@@ -303,6 +302,8 @@ export default function LibraryYouTubePlayer({
       </div>
       <div className={controlsHidden
         ? "hidden"
+        : isFullscreen
+        ? "absolute inset-x-0 bottom-0 z-20 mx-auto flex w-full max-w-5xl items-center gap-2 bg-gradient-to-t from-black/95 via-black/75 to-transparent px-3 pb-[max(env(safe-area-inset-bottom),_1rem)] pt-6 lg:px-6 lg:pb-4"
         : "mx-auto mt-2 flex w-full max-w-5xl items-center gap-2"}
       >
         <button
@@ -336,7 +337,14 @@ export default function LibraryYouTubePlayer({
         </span>
       </div>
       {editing && (onSetStart || onSetEnd) && (
-        <div className="mx-auto mt-2 flex w-full max-w-5xl flex-wrap gap-2">
+        <div
+          className={`mx-auto mt-2 flex w-full max-w-5xl flex-wrap gap-2 ${
+            isFullscreen ? "absolute inset-x-0 z-20 px-3 lg:px-6" : ""
+          }`}
+          style={isFullscreen
+            ? { bottom: "calc(4.5rem + env(safe-area-inset-bottom))" }
+            : undefined}
+        >
           {onSetStart && (
             <button
               type="button"
