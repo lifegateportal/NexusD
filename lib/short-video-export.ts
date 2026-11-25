@@ -9,6 +9,7 @@ import type { ShortProject, ShortFrameSlot, ShortCropKeyframe } from "@/lib/sche
 type ExportProgress = (progress: number) => void;
 type LoadedBroll = { video: HTMLVideoElement; startSeconds: number; endSeconds: number; fit: "cover" | "contain" };
 type LoadedMusic = {
+  fileName: string;
   audio: HTMLAudioElement;
   gain: GainNode;
   startSeconds: number;
@@ -70,12 +71,16 @@ function frameBox(
   };
 }
 
-function waitForMedia(media: HTMLMediaElement, minimumReadyState: number): Promise<void> {
+function waitForMedia(
+  media: HTMLMediaElement,
+  minimumReadyState: number,
+  description = "A video or audio layer",
+): Promise<void> {
   if (media.readyState >= minimumReadyState) return Promise.resolve();
   return new Promise((resolve, reject) => {
     const timeout = window.setTimeout(() => {
       cleanup();
-      reject(new Error("A video or audio layer did not load in time."));
+      reject(new Error(`${description} did not load in time.`));
     }, 30000);
     const cleanup = () => {
       window.clearTimeout(timeout);
@@ -90,7 +95,7 @@ function waitForMedia(media: HTMLMediaElement, minimumReadyState: number): Promi
     };
     const onError = () => {
       cleanup();
-      reject(new Error("A video or audio layer could not be loaded for export."));
+      reject(new Error(`${description} could not be loaded for export.`));
     };
     media.addEventListener("loadeddata", onReady);
     media.addEventListener("loadedmetadata", onReady);
@@ -386,7 +391,8 @@ export async function exportShortVideo(
   const music: LoadedMusic[] = [];
   const images = new Map<string, HTMLImageElement>();
   const audioSources: MediaElementAudioSourceNode[] = [];
-  const musicStartPromises: Array<Promise<boolean>> = [];
+  const musicReadyPromises: Array<Promise<void>> = [];
+  const musicStartPromises: Array<Promise<{ fileName: string; started: boolean }>> = [];
   let animationFrame = 0;
   let recorder: MediaRecorder | null = null;
   let stopped = false;
@@ -400,12 +406,16 @@ export async function exportShortVideo(
       audio.preload = "auto";
       audio.src = getShortMediaProxyUrl(track.audioUrl);
       audio.load();
+      musicReadyPromises.push(
+        waitForMedia(audio, 2, `Music track "${track.fileName}"`),
+      );
       const source = audioContext.createMediaElementSource(audio);
       const gain = audioContext.createGain();
       source.connect(gain);
       gain.connect(audioDestination);
       audioSources.push(source);
       music.push({
+        fileName: track.fileName,
         audio,
         gain,
         startSeconds: track.startSeconds,
@@ -416,7 +426,11 @@ export async function exportShortVideo(
         fadeInSeconds: track.fadeInSeconds,
         fadeOutSeconds: track.fadeOutSeconds,
       });
-      musicStartPromises.push(audio.play().then(() => true).catch(() => false));
+      musicStartPromises.push(
+        audio.play()
+          .then(() => ({ fileName: track.fileName, started: true }))
+          .catch(() => ({ fileName: track.fileName, started: false })),
+      );
     }
     await waitForMedia(video, 2);
     await audioResume;
@@ -441,9 +455,11 @@ export async function exportShortVideo(
         images.set(overlay.id, await loadImage(getShortMediaProxyUrl(overlay.imageUrl)));
       }
     }
-    await Promise.all(music.map((track) => waitForMedia(track.audio, 1)));
-    if ((await Promise.all(musicStartPromises)).some((started) => !started)) {
-      throw new Error("The browser blocked music playback. Press Export again and allow media playback.");
+    await Promise.all(musicReadyPromises);
+    const failedMusicStart = (await Promise.all(musicStartPromises))
+      .find((result) => !result.started);
+    if (failedMusicStart) {
+      throw new Error(`The browser could not start music track "${failedMusicStart.fileName}". Press Export again and allow media playback.`);
     }
     music.forEach((track) => {
       track.audio.pause();
@@ -584,7 +600,9 @@ export async function exportShortVideo(
           track.gain.gain.value = track.volume * fadeIn * fadeOut * duck;
           if (Math.abs(track.audio.currentTime - elapsed) > 0.75) track.audio.currentTime = elapsed;
           if (track.audio.paused) {
-            void track.audio.play().catch(() => finish(new Error("A music track was blocked during export.")));
+            void track.audio.play().catch(() => finish(new Error(
+              `Music track "${track.fileName}" was blocked during export.`,
+            )));
           }
         }
 

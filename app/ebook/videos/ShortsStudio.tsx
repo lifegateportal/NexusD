@@ -2638,8 +2638,12 @@ export default function ShortsStudio() {
     }
   }
 
-  async function publishProject() {
+  async function publishProject(asNewShort = false) {
     if (!project) return;
+    if (asNewShort && (project.source.type !== "upload" || project.status !== "published")) {
+      setError("Only an already-published uploaded short can be published as a separate new short.");
+      return;
+    }
     const unlicensedTrack = project.musicTracks.find((track) =>
       track.provider === "jamendo" && !track.commercialLicenseConfirmed,
     );
@@ -2651,7 +2655,14 @@ export default function ShortsStudio() {
     setError("");
     setNotice("");
     try {
-      const publishable = await uploadSourceForPublish(project);
+      const uploadedProject = await uploadSourceForPublish(project);
+      const publishable = asNewShort
+        ? {
+          ...uploadedProject,
+          slug: `${createShortSlug(uploadedProject.title)}-${crypto.randomUUID().slice(0, 8)}`,
+          status: "draft" as const,
+        }
+        : uploadedProject;
       const body = await requestJson("/api/ebook/shorts", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -2662,7 +2673,9 @@ export default function ShortsStudio() {
       skipHistoryRef.current = true;
       setProject(parsed.data.project);
       await refreshShorts();
-      setNotice("Short published. Its public page is ready to share.");
+      setNotice(asNewShort
+        ? "Published as a new short. The previous uploaded short remains in the Library."
+        : "Short published. Its public page is ready to share.");
     } catch (publishError) {
       setError(publishError instanceof Error ? publishError.message : "Could not publish this short.");
     } finally {
@@ -3065,10 +3078,20 @@ export default function ShortsStudio() {
                 <button type="button" onClick={saveDraft} disabled={busy} className="flex min-h-12 min-w-0 flex-1 items-center justify-center whitespace-nowrap rounded-xl border border-slate-700 px-2 text-xs font-semibold text-white disabled:opacity-50 sm:px-4 sm:text-sm lg:flex-none">
                   <span className="sm:hidden">Save</span><span className="hidden sm:inline">Save draft</span>
                 </button>
-                <button type="button" onClick={publishProject} disabled={busy} className="flex min-h-12 min-w-0 flex-1 items-center justify-center whitespace-nowrap rounded-xl bg-emerald-400 px-2 text-xs font-bold text-slate-950 disabled:opacity-50 sm:px-4 sm:text-sm lg:flex-none">
+                <button type="button" onClick={() => publishProject()} disabled={busy} className="flex min-h-12 min-w-0 flex-1 items-center justify-center whitespace-nowrap rounded-xl bg-emerald-400 px-2 text-xs font-bold text-slate-950 disabled:opacity-50 sm:px-4 sm:text-sm lg:flex-none">
                   <span className="sm:hidden">{busy ? "…" : project.status === "published" ? "Update" : "Publish"}</span>
                   <span className="hidden sm:inline">{busy ? "Publishing…" : project.status === "published" ? "Update published short" : "Publish to Library"}</span>
                 </button>
+                {project.source.type === "upload" && project.status === "published" && (
+                  <button
+                    type="button"
+                    onClick={() => publishProject(true)}
+                    disabled={busy}
+                    className="flex min-h-12 min-w-0 flex-1 items-center justify-center whitespace-nowrap rounded-xl border border-emerald-700 px-2 text-xs font-semibold text-emerald-100 disabled:opacity-50 sm:px-4 sm:text-sm lg:flex-none"
+                  >
+                    {busy ? "Publishing…" : "Publish as new short"}
+                  </button>
+                )}
                 {project.status === "published" && (
                   <button type="button" onClick={unpublishProject} disabled={busy} className="flex min-h-12 min-w-0 flex-1 items-center justify-center whitespace-nowrap rounded-xl border border-amber-800 px-2 text-xs font-semibold text-amber-200 disabled:opacity-50 sm:px-4 sm:text-sm lg:flex-none">
                     Unpublish
