@@ -28,6 +28,7 @@ export default function LibraryYouTubePlayer({
   onClose,
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
+  const playerFrameRef = useRef<HTMLDivElement>(null);
   const playerHostRef = useRef<HTMLDivElement>(null);
   const playerRef = useRef<YouTubePlayerInstance | null>(null);
   const boundsRef = useRef({ startSeconds, endSeconds, initialTimeSeconds, editing });
@@ -66,7 +67,7 @@ export default function LibraryYouTubePlayer({
         playerVars: {
           autoplay: 0,
           cc_load_policy: 0,
-          controls: 1,
+          controls: 0,
           disablekb: 1,
           enablejsapi: 1,
           fs: 0,
@@ -142,6 +143,28 @@ export default function LibraryYouTubePlayer({
     document.addEventListener("fullscreenchange", updateFullscreen);
     return () => document.removeEventListener("fullscreenchange", updateFullscreen);
   }, []);
+
+  useEffect(() => {
+    const frame = playerFrameRef.current;
+    if (!ready || !frame || !playerRef.current) return;
+
+    const resizePlayer = () => {
+      const width = Math.round(frame.clientWidth);
+      const height = Math.round(frame.clientHeight);
+      if (width > 0 && height > 0) playerRef.current?.setSize(width, height);
+    };
+    const observer = new ResizeObserver(resizePlayer);
+    observer.observe(frame);
+    window.addEventListener("resize", resizePlayer);
+    window.visualViewport?.addEventListener("resize", resizePlayer);
+    resizePlayer();
+
+    return () => {
+      observer.disconnect();
+      window.removeEventListener("resize", resizePlayer);
+      window.visualViewport?.removeEventListener("resize", resizePlayer);
+    };
+  }, [ready]);
 
   useEffect(() => {
     if (controlsTimeoutRef.current !== undefined) {
@@ -228,6 +251,7 @@ export default function LibraryYouTubePlayer({
       onPointerMove={revealControls}
     >
       <div
+        ref={playerFrameRef}
         className="relative mx-auto aspect-video w-full overflow-hidden bg-black"
         style={isFullscreen
           ? {
