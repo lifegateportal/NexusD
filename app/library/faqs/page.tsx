@@ -2,8 +2,8 @@ import LibraryNav from "../LibraryNav";
 import LibraryFaqs from "./LibraryFaqs";
 
 export const metadata = {
-  title: "FAQs | Nexus Library",
-  description: "Browse published answers grounded in Nexus Library books and video transcripts.",
+  title: "FAQs | Pastor Josh Digital Library",
+  description: "Browse published answers grounded in Pastor Josh Digital Library books and video transcripts.",
 };
 
 export default function LibraryFaqsPage() {

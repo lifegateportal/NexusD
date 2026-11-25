@@ -620,7 +620,7 @@ export default function LibraryAssistant() {
           format,
           documentStyle: format === "docx" ? "teaching-outline-docx" : "teaching-outline",
           title: message.artifactTitle,
-          authorName: "Nexus Library",
+          authorName: "Pastor Josh Digital Library",
           content: documentContent,
         }),
       });

@@ -2,7 +2,7 @@ import LibraryNav from "../LibraryNav";
 import ShortsList from "./ShortsList";
 
 export const metadata = {
-  title: "Shorts | Nexus Library",
+  title: "Shorts | Pastor Josh Digital Library",
   description: "Watch published transcript-based video shorts.",
 };
 

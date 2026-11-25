@@ -2,7 +2,7 @@ import LibraryNav from "../LibraryNav";
 import LibraryAssistant from "./LibraryAssistant";
 
 export const metadata = {
-  title: "Ask the Library | Nexus Library",
+  title: "Ask the Library | Pastor Josh Digital Library",
   description: "Ask questions answered only from published books and video transcripts.",
 };
 
@@ -14,7 +14,7 @@ export default function LibraryAskPage() {
         <header className="shrink-0 border-b border-slate-800/70 py-2 lg:py-5">
           <div className="flex items-center justify-between gap-3">
             <div className="min-w-0">
-              <p className="hidden text-[10px] font-bold uppercase tracking-[0.25em] text-amber-400 lg:block">Nexus Library</p>
+              <p className="hidden text-[10px] font-bold uppercase tracking-[0.25em] text-amber-400 lg:block">PJDL</p>
               <h1 className="text-lg font-bold tracking-tight text-white lg:mt-1 lg:text-2xl">Ask the library</h1>
             </div>
             <p className="hidden text-right text-xs text-slate-400 sm:block lg:text-sm">

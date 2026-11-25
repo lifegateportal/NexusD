@@ -3,7 +3,7 @@
 import type { Metadata } from "next";
 
 export const metadata: Metadata = {
-  title: "Nexus Library",
+  title: "Pastor Josh Digital Library (PJDL)",
   description: "Published books from Nexus Director",
 };
 

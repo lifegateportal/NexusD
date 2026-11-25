@@ -35,11 +35,11 @@ async function getRequestOrigin(): Promise<string | undefined> {
 export async function generateMetadata({ params }: Props): Promise<Metadata> {
   const { slug } = await params;
   if (!ShortSlugSchema.safeParse(slug).success) {
-    return { title: "Video Short | Nexus Library" };
+    return { title: "Video Short | Pastor Josh Digital Library" };
   }
   const project = await readPublicShort(slug);
-  const title = project ? `${project.title} | Nexus Library` : "Video Short | Nexus Library";
-  const description = project?.description || "A transcript-captioned video short from Nexus Library.";
+  const title = project ? `${project.title} | Pastor Josh Digital Library` : "Video Short | Pastor Josh Digital Library";
+  const description = project?.description || "A transcript-captioned video short from Pastor Josh Digital Library.";
   const thumbnailUrl = project ? getShortThumbnailUrl(project) : undefined;
   const requestOrigin = project ? await getRequestOrigin() : undefined;
   const playerUrl = project && requestOrigin
@@ -94,7 +94,7 @@ export default async function LibraryShortPage({ params }: Props) {
         </Link>
         <article className="mx-auto mt-5 max-w-3xl">
           <header className="mb-5">
-            <p className="text-[10px] font-bold uppercase tracking-[0.25em] text-amber-400">Nexus Library · Short</p>
+            <p className="text-[10px] font-bold uppercase tracking-[0.25em] text-amber-400">PJDL · Short</p>
             <h1 className="mt-2 text-2xl font-bold tracking-tight text-white sm:text-3xl">{project.title}</h1>
             {project.description && <p className="mt-2 text-sm leading-relaxed text-slate-300">{project.description}</p>}
           </header>

@@ -304,7 +304,7 @@ export default function DirectorVideos() {
       {notice && <p role="status" className="rounded-xl border border-emerald-900 bg-emerald-950/30 p-4 text-sm text-emerald-200">{notice}</p>}
       <div>
         <h2 className="text-xl font-bold text-white">Director queue</h2>
-        <p className="mt-1 text-sm text-slate-400">Unapproved fetched entries stay private. Only videos you approve appear in the public Nexus Library.</p>
+        <p className="mt-1 text-sm text-slate-400">Unapproved fetched entries stay private. Only videos you approve appear in the public PJDL.</p>
         <label className="mt-4 block sm:max-w-md">
           <span className="sr-only">Search Director videos</span>
           <input

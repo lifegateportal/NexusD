@@ -14,16 +14,16 @@ type Props = { params: Promise<{ slug: string }> };
 
 export async function generateMetadata({ params }: Props): Promise<Metadata> {
   const { slug } = await params;
-  if (!TrailerSlugSchema.safeParse(slug).success) return { title: "Trailer | Nexus Library" };
+  if (!TrailerSlugSchema.safeParse(slug).success) return { title: "Trailer | Pastor Josh Digital Library" };
   const trailer = await readPublicTrailer(slug);
   const uploadedVideoUrl = trailer?.sourceType === "upload" ? trailer.videoUrl : undefined;
   return {
-    title: trailer ? `${trailer.title} | Nexus Library` : "Trailer | Nexus Library",
-    description: trailer ? `Watch ${trailer.title}, a promotional trailer from Nexus Library.` : "A promotional trailer from Nexus Library.",
+    title: trailer ? `${trailer.title} | Pastor Josh Digital Library` : "Trailer | Pastor Josh Digital Library",
+    description: trailer ? `Watch ${trailer.title}, a promotional trailer from Pastor Josh Digital Library.` : "A promotional trailer from Pastor Josh Digital Library.",
     ...(trailer && uploadedVideoUrl ? {
       openGraph: {
         title: trailer.title,
-        description: `Watch ${trailer.title}, a promotional trailer from Nexus Library.`,
+        description: `Watch ${trailer.title}, a promotional trailer from Pastor Josh Digital Library.`,
         type: "video.other" as const,
         videos: [{
           url: uploadedVideoUrl,
@@ -56,7 +56,7 @@ export default async function LibraryTrailerPage({ params }: Props) {
         </Link>
         <article className="mx-auto mt-5 max-w-3xl">
           <header className="mb-5">
-            <p className="text-[10px] font-bold uppercase tracking-[0.25em] text-amber-400">Nexus Library · Trailer</p>
+            <p className="text-[10px] font-bold uppercase tracking-[0.25em] text-amber-400">PJDL · Trailer</p>
             <h1 className="mt-2 text-2xl font-bold tracking-tight text-white sm:text-3xl">{trailer.title}</h1>
           </header>
           {embeddedProject ? (

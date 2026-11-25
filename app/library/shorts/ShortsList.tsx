@@ -124,7 +124,7 @@ export default function ShortsList() {
   return (
     <div className="space-y-6">
       <header className="border-b border-slate-800 pb-6">
-        <p className="text-[10px] font-bold uppercase tracking-[0.25em] text-amber-400">Nexus Library</p>
+        <p className="text-[10px] font-bold uppercase tracking-[0.25em] text-amber-400">PJDL</p>
         <h1 className="mt-2 text-3xl font-bold tracking-tight text-white">Video Shorts</h1>
         <p className="mt-2 max-w-2xl text-sm leading-relaxed text-slate-400">
           Short clips with transcript-synced captions, published from Nexus Director.

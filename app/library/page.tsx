@@ -4,6 +4,7 @@ import type { PublishedBookEntry } from "@/lib/schemas/published-book";
 import LibraryGrid from "./LibraryGrid";
 import MyListPanel from "./MyListPanel";
 import LibraryNav from "./LibraryNav";
+import LibraryHero from "./LibraryHero";
 
 export const revalidate = 60;
 
@@ -233,33 +234,12 @@ export default async function LibraryPage() {
       {/* ── Sticky nav ──────────────────────────────────────────────────────── */}
       <header className="sticky top-0 z-10 border-b border-slate-800/60 bg-slate-950/90 px-5 py-4 backdrop-blur-xl">
         <div className="mx-auto max-w-6xl">
-          <p className="text-[10px] font-semibold uppercase tracking-[0.22em] text-slate-600">Nexus</p>
-          <h1 className="text-xl font-bold tracking-tight text-slate-100">Library</h1>
+          <p className="text-[10px] font-semibold uppercase tracking-[0.22em] text-slate-600">PJDL</p>
+          <h1 className="text-xl font-bold tracking-tight text-slate-100">Pastor Josh Digital Library</h1>
         </div>
       </header>
 
-      <section className="mx-auto grid max-w-6xl gap-5 px-5 py-8 lg:grid-cols-[1fr_auto] lg:items-end lg:py-12">
-        <div>
-          <p className="mb-3 text-[10px] font-bold uppercase tracking-[0.25em] text-amber-400">Read · Listen · Discover</p>
-          <h2 className="max-w-3xl text-3xl font-bold leading-tight tracking-tight text-white sm:text-4xl" style={{ fontFamily: "Georgia, serif" }}>
-            Your ideas, ready to be explored.
-          </h2>
-          <p className="mt-3 max-w-2xl text-sm leading-relaxed text-slate-400 sm:text-base">
-            Browse the books, ask questions answered from the author's words, or jump straight to the right moment in a video.
-          </p>
-        </div>
-        <div className="flex flex-wrap gap-3">
-          <Link href="/library/ask" className="flex min-h-12 items-center rounded-xl bg-amber-500 px-5 text-sm font-bold text-slate-950">
-            Ask the library
-          </Link>
-          <Link href="/library/videos" className="flex min-h-12 items-center rounded-xl border border-slate-700 px-5 text-sm font-semibold text-slate-200">
-            Browse videos
-          </Link>
-          <Link href="/library/faqs" className="flex min-h-12 items-center rounded-xl border border-slate-700 px-5 text-sm font-semibold text-slate-200">
-            Browse FAQs
-          </Link>
-        </div>
-      </section>
+      <LibraryHero />
 
       {!configured ? (
         <div className="flex min-h-[55vh] flex-col items-center justify-center px-5 text-center">

@@ -2,7 +2,7 @@ import LibraryNav from "../LibraryNav";
 import LibraryVideoManager from "./LibraryVideoManager";
 
 export const metadata = {
-  title: "Video Library | Nexus Library",
+  title: "Video Library | Pastor Josh Digital Library",
   description: "Watch approved YouTube videos and find answers in their timestamped transcripts.",
 };
 

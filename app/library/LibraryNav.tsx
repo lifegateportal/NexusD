@@ -14,10 +14,10 @@ export default function LibraryNav() {
     <>
       <aside className="fixed inset-y-0 left-0 z-30 hidden w-64 flex-col border-r border-slate-800/70 bg-slate-950 px-5 py-8 lg:flex">
         <Link href="/library" className="mb-10 block">
-          <span className="text-[10px] font-bold uppercase tracking-[0.3em] text-amber-400">Nexus</span>
-          <span className="mt-1 block text-xl font-bold text-white">Library</span>
+          <span className="text-[10px] font-bold uppercase tracking-[0.3em] text-amber-400">PJDL</span>
+          <span className="mt-1 block text-xl font-bold leading-tight text-white">Pastor Josh Digital Library</span>
         </Link>
-        <nav aria-label="Library" className="space-y-2">
+        <nav aria-label="Pastor Josh Digital Library navigation" className="space-y-2">
           {links.map((link) => (
             <Link
               key={link.href}
@@ -35,7 +35,7 @@ export default function LibraryNav() {
       </aside>
 
       <nav
-        aria-label="Library"
+        aria-label="Pastor Josh Digital Library navigation"
         className="fixed inset-x-0 bottom-0 z-30 flex min-h-16 items-stretch justify-start overflow-x-auto border-t border-slate-800/80 bg-slate-950/95 px-2 pb-[max(env(safe-area-inset-bottom),_0.25rem)] backdrop-blur-xl [scrollbar-width:none] [&::-webkit-scrollbar]:hidden lg:hidden"
       >
         {links.map((link) => (

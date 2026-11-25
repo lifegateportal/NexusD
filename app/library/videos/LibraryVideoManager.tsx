@@ -88,13 +88,13 @@ export default function LibraryVideoManager() {
       <section className="space-y-4">
         <div>
           <p className="text-[10px] font-bold uppercase tracking-[0.25em] text-amber-300">Published videos only</p>
-          <h2 className="mt-1 text-xl font-bold text-white">Nexus Library videos</h2>
+          <h2 className="mt-1 text-xl font-bold text-white">PJDL videos</h2>
         </div>
       {loading ? (
         <p className="py-12 text-center text-sm text-slate-400">Loading the approved video library…</p>
       ) : filteredVideos.length === 0 ? (
         <p className="rounded-2xl border border-dashed border-slate-700 p-10 text-center text-sm text-slate-400">
-          {videos.length ? "No published videos match those filters." : "No videos have been published to the Nexus Library yet."}
+          {videos.length ? "No published videos match those filters." : "No videos have been published to PJDL yet."}
         </p>
       ) : (
         <ul className="grid gap-5 sm:grid-cols-2 xl:grid-cols-3">

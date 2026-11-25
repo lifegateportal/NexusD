@@ -598,7 +598,7 @@ export async function POST(request: NextRequest) {
       }
       const video = await loadPublishedVideo(base, input.videoId);
       if (!video) {
-        return NextResponse.json({ error: "That video is not published in the Nexus Library." }, { status: 404 });
+        return NextResponse.json({ error: "That video is not published in PJDL." }, { status: 404 });
       }
       const sermonBounds = await resolveSermonBounds(video);
       if (!sermonBounds) {

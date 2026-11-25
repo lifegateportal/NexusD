@@ -5,8 +5,8 @@ import { listPublicTrailers } from "@/lib/trailer-store";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const metadata = {
-  title: "Trailers | Nexus Library",
-  description: "Watch published promotional trailers from Nexus Library.",
+  title: "Trailers | Pastor Josh Digital Library",
+  description: "Watch published promotional trailers from Pastor Josh Digital Library.",
 };
 
 export default async function LibraryTrailersPage() {

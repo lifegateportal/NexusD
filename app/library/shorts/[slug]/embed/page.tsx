@@ -12,14 +12,14 @@ type Props = { params: Promise<{ slug: string }> };
 export async function generateMetadata({ params }: Props): Promise<Metadata> {
   const { slug } = await params;
   if (!ShortSlugSchema.safeParse(slug).success) {
-    return { title: "Video Short Player | Nexus Library", robots: { index: false, follow: false } };
+    return { title: "Video Short Player | Pastor Josh Digital Library", robots: { index: false, follow: false } };
   }
   const project = await readPublicShort(slug);
   if (!project) {
-    return { title: "Video Short Player | Nexus Library", robots: { index: false, follow: false } };
+    return { title: "Video Short Player | Pastor Josh Digital Library", robots: { index: false, follow: false } };
   }
-  const title = `${project.title} | Nexus Library`;
-  const description = project.description || "A transcript-captioned video short from Nexus Library.";
+  const title = `${project.title} | Pastor Josh Digital Library`;
+  const description = project.description || "A transcript-captioned video short from Pastor Josh Digital Library.";
   const thumbnailUrl = getShortThumbnailUrl(project);
   return {
     title,
