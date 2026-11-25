@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { FormEvent } from "react";
 import { z } from "zod";
+import LibraryYouTubePlayer from "@/app/components/LibraryYouTubePlayer";
 import { DirectorVideoCatalogSchema } from "@/lib/schemas/library-video";
 
 const ErrorSchema = z.object({ error: z.string() });
@@ -29,6 +30,7 @@ export default function DirectorVideos() {
   const [newSermonEnd, setNewSermonEnd] = useState("");
   const [queueSearch, setQueueSearch] = useState("");
   const [visibleVideoLimit, setVisibleVideoLimit] = useState(50);
+  const [previewVideoId, setPreviewVideoId] = useState<string | null>(null);
   const [transcriptDrafts, setTranscriptDrafts] = useState<Record<string, string>>({});
   const [playlistDrafts, setPlaylistDrafts] = useState<Record<string, string>>({});
   const [sermonStartDrafts, setSermonStartDrafts] = useState<Record<string, string>>({});
@@ -405,6 +407,37 @@ export default function DirectorVideos() {
                       </p>
                     )}
                     {video.error && <p className="mt-3 rounded-lg bg-rose-950/40 p-3 text-xs leading-relaxed text-rose-200">{video.error}</p>}
+                    <button
+                      type="button"
+                      onClick={() => setPreviewVideoId((current) => current === video.videoId ? null : video.videoId)}
+                      className="mt-3 min-h-12 rounded-xl border border-cyan-800 px-4 text-sm font-semibold text-cyan-200"
+                    >
+                      {previewVideoId === video.videoId ? "Hide preview" : "Preview and set sermon times"}
+                    </button>
+                    {previewVideoId === video.videoId && (
+                      <div className="mt-3 rounded-xl border border-slate-800 bg-slate-950/70 p-3">
+                        <p className="mb-2 text-xs leading-relaxed text-slate-400">
+                          Drag the timeline to find the sermon start and end, then save the boundaries below.
+                        </p>
+                        <LibraryYouTubePlayer
+                          videoId={video.videoId}
+                          title={video.title}
+                          startSeconds={video.sermonStartSeconds ?? 0}
+                          endSeconds={video.sermonEndSeconds ?? 0}
+                          initialTimeSeconds={video.sermonStartSeconds ?? 0}
+                          editing
+                          onSetStart={(seconds) => setSermonStartDrafts((current) => ({
+                            ...current,
+                            [video.videoId]: formatTime(seconds),
+                          }))}
+                          onSetEnd={(seconds) => setSermonEndDrafts((current) => ({
+                            ...current,
+                            [video.videoId]: formatTime(seconds),
+                          }))}
+                          onClose={() => setPreviewVideoId(null)}
+                        />
+                      </div>
+                    )}
                     {video.segments.length > 0 && (
                       <details className="mt-4">
                         <summary className="flex min-h-12 cursor-pointer items-center text-sm font-semibold text-cyan-300">

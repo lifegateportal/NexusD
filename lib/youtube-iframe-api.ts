@@ -1,6 +1,7 @@
 export type YouTubePlayerInstance = {
   destroy(): void;
   getCurrentTime(): number;
+  getDuration(): number;
   getIframe(): HTMLIFrameElement;
   getPlayerState(): number;
   unloadModule(moduleName: string): void;
