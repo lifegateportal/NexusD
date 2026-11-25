@@ -8,7 +8,6 @@ export type YouTubePlayerInstance = {
   pauseVideo(): void;
   playVideo(): void;
   seekTo(seconds: number, allowSeekAhead: boolean): void;
-  setSize(width: number, height: number): void;
 };
 
 export type YouTubeApi = {

@@ -98,9 +98,11 @@ export default function LibraryYouTubePlayer({
             const iframe = player.getIframe();
             iframe.style.position = "absolute";
             iframe.style.inset = "0";
+            iframe.style.display = "block";
             iframe.style.width = "100%";
             iframe.style.height = "100%";
-            iframe.style.maxWidth = "none";
+            iframe.style.maxWidth = "100%";
+            iframe.style.maxHeight = "100%";
             iframe.style.border = "0";
             player.unloadModule("captions");
             const initialDuration = player.getDuration();
@@ -187,28 +189,6 @@ export default function LibraryYouTubePlayer({
       window.visualViewport?.removeEventListener("scroll", updateViewport);
     };
   }, []);
-
-  useEffect(() => {
-    const frame = playerFrameRef.current;
-    if (!ready || !frame || !playerRef.current) return;
-
-    const resizePlayer = () => {
-      const width = Math.round(frame.clientWidth);
-      const height = Math.round(frame.clientHeight);
-      if (width > 0 && height > 0) playerRef.current?.setSize(width, height);
-    };
-    const observer = new ResizeObserver(resizePlayer);
-    observer.observe(frame);
-    window.addEventListener("resize", resizePlayer);
-    window.visualViewport?.addEventListener("resize", resizePlayer);
-    resizePlayer();
-
-    return () => {
-      observer.disconnect();
-      window.removeEventListener("resize", resizePlayer);
-      window.visualViewport?.removeEventListener("resize", resizePlayer);
-    };
-  }, [ready]);
 
   useEffect(() => {
     if (controlsTimeoutRef.current !== undefined) {
