@@ -1,6 +1,7 @@
 import { env } from "@/lib/env";
 import {
   LibraryVideoCatalogSchema,
+  isSermonClip,
   type LibraryVideo,
 } from "@/lib/schemas/library-video";
 import {
@@ -46,7 +47,7 @@ export async function readLibraryWelcomeContent(): Promise<{
       { updatedAt: new Date().toISOString(), shorts: [] },
     ),
   ]);
-  return { books, sermons: videos.videos, shorts: shorts.shorts };
+  return { books, sermons: videos.videos.filter(isSermonClip), shorts: shorts.shorts };
 }
 
 export async function readPublishedBooks(): Promise<PublishedBookEntry[]> {

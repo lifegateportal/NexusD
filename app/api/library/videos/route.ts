@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { env } from "@/lib/env";
-import { LibraryVideoCatalogSchema } from "@/lib/schemas/library-video";
+import { isSermonClip, LibraryVideoCatalogSchema } from "@/lib/schemas/library-video";
 
 export const runtime = "nodejs";
 
@@ -21,7 +21,10 @@ export async function GET() {
     if (!parsed.success) {
       return NextResponse.json({ error: "The published video catalog is invalid." }, { status: 502 });
     }
-    return NextResponse.json(parsed.data);
+    return NextResponse.json({
+      ...parsed.data,
+      videos: parsed.data.videos.filter(isSermonClip),
+    });
   } catch (error) {
     return NextResponse.json(
       { error: error instanceof Error ? error.message : "Could not load the video library." },

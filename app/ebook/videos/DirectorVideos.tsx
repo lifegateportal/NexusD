@@ -26,6 +26,7 @@ export default function DirectorVideos() {
   const [newTranscript, setNewTranscript] = useState("");
   const [newPlaylists, setNewPlaylists] = useState("");
   const [newSermonStart, setNewSermonStart] = useState("");
+  const [newSermonEnd, setNewSermonEnd] = useState("");
   const [queueSearch, setQueueSearch] = useState("");
   const [visibleVideoLimit, setVisibleVideoLimit] = useState(50);
   const [transcriptDrafts, setTranscriptDrafts] = useState<Record<string, string>>({});
@@ -112,6 +113,9 @@ export default function DirectorVideos() {
           ...(newSermonStart.trim()
             ? { sermonStartSeconds: parseTimeInput(newSermonStart) }
             : {}),
+          ...(newSermonEnd.trim()
+            ? { sermonEndSeconds: parseTimeInput(newSermonEnd) }
+            : {}),
         }),
       });
       const body: unknown = await response.json();
@@ -124,6 +128,7 @@ export default function DirectorVideos() {
       setNewTranscript("");
       setNewPlaylists("");
       setNewSermonStart("");
+      setNewSermonEnd("");
       setNotice("Video added to the private Director queue. It is not public until approved.");
     } catch (requestError) {
       setError(requestError instanceof Error ? requestError.message : "Could not add this video.");
@@ -185,7 +190,12 @@ export default function DirectorVideos() {
     return videos.filter((video) => !needle || video.title.toLocaleLowerCase().includes(needle));
   }, [queueSearch, videos]);
   const visibleVideos = matchingVideos.slice(0, visibleVideoLimit);
-  const readyCount = videos.filter((video) => video.status === "ready").length;
+  const readyCount = videos.filter((video) =>
+    video.status === "ready"
+    && video.sermonStartSeconds !== undefined
+    && video.sermonEndSeconds !== undefined
+    && video.sermonEndSeconds > video.sermonStartSeconds,
+  ).length;
   const publishedCount = videos.filter((video) => video.status === "published").length;
 
   return (
@@ -258,12 +268,22 @@ export default function DirectorVideos() {
             />
           </label>
           <label className="block text-sm font-medium text-slate-300">
-            Sermon start (optional)
+            Sermon start (required before publishing)
             <input
               type="text"
               value={newSermonStart}
               onChange={(event) => setNewSermonStart(event.target.value)}
               placeholder="1:23:15 or 4995"
+              className="mt-2 min-h-12 w-full rounded-xl border border-slate-700 bg-slate-950 px-4 text-base text-white placeholder:text-slate-500 focus:border-cyan-400 focus:outline-none"
+            />
+          </label>
+          <label className="block text-sm font-medium text-slate-300">
+            Sermon end (required before publishing)
+            <input
+              type="text"
+              value={newSermonEnd}
+              onChange={(event) => setNewSermonEnd(event.target.value)}
+              placeholder="1:58:30 or 7110"
               className="mt-2 min-h-12 w-full rounded-xl border border-slate-700 bg-slate-950 px-4 text-base text-white placeholder:text-slate-500 focus:border-cyan-400 focus:outline-none"
             />
           </label>
@@ -329,6 +349,9 @@ export default function DirectorVideos() {
         <ul className="space-y-4">
           {visibleVideos.map((video) => {
             const busy = busyVideoId === video.videoId;
+            const hasSermonBounds = video.sermonStartSeconds !== undefined
+              && video.sermonEndSeconds !== undefined
+              && video.sermonEndSeconds > video.sermonStartSeconds;
             return (
               <li key={video.videoId} className="rounded-2xl border border-slate-800 bg-slate-900/30 p-4 sm:p-5">
                 <div className="flex flex-col gap-4 sm:flex-row sm:items-start">
@@ -376,6 +399,11 @@ export default function DirectorVideos() {
                         {video.sermonEndSeconds === undefined ? "not set" : formatTime(video.sermonEndSeconds)}
                       </p>
                     )}
+                    {!hasSermonBounds && (
+                      <p className="mt-2 text-xs text-amber-200">
+                        Set and save both sermon boundaries before this video can appear in the Library.
+                      </p>
+                    )}
                     {video.error && <p className="mt-3 rounded-lg bg-rose-950/40 p-3 text-xs leading-relaxed text-rose-200">{video.error}</p>}
                     {video.segments.length > 0 && (
                       <details className="mt-4">
@@ -399,7 +427,7 @@ export default function DirectorVideos() {
                             <button
                               type="button"
                               onClick={() => runAction("approve", video)}
-                              disabled={discovering || busyVideoId !== null}
+                              disabled={discovering || busyVideoId !== null || !hasSermonBounds}
                               className="min-h-12 rounded-xl bg-emerald-400 px-4 text-sm font-bold text-slate-950 disabled:opacity-50"
                             >
                               Approve for Library
@@ -438,7 +466,7 @@ export default function DirectorVideos() {
                         Edit playlist and sermon boundaries
                       </summary>
                       <p className="mt-2 text-xs leading-relaxed text-slate-400">
-                        When published, the Library player starts at the sermon start and stops at the sermon end. Leave either blank to use the video’s beginning or end.
+                        Save both sermon boundaries to publish this video. The Library only shows the section between these timestamps.
                       </p>
                       <div className="grid gap-3 sm:grid-cols-2">
                         <label className="block text-sm font-medium text-slate-300">
@@ -455,7 +483,7 @@ export default function DirectorVideos() {
                           />
                         </label>
                         <label className="block text-sm font-medium text-slate-300">
-                          Sermon start
+                          Sermon start (required)
                           <input
                             type="text"
                             value={sermonStartDrafts[video.videoId] ?? (
@@ -465,12 +493,12 @@ export default function DirectorVideos() {
                               ...current,
                               [video.videoId]: event.target.value,
                             }))}
-                            placeholder="1:23:15 or 4995; blank if not applicable"
+                            placeholder="1:23:15 or 4995"
                             className="mt-2 min-h-12 w-full rounded-xl border border-slate-700 bg-slate-950 px-4 text-base text-white placeholder:text-slate-500 focus:border-cyan-400 focus:outline-none"
                           />
                         </label>
                         <label className="block text-sm font-medium text-slate-300">
-                          Sermon end
+                          Sermon end (required)
                           <input
                             type="text"
                             value={sermonEndDrafts[video.videoId] ?? (
@@ -480,7 +508,7 @@ export default function DirectorVideos() {
                               ...current,
                               [video.videoId]: event.target.value,
                             }))}
-                            placeholder="1:23:15 or 4995; blank if not applicable"
+                            placeholder="1:58:30 or 7110"
                             className="mt-2 min-h-12 w-full rounded-xl border border-slate-700 bg-slate-950 px-4 text-base text-white placeholder:text-slate-500 focus:border-cyan-400 focus:outline-none"
                           />
                         </label>

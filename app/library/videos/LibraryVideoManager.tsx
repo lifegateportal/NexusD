@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { z } from "zod";
-import { LibraryVideoCatalogSchema } from "@/lib/schemas/library-video";
+import { isSermonClip, LibraryVideoCatalogSchema } from "@/lib/schemas/library-video";
 
 type Video = z.infer<typeof LibraryVideoCatalogSchema>["videos"][number];
 const ErrorSchema = z.object({ error: z.string() });
@@ -26,7 +26,14 @@ export default function LibraryVideoManager() {
         }
         const parsed = LibraryVideoCatalogSchema.safeParse(body);
         if (!parsed.success) throw new Error("The video catalog has an invalid format.");
-        if (active) setVideos(parsed.data.videos);
+        if (active) {
+          setVideos(parsed.data.videos);
+          const requestedVideoId = new URLSearchParams(window.location.search).get("video");
+          const requestedVideo = parsed.data.videos.find((video) => video.videoId === requestedVideoId);
+          if (requestedVideo && isSermonClip(requestedVideo)) {
+            setActiveVideoId(requestedVideo.videoId);
+          }
+        }
       })
       .catch((loadError: unknown) => {
         if (active) setError(loadError instanceof Error ? loadError.message : "Could not load videos.");
@@ -100,8 +107,7 @@ export default function LibraryVideoManager() {
         <ul className="grid gap-5 sm:grid-cols-2 xl:grid-cols-3">
           {filteredVideos.map((video) => {
             const isPlaying = activeVideoId === video.videoId;
-            const hasSermonBoundary = video.sermonStartSeconds !== undefined
-              || video.sermonEndSeconds !== undefined;
+            const hasSermonBoundary = isSermonClip(video);
             const playerParams = new URLSearchParams({ autoplay: "1", rel: "0" });
             if (hasSermonBoundary) {
               playerParams.set("controls", "0");

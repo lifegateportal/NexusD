@@ -62,3 +62,11 @@ export type LibraryVideo = z.infer<typeof LibraryVideoSchema>;
 export type LibraryVideoSegment = z.infer<typeof LibraryVideoSegmentSchema>;
 export type LibraryVideoRecord = z.infer<typeof LibraryVideoRecordSchema>;
 export type DirectorVideo = z.infer<typeof DirectorVideoSchema>;
+
+export function isSermonClip(
+  video: Pick<LibraryVideo, "sermonStartSeconds" | "sermonEndSeconds">,
+): boolean {
+  return video.sermonStartSeconds !== undefined
+    && video.sermonEndSeconds !== undefined
+    && video.sermonEndSeconds > video.sermonStartSeconds;
+}

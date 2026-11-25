@@ -394,6 +394,16 @@ export async function POST(request: NextRequest) {
     if (!video) return NextResponse.json({ error: "Video not found in the Director catalog." }, { status: 404 });
 
     if (action.action === "approve") {
+      if (
+        video.sermonStartSeconds === undefined
+        || video.sermonEndSeconds === undefined
+        || video.sermonEndSeconds <= video.sermonStartSeconds
+      ) {
+        return NextResponse.json(
+          { error: "Set and save both sermon start and end times before publishing this video." },
+          { status: 409 },
+        );
+      }
       if (video.segments.length === 0) {
         return NextResponse.json({ error: "Paste and save a timestamped transcript before approval." }, { status: 409 });
       }

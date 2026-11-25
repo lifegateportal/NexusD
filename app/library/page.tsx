@@ -54,10 +54,8 @@ function chooseBooks(books: PublishedBookEntry[], slugs: string[]) {
 
 function SermonCard({ video, light, accentColor }: { video: LibraryVideo; light: boolean; accentColor: LibraryBranding["accentColor"] }) {
   return (
-    <a
-      href={video.youtubeUrl}
-      target="_blank"
-      rel="noreferrer"
+    <Link
+      href={`/library/videos?video=${encodeURIComponent(video.videoId)}`}
       className={`group w-[78vw] max-w-[320px] shrink-0 snap-start overflow-hidden rounded-2xl border transition-colors ${light ? "border-slate-200 bg-white hover:border-slate-300" : "border-slate-800 bg-slate-900/70 hover:border-slate-700"}`}
     >
       <div className="relative aspect-video overflow-hidden bg-slate-900">
@@ -78,7 +76,7 @@ function SermonCard({ video, light, accentColor }: { video: LibraryVideo; light:
           {video.playlists.length ? video.playlists.join(" · ") : "Sermon"}
         </p>
       </div>
-    </a>
+    </Link>
   );
 }
 
