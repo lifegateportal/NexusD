@@ -105,7 +105,7 @@ export default function LibraryVideoManager() {
           {videos.length ? "No published videos match those filters." : "No videos have been published to PJDL yet."}
         </p>
       ) : (
-        <ul className="grid gap-5 sm:grid-cols-2 xl:grid-cols-3">
+        <ul className="grid items-start gap-5 sm:grid-cols-2 xl:grid-cols-3">
           {filteredVideos.map((video) => {
             const isPlaying = activeVideoId === video.videoId;
             const hasSermonBoundary = isSermonClip(video);

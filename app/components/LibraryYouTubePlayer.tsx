@@ -32,11 +32,13 @@ export default function LibraryYouTubePlayer({
   const playerRef = useRef<YouTubePlayerInstance | null>(null);
   const boundsRef = useRef({ startSeconds, endSeconds, initialTimeSeconds, editing });
   const seekingRef = useRef(false);
+  const controlsTimeoutRef = useRef<number | undefined>(undefined);
   const [ready, setReady] = useState(false);
   const [playing, setPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(startSeconds);
   const [duration, setDuration] = useState(0);
   const [isFullscreen, setIsFullscreen] = useState(false);
+  const [controlsVisible, setControlsVisible] = useState(true);
   const [error, setError] = useState("");
 
   boundsRef.current = { startSeconds, endSeconds, initialTimeSeconds, editing };
@@ -141,6 +143,33 @@ export default function LibraryYouTubePlayer({
     return () => document.removeEventListener("fullscreenchange", updateFullscreen);
   }, []);
 
+  useEffect(() => {
+    if (controlsTimeoutRef.current !== undefined) {
+      window.clearTimeout(controlsTimeoutRef.current);
+      controlsTimeoutRef.current = undefined;
+    }
+    setControlsVisible(true);
+    if (!isFullscreen || !playing) return;
+    controlsTimeoutRef.current = window.setTimeout(() => setControlsVisible(false), 2500);
+    return () => {
+      if (controlsTimeoutRef.current !== undefined) {
+        window.clearTimeout(controlsTimeoutRef.current);
+        controlsTimeoutRef.current = undefined;
+      }
+    };
+  }, [isFullscreen, playing]);
+
+  function revealControls() {
+    setControlsVisible(true);
+    if (controlsTimeoutRef.current !== undefined) {
+      window.clearTimeout(controlsTimeoutRef.current);
+      controlsTimeoutRef.current = undefined;
+    }
+    if (isFullscreen && playing) {
+      controlsTimeoutRef.current = window.setTimeout(() => setControlsVisible(false), 2500);
+    }
+  }
+
   function seek(seconds: number) {
     const bounded = Math.max(timelineStart, Math.min(seekEnd, seconds));
     setCurrentTime(bounded);
@@ -187,19 +216,23 @@ export default function LibraryYouTubePlayer({
     setIsFullscreen(true);
   }
 
+  const controlsHidden = isFullscreen && !controlsVisible;
+
   return (
     <div
       ref={containerRef}
       className={isFullscreen
         ? "fixed inset-0 z-[100] flex h-dvh w-full flex-col justify-center bg-black p-3"
         : "w-full"}
+      onPointerDown={revealControls}
+      onPointerMove={revealControls}
     >
       <div
         className="relative mx-auto aspect-video w-full overflow-hidden bg-black"
         style={isFullscreen
           ? {
-            width: "min(100%, calc((100dvh - 9rem) * 16 / 9))",
-            maxHeight: "calc(100dvh - 9rem)",
+            width: `min(100%, calc((100dvh - ${controlsVisible ? "9rem" : "2rem"}) * 16 / 9))`,
+            maxHeight: `calc(100dvh - ${controlsVisible ? "9rem" : "2rem"})`,
           }
           : undefined}
       >
@@ -214,8 +247,40 @@ export default function LibraryYouTubePlayer({
             {error}
           </p>
         )}
+        <div className="absolute right-2 top-2 flex gap-2">
+          <button
+            type="button"
+            onClick={() => void toggleFullscreen()}
+            disabled={!ready}
+            aria-label={isFullscreen ? "Exit fullscreen" : "Expand video"}
+            className={`flex min-h-12 min-w-12 items-center justify-center rounded-lg bg-black/80 px-3 text-xs font-semibold text-white transition-opacity duration-300 disabled:opacity-40 ${controlsHidden ? "pointer-events-none opacity-0" : "opacity-100"}`}
+          >
+            {isFullscreen ? "Exit" : "Expand"}
+          </button>
+          {onClose && (
+            <button
+              type="button"
+              onClick={onClose}
+              aria-label={`Close ${title}`}
+              className={`flex min-h-12 min-w-12 items-center justify-center rounded-lg bg-black/80 px-3 text-xs font-semibold text-white transition-opacity duration-300 ${controlsHidden ? "pointer-events-none opacity-0" : "opacity-100"}`}
+            >
+              Close
+            </button>
+          )}
+        </div>
+        {controlsHidden && (
+          <button
+            type="button"
+            onClick={revealControls}
+            aria-label="Show video controls"
+            className="absolute inset-0 z-10 bg-transparent"
+          />
+        )}
       </div>
-      <div className={`mx-auto mt-2 flex w-full max-w-5xl flex-wrap items-center gap-2 ${isFullscreen ? "text-white" : ""}`}>
+      <div className={controlsHidden
+        ? "hidden"
+        : "mx-auto mt-2 flex w-full max-w-5xl items-center gap-2"}
+      >
         <button
           type="button"
           onClick={togglePlayback}
@@ -245,24 +310,6 @@ export default function LibraryYouTubePlayer({
         <span className="min-w-[5.5rem] text-right text-xs tabular-nums text-slate-300">
           {formatTime(Math.max(0, currentTime - timelineStart))} / {formatTime(Math.max(0, timelineEnd - timelineStart))}
         </span>
-        <button
-          type="button"
-          onClick={() => void toggleFullscreen()}
-          disabled={!ready}
-          aria-label={isFullscreen ? "Exit fullscreen" : "Expand video"}
-          className="flex min-h-12 min-w-12 items-center justify-center rounded-lg border border-slate-700 px-3 text-xs font-semibold text-white disabled:opacity-40"
-        >
-          {isFullscreen ? "Exit" : "Expand"}
-        </button>
-        {onClose && (
-          <button
-            type="button"
-            onClick={onClose}
-            className="flex min-h-12 min-w-12 items-center justify-center rounded-lg border border-slate-700 px-3 text-xs font-semibold text-white"
-          >
-            Close
-          </button>
-        )}
       </div>
       {editing && (onSetStart || onSetEnd) && (
         <div className="mx-auto mt-2 flex w-full max-w-5xl flex-wrap gap-2">
