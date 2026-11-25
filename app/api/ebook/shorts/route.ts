@@ -73,7 +73,6 @@ export async function POST(request: NextRequest) {
         slug: `${createShortSlug(video.title)}-${crypto.randomUUID().slice(0, 8)}`,
         title: video.title.slice(0, 120),
         description: "",
-        thumbnailUrl: `https://i.ytimg.com/vi/${video.videoId}/hqdefault.jpg`,
         sourceVideoId: video.videoId,
         source: { type: "youtube", videoId: video.videoId, videoTitle: video.title },
         sourceDurationSeconds: video.durationSeconds,

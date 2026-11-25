@@ -253,10 +253,17 @@ export default function LibraryYouTubePlayer({
       <div
         ref={playerFrameRef}
         className={isFullscreen
-          ? "absolute inset-0 h-full w-full overflow-hidden bg-black"
+          ? "absolute overflow-hidden bg-black"
           : "relative mx-auto aspect-video w-full overflow-hidden bg-black"}
         style={isFullscreen
-          ? { width: "100%", height: "100%", aspectRatio: "auto" }
+          ? {
+            left: "50%",
+            top: "50%",
+            width: "min(100vw, 177.7778dvh)",
+            height: "min(100dvh, 56.25vw)",
+            aspectRatio: "16 / 9",
+            transform: "translate(-50%, -50%)",
+          }
           : undefined}
       >
         <div ref={playerHostRef} className="absolute inset-0 h-full w-full" />
@@ -303,7 +310,7 @@ export default function LibraryYouTubePlayer({
       <div className={controlsHidden
         ? "hidden"
         : isFullscreen
-        ? "absolute inset-x-0 bottom-0 z-20 mx-auto flex w-full max-w-5xl items-center gap-2 bg-gradient-to-t from-black/95 via-black/75 to-transparent px-3 pb-[max(env(safe-area-inset-bottom),_1rem)] pt-6 lg:px-6 lg:pb-4"
+        ? "fixed inset-x-0 bottom-0 z-[102] mx-auto flex w-full max-w-5xl items-center gap-2 bg-gradient-to-t from-black/95 via-black/75 to-transparent px-3 pb-[max(env(safe-area-inset-bottom),_1rem)] pt-6 lg:px-6 lg:pb-4"
         : "mx-auto mt-2 flex w-full max-w-5xl items-center gap-2"}
       >
         <button
@@ -339,7 +346,7 @@ export default function LibraryYouTubePlayer({
       {editing && (onSetStart || onSetEnd) && (
         <div
           className={`mx-auto mt-2 flex w-full max-w-5xl flex-wrap gap-2 ${
-            isFullscreen ? "absolute inset-x-0 z-20 px-3 lg:px-6" : ""
+            isFullscreen ? "fixed inset-x-0 z-[101] px-3 lg:px-6" : ""
           }`}
           style={isFullscreen
             ? { bottom: "calc(4.5rem + env(safe-area-inset-bottom))" }

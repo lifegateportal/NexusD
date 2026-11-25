@@ -334,6 +334,7 @@ export default function ShortsStudio() {
   const [shorts, setShorts] = useState<ShortSummary[]>([]);
   const [selectedVideoId, setSelectedVideoId] = useState("");
   const [directYoutubeUrl, setDirectYoutubeUrl] = useState("");
+  const [shortSearch, setShortSearch] = useState("");
   const [project, setProject] = useState<ShortProject | null>(null);
   const [rangeDraft, setRangeDraft] = useState<{ startSeconds: number; endSeconds: number } | null>(null);
   const [localVideoUrl, setLocalVideoUrl] = useState<string | null>(null);
@@ -392,6 +393,13 @@ export default function ShortsStudio() {
     () => videos.find((video) => video.videoId === (project?.sourceVideoId ?? selectedVideoId)),
     [project?.sourceVideoId, selectedVideoId, videos],
   );
+  const visibleShorts = useMemo(() => {
+    const query = shortSearch.trim().toLowerCase();
+    if (!query) return shorts;
+    return shorts.filter((short) =>
+      `${short.title} ${short.sourceType} ${short.status}`.toLowerCase().includes(query),
+    );
+  }, [shortSearch, shorts]);
   const captureProjectSlug = project?.slug ?? "";
   const captureVideoId = project?.source.type === "youtube" ? project.source.videoId : "";
   const captureSourceKey = project
@@ -3070,29 +3078,43 @@ export default function ShortsStudio() {
         </section>
       )}
 
-      <div className="grid gap-6 xl:grid-cols-[minmax(16rem,0.8fr)_minmax(0,2fr)]">
-        <aside className="space-y-3">
+      <div className="grid items-start gap-4 lg:grid-cols-[minmax(14rem,0.7fr)_minmax(0,1.8fr)] lg:gap-5">
+        <aside className="flex min-w-0 flex-col gap-3">
           <div className="flex items-center justify-between gap-3">
-            <h3 className="text-lg font-semibold text-white">Your shorts</h3>
+            <h3 className="text-lg font-semibold text-white">Your shorts <span className="text-sm font-normal text-slate-400">({shorts.length})</span></h3>
           </div>
+          {shorts.length > 0 && (
+            <label className="block text-xs font-medium text-slate-300">
+              Find a saved short
+              <input
+                type="search"
+                value={shortSearch}
+                onChange={(event) => setShortSearch(event.target.value)}
+                placeholder="Search title, status, or source"
+                className="mt-1 min-h-12 w-full rounded-xl border border-slate-700 bg-slate-950 px-3 text-base text-white placeholder:text-slate-500 focus:border-cyan-400 focus:outline-none"
+              />
+            </label>
+          )}
           {shorts.length === 0 ? (
-            <p className="rounded-xl border border-dashed border-slate-700 p-5 text-sm text-slate-400">Saved drafts and published shorts will appear here.</p>
+            <p className="rounded-xl border border-dashed border-slate-700 p-4 text-sm text-slate-400">Saved drafts and published shorts will appear here.</p>
+          ) : visibleShorts.length === 0 ? (
+            <p className="rounded-xl border border-dashed border-slate-700 p-4 text-sm text-slate-400">No saved shorts match that search.</p>
           ) : (
-            <ul className="space-y-2">
-              {shorts.map((short) => (
+            <ul className="max-h-[42dvh] space-y-2 overflow-y-auto overscroll-contain pr-1 lg:max-h-[65dvh]" style={{ WebkitOverflowScrolling: "touch" }}>
+              {visibleShorts.map((short) => (
                 <li key={short.slug}>
                   <button
                     type="button"
                     onClick={() => openProject(short.slug)}
                     disabled={busy}
-                    className={`min-h-16 w-full rounded-xl border p-3 text-left ${
+                    className={`min-h-12 w-full rounded-xl border px-3 py-2 text-left ${
                       project?.slug === short.slug
                         ? "border-cyan-700 bg-cyan-950/30"
                         : "border-slate-800 bg-slate-900/40"
                     }`}
                   >
-                    <span className="block font-semibold text-white">{short.title}</span>
-                    <span className="mt-1 block text-xs text-slate-400">{short.status} · {short.sourceType}</span>
+                    <span className="block truncate text-sm font-semibold text-white">{short.title}</span>
+                    <span className="mt-0.5 block text-xs text-slate-400">{short.status} · {short.sourceType}</span>
                   </button>
                 </li>
               ))}
@@ -3101,7 +3123,7 @@ export default function ShortsStudio() {
         </aside>
 
         {!project ? (
-          <section className="flex min-h-72 items-center justify-center rounded-2xl border border-dashed border-slate-700 p-8 text-center text-sm text-slate-400">
+          <section className="flex min-h-36 items-center justify-center rounded-2xl border border-dashed border-slate-700 p-5 text-center text-sm text-slate-400">
             Choose a transcribed video to start editing, or open a saved short.
           </section>
         ) : (
