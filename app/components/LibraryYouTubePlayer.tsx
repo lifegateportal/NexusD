@@ -16,6 +16,13 @@ type Props = {
   onClose?: () => void;
 };
 
+type ViewportBounds = {
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+};
+
 export default function LibraryYouTubePlayer({
   videoId,
   title,
@@ -41,12 +48,19 @@ export default function LibraryYouTubePlayer({
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [controlsVisible, setControlsVisible] = useState(true);
   const [error, setError] = useState("");
+  const [viewportBounds, setViewportBounds] = useState<ViewportBounds | null>(null);
 
   boundsRef.current = { startSeconds, endSeconds, initialTimeSeconds, editing };
 
   const timelineStart = editing ? 0 : startSeconds;
   const timelineEnd = editing ? duration || endSeconds : endSeconds;
   const seekEnd = Math.max(timelineStart + 0.1, timelineEnd);
+  const fullscreenWidth = viewportBounds
+    ? Math.min(viewportBounds.width, viewportBounds.height * 16 / 9)
+    : 0;
+  const fullscreenHeight = viewportBounds
+    ? Math.min(viewportBounds.height, viewportBounds.width * 9 / 16)
+    : 0;
 
   useEffect(() => {
     setReady(false);
@@ -142,6 +156,36 @@ export default function LibraryYouTubePlayer({
     };
     document.addEventListener("fullscreenchange", updateFullscreen);
     return () => document.removeEventListener("fullscreenchange", updateFullscreen);
+  }, []);
+
+  useEffect(() => {
+    const updateViewport = () => {
+      const viewport = window.visualViewport;
+      const nextBounds = {
+        left: viewport?.offsetLeft ?? 0,
+        top: viewport?.offsetTop ?? 0,
+        width: viewport?.width ?? window.innerWidth,
+        height: viewport?.height ?? window.innerHeight,
+      };
+      setViewportBounds((current) =>
+        current
+        && current.left === nextBounds.left
+        && current.top === nextBounds.top
+        && current.width === nextBounds.width
+        && current.height === nextBounds.height
+          ? current
+          : nextBounds,
+      );
+    };
+    updateViewport();
+    window.addEventListener("resize", updateViewport);
+    window.visualViewport?.addEventListener("resize", updateViewport);
+    window.visualViewport?.addEventListener("scroll", updateViewport);
+    return () => {
+      window.removeEventListener("resize", updateViewport);
+      window.visualViewport?.removeEventListener("resize", updateViewport);
+      window.visualViewport?.removeEventListener("scroll", updateViewport);
+    };
   }, []);
 
   useEffect(() => {
@@ -247,6 +291,16 @@ export default function LibraryYouTubePlayer({
       className={isFullscreen
         ? "fixed inset-0 z-[100] h-dvh w-full overflow-hidden bg-black"
         : "w-full"}
+      style={isFullscreen && viewportBounds
+        ? {
+          left: `${viewportBounds.left}px`,
+          top: `${viewportBounds.top}px`,
+          right: "auto",
+          bottom: "auto",
+          width: `${viewportBounds.width}px`,
+          height: `${viewportBounds.height}px`,
+        }
+        : undefined}
       onPointerDown={revealControls}
       onPointerMove={revealControls}
     >
@@ -259,8 +313,8 @@ export default function LibraryYouTubePlayer({
           ? {
             left: "50%",
             top: "50%",
-            width: "min(100vw, 177.7778dvh)",
-            height: "min(100dvh, 56.25vw)",
+            width: `${fullscreenWidth}px`,
+            height: `${fullscreenHeight}px`,
             aspectRatio: "16 / 9",
             transform: "translate(-50%, -50%)",
           }
@@ -310,9 +364,9 @@ export default function LibraryYouTubePlayer({
       <div className={controlsHidden
         ? "hidden"
         : isFullscreen
-        ? "fixed bottom-0 left-1/2 z-[102] flex w-full max-w-none -translate-x-1/2 items-center gap-2 bg-gradient-to-t from-black/95 via-black/75 to-transparent px-3 pb-[max(env(safe-area-inset-bottom),_1rem)] pt-6 lg:px-6 lg:pb-4"
+        ? "absolute bottom-0 left-1/2 z-[102] flex w-full max-w-none -translate-x-1/2 items-center gap-2 bg-gradient-to-t from-black/95 via-black/75 to-transparent px-3 pb-[max(env(safe-area-inset-bottom),_1rem)] pt-6 lg:px-6 lg:pb-4"
         : "mx-auto mt-2 flex w-full max-w-5xl items-center gap-2"}
-        style={isFullscreen ? { width: "min(100vw, 177.7778dvh)" } : undefined}
+        style={isFullscreen ? { width: `${fullscreenWidth}px` } : undefined}
       >
         <button
           type="button"
@@ -347,10 +401,13 @@ export default function LibraryYouTubePlayer({
       {editing && (onSetStart || onSetEnd) && (
         <div
           className={`mx-auto mt-2 flex w-full max-w-5xl flex-wrap gap-2 ${
-            isFullscreen ? "fixed inset-x-0 z-[101] px-3 lg:px-6" : ""
+            isFullscreen ? "absolute left-1/2 z-[101] w-full max-w-none -translate-x-1/2 px-3 lg:px-6" : ""
           }`}
           style={isFullscreen
-            ? { bottom: "calc(4.5rem + env(safe-area-inset-bottom))" }
+            ? {
+              width: `${fullscreenWidth}px`,
+              bottom: "calc(4.5rem + env(safe-area-inset-bottom))",
+            }
             : undefined}
         >
           {onSetStart && (
