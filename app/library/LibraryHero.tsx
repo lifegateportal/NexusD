@@ -108,19 +108,6 @@ function DesktopLibraryHero({ branding }: { branding: LibraryBranding }) {
     );
   }
 
-  export default function LibraryHero({ branding }: { branding: LibraryBranding }) {
-    return (
-      <>
-        <div className="lg:hidden">
-          <MobileCinematicHero branding={branding} />
-        </div>
-        <div className="hidden lg:block">
-          <DesktopLibraryHero branding={branding} />
-        </div>
-      </>
-    );
-  }
-
   if (branding.heroLayout === "simple") {
     if (branding.simpleCoverLayer === "foreground") {
       return (
@@ -175,5 +162,18 @@ function DesktopLibraryHero({ branding }: { branding: LibraryBranding }) {
         </div>
       </div>
     </section>
+  );
+}
+
+export default function LibraryHero({ branding }: { branding: LibraryBranding }) {
+  return (
+    <>
+      <div className="lg:hidden">
+        <MobileCinematicHero branding={branding} />
+      </div>
+      <div className="hidden lg:block">
+        <DesktopLibraryHero branding={branding} />
+      </div>
+    </>
   );
 }
