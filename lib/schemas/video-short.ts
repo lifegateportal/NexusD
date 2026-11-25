@@ -27,6 +27,8 @@ export const ShortFrameSlotSchema = z.object({
   endSeconds: z.number().finite().min(0),
   aspectRatio: ShortAspectRatioSchema,
   fit: z.enum(["cover", "contain"]),
+  backgroundMode: z.enum(["blur", "color"]).default("blur"),
+  backgroundColor: z.string().regex(/^#[0-9A-Fa-f]{6}$/).default("#000000"),
   keyframes: z.array(ShortCropKeyframeSchema).max(100).default([]),
 }).strict().refine((slot) => slot.endSeconds > slot.startSeconds, {
   message: "Frame slot end must be after its start.",

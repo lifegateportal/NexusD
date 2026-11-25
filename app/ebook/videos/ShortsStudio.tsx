@@ -2407,6 +2407,17 @@ export default function ShortsStudio() {
     setError("");
   }
 
+  function updateFrameBackground(
+    patch: Partial<Pick<ShortFrameSlot, "backgroundMode" | "backgroundColor">>,
+  ) {
+    if (!project) return;
+    updateProject({
+      frameSlots: project.frameSlots.map((slot, index) =>
+        index === activeSlotIndex ? { ...slot, ...patch } : slot,
+      ),
+    });
+  }
+
   async function addAiSuggestions() {
     const uploadProject = project?.source.type === "upload"
       && project.sourceTranscript?.length
@@ -4130,6 +4141,38 @@ export default function ShortsStudio() {
                         Fit changes are saved at the playhead and remain until another framing change.
                       </p>
                     </div>
+                    {framePosition.fit === "contain" && (
+                      <div className="grid gap-3 rounded-lg border border-slate-800 bg-slate-950/60 p-3 sm:grid-cols-2 sm:items-end">
+                        <label className="block text-sm text-slate-300">
+                          Background fill
+                          <select
+                            value={activeSlot.backgroundMode}
+                            onChange={(event) => updateFrameBackground({
+                              backgroundMode: event.target.value as ShortFrameSlot["backgroundMode"],
+                            })}
+                            className="mt-2 min-h-12 w-full rounded-lg border border-slate-700 bg-slate-900 px-3 text-base text-white"
+                          >
+                            <option value="blur">Blurred video background</option>
+                            <option value="color">Solid color</option>
+                          </select>
+                        </label>
+                        {activeSlot.backgroundMode === "color" && (
+                          <label className="flex min-h-12 items-center justify-between gap-3 text-sm text-slate-300">
+                            Background color
+                            <span className="flex items-center gap-2">
+                              <input
+                                type="color"
+                                value={activeSlot.backgroundColor}
+                                onChange={(event) => updateFrameBackground({ backgroundColor: event.target.value })}
+                                className="min-h-12 min-w-12 cursor-pointer rounded-lg border border-slate-700 bg-slate-900 p-1"
+                                aria-label="Choose background color"
+                              />
+                              <span className="font-mono text-xs text-slate-400">{activeSlot.backgroundColor}</span>
+                            </span>
+                          </label>
+                        )}
+                      </div>
+                    )}
                     {(["x", "y", "zoom"] as const).map((axis) => (
                       <label key={axis} className="block text-sm text-slate-300">
                         {axis === "x" ? "Horizontal position" : axis === "y" ? "Vertical position" : "Scale video in frame"} · {axis === "zoom" ? `${framePosition[axis].toFixed(2)}×` : `${Math.round(framePosition[axis])}%`}

@@ -171,6 +171,39 @@ function drawSource(
   context.restore();
 }
 
+function drawFrameBackground(
+  context: CanvasRenderingContext2D,
+  video: HTMLVideoElement,
+  box: { x: number; y: number; width: number; height: number },
+  slot: ShortFrameSlot,
+  fit: "cover" | "contain",
+): void {
+  if (fit !== "contain") return;
+  if (slot.backgroundMode === "color") {
+    context.fillStyle = slot.backgroundColor;
+    context.fillRect(box.x, box.y, box.width, box.height);
+    return;
+  }
+
+  const blur = Math.max(12, Math.round(Math.min(box.width, box.height) * 0.035));
+  const bleed = blur * 2;
+  context.save();
+  context.beginPath();
+  context.rect(box.x, box.y, box.width, box.height);
+  context.clip();
+  context.filter = `blur(${blur}px) brightness(0.72)`;
+  drawFittedMedia(
+    context,
+    video,
+    box.x - bleed,
+    box.y - bleed,
+    box.width + bleed * 2,
+    box.height + bleed * 2,
+    "cover",
+  );
+  context.restore();
+}
+
 function drawCaption(
   context: CanvasRenderingContext2D,
   text: string,
@@ -558,6 +591,7 @@ export async function exportShortVideo(
         ) ?? project.frameSlots[project.frameSlots.length - 1];
         const box = frameBox(canvas.width, canvas.height, slot.aspectRatio);
         const position = getFramePosition(slot, timeSeconds);
+        drawFrameBackground(context, video, box, slot, position.fit ?? slot.fit);
         drawSource(context, video, box, position, slot);
 
         for (const clip of broll) {

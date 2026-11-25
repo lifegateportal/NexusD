@@ -11,6 +11,7 @@ import {
   getTranscriptCutAtTime,
 } from "@/lib/short-transcript-edits";
 import { getShortMediaProxyUrl } from "@/lib/short-media-proxy";
+import { getShortThumbnailUrl } from "@/lib/short-video-utils";
 
 type Props = {
   project: ShortProject;
@@ -80,6 +81,7 @@ export default function ShortsPlayer({
   captureMode = false,
 }: Props) {
   const videoRef = useRef<HTMLVideoElement>(null);
+  const backgroundVideoRef = useRef<HTMLVideoElement>(null);
   const youtubeHostRef = useRef<HTMLDivElement>(null);
   const youtubePlayerRef = useRef<YouTubePlayerInstance | null>(null);
   const fullscreenContainerRef = useRef<HTMLDivElement>(null);
@@ -141,7 +143,12 @@ export default function ShortsPlayer({
     currentTime >= slot.startSeconds && currentTime <= slot.endSeconds,
   ) ?? project.frameSlots[0];
   const position = framePosition(activeSlot, currentTime);
+  const activeFit = position.fit ?? activeSlot.fit;
+  const showBlurBackground = activeFit === "contain" && activeSlot.backgroundMode === "blur";
   const ratio = aspectValue(activeSlot.aspectRatio);
+  const youtubeBackgroundUrl = project.source.type === "youtube"
+    ? getShortThumbnailUrl(project)
+    : undefined;
   const videoUrl = project.source.type === "upload"
     ? localVideoUrl || project.source.sourceUrl || null
     : null;
@@ -385,6 +392,20 @@ export default function ShortsPlayer({
     const speechActive = project.captions.some((caption) =>
       timeSeconds >= caption.startSeconds && timeSeconds < caption.endSeconds,
     ) && !getTranscriptCutAtTime(transcriptCutsRef.current, timeSeconds);
+
+    const backgroundVideo = backgroundVideoRef.current;
+    if (backgroundVideo) {
+      if (backgroundVideo.readyState >= 1 && Math.abs(backgroundVideo.currentTime - timeSeconds) > 0.3) {
+        backgroundVideo.currentTime = timeSeconds;
+      }
+      if (shouldPlay && backgroundVideo.paused) {
+        void backgroundVideo.play().catch(() => {
+          setPlayerError("Could not play the blurred background layer.");
+        });
+      } else if (!shouldPlay && !backgroundVideo.paused) {
+        backgroundVideo.pause();
+      }
+    }
 
     for (const clip of project.brollClips) {
       const video = brollVideoRefs.current.get(clip.id);
@@ -776,6 +797,9 @@ export default function ShortsPlayer({
           className="relative h-full w-full overflow-hidden bg-black"
           style={{
             containerType: "inline-size",
+            backgroundColor: activeFit === "contain" && activeSlot.backgroundMode === "color"
+              ? activeSlot.backgroundColor
+              : "#000000",
             ...(isFullscreen ? {
               width: `min(100vw, ${ratio * 100}dvh)`,
               height: `min(100dvh, ${100 / ratio}vw)`,
@@ -785,6 +809,36 @@ export default function ShortsPlayer({
           onPointerUp={() => { overlayDragRef.current = null; }}
           onPointerCancel={() => { overlayDragRef.current = null; }}
         >
+          {showBlurBackground && project.source.type === "upload" && videoUrl && (
+            <video
+              ref={backgroundVideoRef}
+              src={videoUrl}
+              muted
+              playsInline
+              preload="metadata"
+              aria-hidden="true"
+              tabIndex={-1}
+              className="pointer-events-none absolute -inset-[8%] z-0 h-[116%] w-[116%]"
+              style={{
+                objectFit: "cover",
+                filter: "blur(24px) brightness(0.72)",
+                transform: "scale(1.08)",
+              }}
+              onLoadedMetadata={() => syncAuxiliaryMedia(currentTime, playing)}
+            />
+          )}
+          {showBlurBackground && project.source.type === "youtube" && youtubeBackgroundUrl && (
+            <img
+              aria-hidden="true"
+              alt=""
+              src={youtubeBackgroundUrl}
+              className="pointer-events-none absolute -inset-[8%] z-0 h-[116%] w-[116%] object-cover"
+              style={{
+                filter: "blur(24px) brightness(0.72)",
+                transform: "scale(1.08)",
+              }}
+            />
+          )}
           {project.source.type === "youtube" ? (
             <div
               className="absolute"
@@ -793,6 +847,7 @@ export default function ShortsPlayer({
                 height: `${playerHeightPercent}%`,
                 left: `${playerLeftPercent}%`,
                 top: `${playerTopPercent}%`,
+                zIndex: 1,
               }}
             >
               <div
@@ -812,6 +867,8 @@ export default function ShortsPlayer({
                 transform: `scale(${position.zoom})`,
                 transformOrigin: "center center",
                 pointerEvents: editable ? "none" : "auto",
+                backgroundColor: "transparent",
+                zIndex: 1,
               }}
               playsInline
               preload="metadata"
