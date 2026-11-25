@@ -11,17 +11,17 @@ const ACCENT_STYLES: Record<LibraryBranding["accentColor"], { badgeDark: string;
 
 function HeroActions({ accent, light }: { accent: LibraryBranding["accentColor"]; light: boolean }) {
   return (
-    <div className="mt-7 flex flex-wrap gap-3">
-      <Link href="/library/ask" className={`inline-flex min-h-12 items-center justify-center rounded-xl px-5 text-base font-bold text-slate-950 transition-colors ${ACCENT_STYLES[accent].button}`}>
+    <div className="mt-7 grid grid-cols-2 gap-3 sm:flex sm:flex-wrap">
+      <Link href="/library/ask" className={`inline-flex min-h-12 w-full items-center justify-center rounded-xl px-3 text-center text-base font-bold text-slate-950 transition-colors sm:w-auto sm:px-5 ${ACCENT_STYLES[accent].button}`}>
         Ask the library
       </Link>
-      <Link href="/library/videos" className={`inline-flex min-h-12 items-center justify-center rounded-xl border px-5 text-base font-semibold transition-colors ${light ? "border-slate-300 bg-white/70 text-slate-800 hover:bg-white" : "border-white/20 bg-slate-950/40 text-white hover:bg-slate-950/70"}`}>
+      <Link href="/library/videos" className={`inline-flex min-h-12 w-full items-center justify-center rounded-xl border px-3 text-center text-base font-semibold transition-colors sm:w-auto sm:px-5 ${light ? "border-slate-300 bg-white/70 text-slate-800 hover:bg-white" : "border-white/20 bg-slate-950/40 text-white hover:bg-slate-950/70"}`}>
         Browse videos
       </Link>
-      <Link href="/library/faqs" className={`inline-flex min-h-12 items-center justify-center rounded-xl border px-5 text-base font-semibold transition-colors ${light ? "border-slate-300 bg-white/70 text-slate-800 hover:bg-white" : "border-white/20 bg-slate-950/40 text-white hover:bg-slate-950/70"}`}>
+      <Link href="/library/faqs" className={`inline-flex min-h-12 w-full items-center justify-center rounded-xl border px-3 text-center text-base font-semibold transition-colors sm:w-auto sm:px-5 ${light ? "border-slate-300 bg-white/70 text-slate-800 hover:bg-white" : "border-white/20 bg-slate-950/40 text-white hover:bg-slate-950/70"}`}>
         Browse FAQs
       </Link>
-      <Link href="/library/books" className={`inline-flex min-h-12 items-center justify-center rounded-xl border px-5 text-base font-semibold transition-colors ${light ? "border-slate-300 bg-white/70 text-slate-800 hover:bg-white" : "border-white/20 bg-slate-950/40 text-white hover:bg-slate-950/70"}`}>
+      <Link href="/library/books" className={`inline-flex min-h-12 w-full items-center justify-center rounded-xl border px-3 text-center text-base font-semibold transition-colors sm:w-auto sm:px-5 ${light ? "border-slate-300 bg-white/70 text-slate-800 hover:bg-white" : "border-white/20 bg-slate-950/40 text-white hover:bg-slate-950/70"}`}>
         Browse books
       </Link>
     </div>
@@ -47,7 +47,38 @@ function BrandCopy({ branding, light }: { branding: LibraryBranding; light: bool
   );
 }
 
-export default function LibraryHero({ branding }: { branding: LibraryBranding }) {
+function MobileCinematicHero({ branding }: { branding: LibraryBranding }) {
+  const light = branding.colorMode === "light";
+  const image = branding.coverImageUrl ? (
+    // eslint-disable-next-line @next/next/no-img-element
+    <img src={branding.coverImageUrl} alt="" className="h-full w-full object-cover" />
+  ) : null;
+  const baseClass = light
+    ? "border-slate-200 bg-white shadow-slate-900/10"
+    : "border-white/10 bg-slate-900 shadow-black/30";
+
+  return (
+    <section className="mx-auto max-w-6xl px-4 pb-6 pt-4 sm:px-5 sm:pb-8 sm:pt-8">
+      <div className={`relative isolate overflow-hidden rounded-3xl border shadow-xl ${baseClass}`}>
+        <div aria-hidden className="pointer-events-none absolute inset-0">
+          {image && (
+            <>
+              <div className="absolute inset-0 opacity-40">{image}</div>
+              <div className={`absolute inset-0 ${light ? "bg-gradient-to-r from-white/95 via-white/85 to-white/70" : "bg-gradient-to-r from-slate-950/90 via-slate-950/80 to-slate-950/70"}`} />
+            </>
+          )}
+          <div className={`absolute inset-0 bg-gradient-to-br ${ACCENT_STYLES[branding.accentColor].glow} via-transparent to-cyan-500/10`} />
+          <div className={`absolute inset-0 ${light ? "bg-gradient-to-t from-white/60 via-transparent to-white/10" : "bg-gradient-to-t from-slate-950/70 via-transparent to-slate-950/10"}`} />
+        </div>
+        <div className="relative flex min-h-[360px] items-center p-4 sm:min-h-[400px] sm:p-8">
+          <BrandCopy branding={branding} light={light} />
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function DesktopLibraryHero({ branding }: { branding: LibraryBranding }) {
   const light = branding.colorMode === "light";
   const baseClass = light
     ? "border-slate-200 bg-white shadow-slate-900/10"
@@ -77,6 +108,19 @@ export default function LibraryHero({ branding }: { branding: LibraryBranding })
     );
   }
 
+  export default function LibraryHero({ branding }: { branding: LibraryBranding }) {
+    return (
+      <>
+        <div className="lg:hidden">
+          <MobileCinematicHero branding={branding} />
+        </div>
+        <div className="hidden lg:block">
+          <DesktopLibraryHero branding={branding} />
+        </div>
+      </>
+    );
+  }
+
   if (branding.heroLayout === "simple") {
     if (branding.simpleCoverLayer === "foreground") {
       return (
@@ -85,7 +129,7 @@ export default function LibraryHero({ branding }: { branding: LibraryBranding })
             <div className={`absolute inset-0 z-0 bg-gradient-to-r ${ACCENT_STYLES[branding.accentColor].glow} to-transparent`} />
             <div className="relative z-10 grid gap-6 p-5 sm:p-8 lg:grid-cols-[minmax(0,1.3fr)_minmax(240px,0.7fr)] lg:items-center lg:gap-10 lg:p-10">
               <BrandCopy branding={branding} light={light} />
-              <div className={`relative min-h-56 overflow-hidden rounded-2xl border ${light ? "border-slate-200 bg-slate-100" : "border-white/10 bg-slate-950"} sm:min-h-72 lg:min-h-80`}>
+              <div className={`relative min-h-48 overflow-hidden rounded-2xl border ${light ? "border-slate-200 bg-slate-100" : "border-white/10 bg-slate-950"} sm:min-h-72 lg:min-h-80`}>
                 {image ? (
                   <div className="absolute inset-0">{image}</div>
                 ) : (

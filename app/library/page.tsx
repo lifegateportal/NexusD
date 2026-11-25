@@ -1,6 +1,7 @@
 import Link from "next/link";
 import LibraryHero from "./LibraryHero";
 import LibraryNav from "./LibraryNav";
+import { LibraryBookCard } from "./LibraryGrid";
 import { readLibraryBranding } from "@/lib/library-branding-store";
 import { readLibraryWelcomeContent } from "@/lib/library-welcome-content";
 import type { LibraryVideo } from "@/lib/schemas/library-video";
@@ -16,6 +17,8 @@ const ACCENT_TEXT: Record<LibraryBranding["accentColor"], string> = {
   rose: "text-rose-400",
   violet: "text-violet-400",
 };
+
+const FEATURED_ROW_CLASS = "flex min-w-0 snap-x snap-mandatory gap-4 overflow-x-auto overscroll-x-contain pb-3 [scrollbar-width:thin] touch-pan-x";
 
 function chooseSermons(videos: LibraryVideo[], ids: string[]) {
   if (ids.length) {
@@ -55,7 +58,7 @@ function SermonCard({ video, light, accentColor }: { video: LibraryVideo; light:
       href={video.youtubeUrl}
       target="_blank"
       rel="noreferrer"
-      className={`group overflow-hidden rounded-2xl border transition-colors ${light ? "border-slate-200 bg-white hover:border-slate-300" : "border-slate-800 bg-slate-900/70 hover:border-slate-700"}`}
+      className={`group w-[78vw] max-w-[320px] shrink-0 snap-start overflow-hidden rounded-2xl border transition-colors ${light ? "border-slate-200 bg-white hover:border-slate-300" : "border-slate-800 bg-slate-900/70 hover:border-slate-700"}`}
     >
       <div className="relative aspect-video overflow-hidden bg-slate-900">
         {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -83,9 +86,9 @@ function ShortCard({ short, light, accentColor }: { short: PublicShort; light: b
   return (
     <Link
       href={`/library/shorts/${encodeURIComponent(short.slug)}`}
-      className={`group overflow-hidden rounded-2xl border transition-colors ${light ? "border-slate-200 bg-white hover:border-slate-300" : "border-slate-800 bg-slate-900/70 hover:border-slate-700"}`}
+      className={`group w-[48vw] max-w-[190px] shrink-0 snap-start overflow-hidden rounded-2xl border transition-colors ${light ? "border-slate-200 bg-white hover:border-slate-300" : "border-slate-800 bg-slate-900/70 hover:border-slate-700"}`}
     >
-      <div className="relative aspect-[4/3] overflow-hidden bg-slate-900">
+      <div className="relative aspect-[9/16] min-h-48 overflow-hidden bg-slate-900">
         {short.thumbnailUrl ? (
           // eslint-disable-next-line @next/next/no-img-element
           <img src={short.thumbnailUrl} alt="" loading="lazy" className="h-full w-full object-cover transition-transform duration-300 group-hover:scale-[1.03]" />
@@ -97,32 +100,6 @@ function ShortCard({ short, light, accentColor }: { short: PublicShort; light: b
       <div className="p-4">
         <h3 className={`line-clamp-2 text-base font-semibold leading-snug ${light ? "text-slate-900" : "text-slate-100"}`}>{short.title}</h3>
         <p className={`mt-2 text-xs ${ACCENT_TEXT[accentColor]}`}>{short.sourceType === "youtube" ? "Short teaching" : "Video short"}</p>
-      </div>
-    </Link>
-  );
-}
-
-function BookCard({ book, light, accentColor }: { book: PublishedBookEntry; light: boolean; accentColor: LibraryBranding["accentColor"] }) {
-  return (
-    <Link
-      href={`/library/${encodeURIComponent(book.slug)}`}
-      className={`group overflow-hidden rounded-2xl border transition-colors ${light ? "border-slate-200 bg-white hover:border-slate-300" : "border-slate-800 bg-slate-900/70 hover:border-slate-700"}`}
-    >
-      <div className="relative aspect-[4/3] overflow-hidden bg-gradient-to-br from-slate-800 via-slate-900 to-slate-950">
-        {book.coverImageUrl ? (
-          // eslint-disable-next-line @next/next/no-img-element
-          <img src={book.coverImageUrl} alt="" loading="lazy" className="h-full w-full object-cover transition-transform duration-300 group-hover:scale-[1.03]" />
-        ) : (
-          <div className="absolute inset-0 flex items-center justify-center bg-gradient-to-br from-slate-800 via-slate-900 to-slate-950 p-5 text-center">
-            <span className="line-clamp-4 text-lg font-bold text-white" style={{ fontFamily: "Georgia, serif" }}>{book.title}</span>
-          </div>
-        )}
-        <span className="absolute bottom-3 left-3 rounded-full bg-black/75 px-3 py-1 text-xs font-semibold text-white">Explore book</span>
-      </div>
-      <div className="p-4">
-        <h3 className={`line-clamp-2 text-base font-semibold leading-snug ${light ? "text-slate-900" : "text-slate-100"}`}>{book.title}</h3>
-        <p className={`mt-2 text-xs ${ACCENT_TEXT[accentColor]}`}>{book.authorName}</p>
-        {book.synopsis && <p className={`mt-2 line-clamp-2 text-sm leading-relaxed ${light ? "text-slate-600" : "text-slate-400"}`}>{book.synopsis}</p>}
       </div>
     </Link>
   );
@@ -161,15 +138,15 @@ export default async function LibraryWelcomePage() {
             <section key={section} className="border-t border-slate-800/60 py-8 first:border-t-0 lg:py-10">
             {section === "featuredSermons" && (
               <>
-                <div className="mb-5 flex items-end justify-between gap-4">
-                  <div>
+                <div className="mb-5 flex flex-wrap items-end justify-between gap-3">
+                  <div className="min-w-0">
                     <p className={`text-xs font-bold uppercase tracking-[0.2em] ${ACCENT_TEXT[branding.accentColor]}`}>Featured sermons</p>
-                    <h2 className={`mt-2 text-2xl font-bold ${light ? "text-slate-950" : "text-white"}`}>Teaching to return to</h2>
+                    <h2 className={`mt-2 text-xl font-bold sm:text-2xl ${light ? "text-slate-950" : "text-white"}`}>Teaching to return to</h2>
                   </div>
-                  <Link href="/library/videos" className={`flex min-h-12 items-center rounded-xl border px-4 text-sm font-semibold ${light ? "border-slate-300 text-slate-700" : "border-slate-700 text-slate-200"}`}>All videos</Link>
+                  <Link href="/library/videos" className={`flex min-h-12 shrink-0 items-center rounded-xl border px-4 text-sm font-semibold ${light ? "border-slate-300 text-slate-700" : "border-slate-700 text-slate-200"}`}>All videos</Link>
                 </div>
                 {sermons.length ? (
-                  <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+                  <div role="region" aria-label="Featured sermons" tabIndex={0} className={FEATURED_ROW_CLASS}>
                     {sermons.map((video) => <SermonCard key={video.videoId} video={video} light={light} accentColor={branding.accentColor} />)}
                   </div>
                 ) : (
@@ -179,15 +156,15 @@ export default async function LibraryWelcomePage() {
             )}
             {section === "featuredShorts" && (
               <>
-                <div className="mb-5 flex items-end justify-between gap-4">
-                  <div>
+                <div className="mb-5 flex flex-wrap items-end justify-between gap-3">
+                  <div className="min-w-0">
                     <p className={`text-xs font-bold uppercase tracking-[0.2em] ${ACCENT_TEXT[branding.accentColor]}`}>Featured shorts</p>
-                    <h2 className={`mt-2 text-2xl font-bold ${light ? "text-slate-950" : "text-white"}`}>A moment of insight</h2>
+                    <h2 className={`mt-2 text-xl font-bold sm:text-2xl ${light ? "text-slate-950" : "text-white"}`}>A moment of insight</h2>
                   </div>
-                  <Link href="/library/shorts" className={`flex min-h-12 items-center rounded-xl border px-4 text-sm font-semibold ${light ? "border-slate-300 text-slate-700" : "border-slate-700 text-slate-200"}`}>All shorts</Link>
+                  <Link href="/library/shorts" className={`flex min-h-12 shrink-0 items-center rounded-xl border px-4 text-sm font-semibold ${light ? "border-slate-300 text-slate-700" : "border-slate-700 text-slate-200"}`}>All shorts</Link>
                 </div>
                 {shorts.length ? (
-                  <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+                  <div role="region" aria-label="Featured shorts" tabIndex={0} className={FEATURED_ROW_CLASS}>
                     {shorts.map((short) => <ShortCard key={short.slug} short={short} light={light} accentColor={branding.accentColor} />)}
                   </div>
                 ) : (
@@ -197,15 +174,23 @@ export default async function LibraryWelcomePage() {
             )}
             {section === "featuredBooks" && (
               <>
-                <div className="mb-5 flex items-end justify-between gap-4">
-                  <div>
+                <div className="mb-5 flex flex-wrap items-end justify-between gap-3">
+                  <div className="min-w-0">
                     <p className={`text-xs font-bold uppercase tracking-[0.2em] ${ACCENT_TEXT[branding.accentColor]}`}>Featured books</p>
-                    <h2 className={`mt-2 text-2xl font-bold ${light ? "text-slate-950" : "text-white"}`}>Books selected for you</h2>
+                    <h2 className={`mt-2 text-xl font-bold sm:text-2xl ${light ? "text-slate-950" : "text-white"}`}>Books selected for you</h2>
                   </div>
-                  <Link href="/library/books" className={`flex min-h-12 items-center rounded-xl border px-4 text-sm font-semibold ${light ? "border-slate-300 text-slate-700" : "border-slate-700 text-slate-200"}`}>Browse all books</Link>
+                  <Link href="/library/books" className={`flex min-h-12 shrink-0 items-center rounded-xl border px-4 text-sm font-semibold ${light ? "border-slate-300 text-slate-700" : "border-slate-700 text-slate-200"}`}>Browse all books</Link>
                 </div>
-                <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-                  {books.map((book) => <BookCard key={book.slug} book={book} light={light} accentColor={branding.accentColor} />)}
+                <div role="region" aria-label="Featured books" tabIndex={0} className={FEATURED_ROW_CLASS}>
+                  {books.map((book) => (
+                    <div key={book.slug} className="w-[54vw] max-w-[220px] shrink-0 snap-start">
+                      <LibraryBookCard
+                        book={book}
+                        colorMode={branding.colorMode}
+                        accentColor={branding.accentColor}
+                      />
+                    </div>
+                  ))}
                 </div>
               </>
             )}

@@ -159,19 +159,102 @@
     color: var(--pjdl-accent-text) !important;
   }
 
-  [data-pjdl-library] [class*="bg-amber-"],
-  [data-pjdl-library] [class*="bg-cyan-"],
-  [data-pjdl-library] [class*="bg-emerald-"],
-  [data-pjdl-library] [class*="bg-rose-"],
-  [data-pjdl-library] [class*="bg-violet-"] {
-    background-color: rgb(var(--pjdl-accent-rgb) / var(--tw-bg-opacity, 1)) !important;
+  [data-pjdl-library] [class~="bg-amber-300"],
+  [data-pjdl-library] [class~="bg-amber-400"],
+  [data-pjdl-library] [class~="bg-amber-500"],
+  [data-pjdl-library] [class~="bg-amber-600"],
+  [data-pjdl-library] [class~="bg-cyan-300"],
+  [data-pjdl-library] [class~="bg-cyan-400"],
+  [data-pjdl-library] [class~="bg-cyan-500"],
+  [data-pjdl-library] [class~="bg-cyan-600"],
+  [data-pjdl-library] [class~="bg-emerald-300"],
+  [data-pjdl-library] [class~="bg-emerald-400"],
+  [data-pjdl-library] [class~="bg-emerald-500"],
+  [data-pjdl-library] [class~="bg-emerald-600"],
+  [data-pjdl-library] [class~="bg-rose-300"],
+  [data-pjdl-library] [class~="bg-rose-400"],
+  [data-pjdl-library] [class~="bg-rose-500"],
+  [data-pjdl-library] [class~="bg-rose-600"],
+  [data-pjdl-library] [class~="bg-violet-300"],
+  [data-pjdl-library] [class~="bg-violet-400"],
+  [data-pjdl-library] [class~="bg-violet-500"],
+  [data-pjdl-library] [class~="bg-violet-600"] {
+    background-color: rgb(var(--pjdl-accent-rgb)) !important;
   }
 
-  [data-pjdl-library] [class*="border-amber-"],
-  [data-pjdl-library] [class*="border-cyan-"],
-  [data-pjdl-library] [class*="border-emerald-"],
-  [data-pjdl-library] [class*="border-rose-"],
-  [data-pjdl-library] [class*="border-violet-"] {
-    border-color: rgb(var(--pjdl-accent-rgb) / var(--tw-border-opacity, 1)) !important;
+  [data-pjdl-library] [class~="bg-amber-500/10"],
+  [data-pjdl-library] [class~="bg-cyan-500/10"],
+  [data-pjdl-library] [class~="bg-emerald-500/10"],
+  [data-pjdl-library] [class~="bg-rose-500/10"],
+  [data-pjdl-library] [class~="bg-violet-500/10"] {
+    background-color: rgb(var(--pjdl-accent-rgb) / 0.1) !important;
+  }
+
+  [data-pjdl-library] [class~="bg-amber-500/15"],
+  [data-pjdl-library] [class~="bg-cyan-500/15"],
+  [data-pjdl-library] [class~="bg-emerald-500/15"],
+  [data-pjdl-library] [class~="bg-rose-500/15"],
+  [data-pjdl-library] [class~="bg-violet-500/15"] {
+    background-color: rgb(var(--pjdl-accent-rgb) / 0.15) !important;
+  }
+
+  [data-pjdl-library] [class~="bg-amber-500/20"],
+  [data-pjdl-library] [class~="bg-cyan-500/20"],
+  [data-pjdl-library] [class~="bg-emerald-500/20"],
+  [data-pjdl-library] [class~="bg-rose-500/20"],
+  [data-pjdl-library] [class~="bg-violet-500/20"] {
+    background-color: rgb(var(--pjdl-accent-rgb) / 0.2) !important;
+  }
+
+  [data-pjdl-library] [class~="bg-amber-500/30"],
+  [data-pjdl-library] [class~="bg-cyan-500/30"],
+  [data-pjdl-library] [class~="bg-emerald-500/30"],
+  [data-pjdl-library] [class~="bg-rose-500/30"],
+  [data-pjdl-library] [class~="bg-violet-500/30"] {
+    background-color: rgb(var(--pjdl-accent-rgb) / 0.3) !important;
+  }
+
+  [data-pjdl-library] [class~="border-amber-300"],
+  [data-pjdl-library] [class~="border-amber-400"],
+  [data-pjdl-library] [class~="border-amber-500"],
+  [data-pjdl-library] [class~="border-amber-600"],
+  [data-pjdl-library] [class~="border-cyan-300"],
+  [data-pjdl-library] [class~="border-cyan-400"],
+  [data-pjdl-library] [class~="border-cyan-500"],
+  [data-pjdl-library] [class~="border-cyan-600"],
+  [data-pjdl-library] [class~="border-emerald-300"],
+  [data-pjdl-library] [class~="border-emerald-400"],
+  [data-pjdl-library] [class~="border-emerald-500"],
+  [data-pjdl-library] [class~="border-emerald-600"],
+  [data-pjdl-library] [class~="border-rose-300"],
+  [data-pjdl-library] [class~="border-rose-400"],
+  [data-pjdl-library] [class~="border-rose-500"],
+  [data-pjdl-library] [class~="border-rose-600"],
+  [data-pjdl-library] [class~="border-violet-300"],
+  [data-pjdl-library] [class~="border-violet-400"],
+  [data-pjdl-library] [class~="border-violet-500"],
+  [data-pjdl-library] [class~="border-violet-600"] {
+    border-color: rgb(var(--pjdl-accent-rgb)) !important;
+  }
+
+  [data-pjdl-library] [class~="border-amber-400/25"],
+  [data-pjdl-library] [class~="border-cyan-400/25"],
+  [data-pjdl-library] [class~="border-emerald-400/25"],
+  [data-pjdl-library] [class~="border-rose-400/25"],
+  [data-pjdl-library] [class~="border-violet-400/25"] {
+    border-color: rgb(var(--pjdl-accent-rgb) / 0.25) !important;
+  }
+
+  [data-pjdl-library] [class~="border-amber-500/30"],
+  [data-pjdl-library] [class~="border-cyan-500/30"],
+  [data-pjdl-library] [class~="border-emerald-500/30"],
+  [data-pjdl-library] [class~="border-rose-500/30"],
+  [data-pjdl-library] [class~="border-violet-500/30"],
+  [data-pjdl-library] [class~="border-amber-600/30"],
+  [data-pjdl-library] [class~="border-cyan-600/30"],
+  [data-pjdl-library] [class~="border-emerald-600/30"],
+  [data-pjdl-library] [class~="border-rose-600/30"],
+  [data-pjdl-library] [class~="border-violet-600/30"] {
+    border-color: rgb(var(--pjdl-accent-rgb) / 0.3) !important;
   }
 }

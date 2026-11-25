@@ -44,7 +44,7 @@ const ACCENT_BADGE_LIGHT: Record<keyof typeof ACCENT_BADGE, string> = {
 
 // ── Book card ─────────────────────────────────────────────────────────────────
 
-function BookCard({
+export function LibraryBookCard({
   book,
   colorMode,
   accentColor,
@@ -65,7 +65,7 @@ function BookCard({
       {/* Book cover illustration */}
       {/* Book cover — real photo if available, gradient fallback */}
       <div
-        className={`relative mb-4 h-64 w-full overflow-hidden rounded-2xl ${book.coverImageUrl ? "bg-slate-900" : `bg-gradient-to-br ${grad}`} shadow-xl ring-1 ring-white/5 transition duration-300 group-hover:scale-[1.02] group-hover:shadow-2xl group-hover:ring-white/10`}
+        className={`relative mb-4 aspect-[2/3] w-full overflow-hidden rounded-2xl ${book.coverImageUrl ? "bg-slate-900" : `bg-gradient-to-br ${grad}`} shadow-xl ring-1 ring-white/5 transition duration-300 group-hover:scale-[1.02] group-hover:shadow-2xl group-hover:ring-white/10`}
       >
         {book.coverImageUrl ? (
           /* eslint-disable-next-line @next/next/no-img-element */
@@ -195,9 +195,9 @@ export default function LibraryGrid({
           </button>
         </div>
       ) : (
-        <div className="grid gap-10 sm:grid-cols-2 lg:grid-cols-3">
+        <div className="grid grid-cols-2 gap-x-4 gap-y-8 sm:gap-x-6 sm:gap-y-10 lg:grid-cols-3 lg:gap-10">
           {filtered.map((book) => (
-            <BookCard key={book.slug} book={book} colorMode={colorMode} accentColor={accentColor} />
+            <LibraryBookCard key={book.slug} book={book} colorMode={colorMode} accentColor={accentColor} />
           ))}
         </div>
       )}
