@@ -66,7 +66,7 @@ export default function LibraryYouTubePlayer({
         playerVars: {
           autoplay: 0,
           cc_load_policy: 0,
-          controls: 0,
+          controls: 1,
           disablekb: 1,
           enablejsapi: 1,
           fs: 0,
@@ -231,8 +231,8 @@ export default function LibraryYouTubePlayer({
         className="relative mx-auto aspect-video w-full overflow-hidden bg-black"
         style={isFullscreen
           ? {
-            width: `min(100%, calc((100dvh - ${controlsVisible ? "9rem" : "2rem"}) * 16 / 9))`,
-            maxHeight: `calc(100dvh - ${controlsVisible ? "9rem" : "2rem"})`,
+            width: `min(100%, calc((100dvh - ${controlsVisible ? "6rem" : "2rem"}) * 16 / 9))`,
+            aspectRatio: "16 / 9",
           }
           : undefined}
       >
