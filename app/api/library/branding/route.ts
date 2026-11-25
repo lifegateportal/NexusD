@@ -78,6 +78,7 @@ export async function POST(request: NextRequest) {
   try {
     const branding = await saveLibraryCover(input.data.coverImage);
     revalidatePath("/library");
+    revalidatePath("/library/books");
     return jsonResponse(branding);
   } catch (error) {
     const status = error instanceof LibraryCoverValidationError ? 400 : 500;
@@ -108,6 +109,7 @@ export async function PUT(request: NextRequest) {
   try {
     const branding = await saveLibraryAppearance(parsed.data);
     revalidatePath("/library");
+    revalidatePath("/library/books");
     return jsonResponse(branding);
   } catch (error) {
     return NextResponse.json(
@@ -122,6 +124,7 @@ export async function DELETE() {
   try {
     const branding = await removeLibraryCover();
     revalidatePath("/library");
+    revalidatePath("/library/books");
     return jsonResponse(branding);
   } catch (error) {
     return NextResponse.json(

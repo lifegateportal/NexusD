@@ -123,7 +123,7 @@ export default async function BookLandingPage({
           {/* Nav */}
           <div className="flex items-center py-5">
             <Link
-              href="/library"
+              href="/library/books"
               className="flex min-h-10 items-center gap-1.5 text-sm font-medium text-slate-400 transition hover:text-slate-300"
             >
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} className="h-4 w-4">

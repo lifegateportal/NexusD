@@ -1,8 +1,10 @@
 import Link from "next/link";
 import type { LibraryBranding } from "@/lib/schemas/library-branding";
+import { readLibraryBranding } from "@/lib/library-branding-store";
 
 const links = [
-  { href: "/library", label: "Books", icon: "▤" },
+  { href: "/library", label: "Welcome", icon: "⌂" },
+  { href: "/library/books", label: "Books", icon: "▤" },
   { href: "/library/ask", label: "Ask the library", icon: "✳" },
   { href: "/library/faqs", label: "FAQs", icon: "?" },
   { href: "/library/videos", label: "Videos", icon: "▷" },
@@ -18,11 +20,12 @@ const ACCENT_ICON: Record<LibraryBranding["accentColor"], string> = {
   violet: "text-violet-500",
 };
 
-export default function LibraryNav({
-  branding,
+export default async function LibraryNav({
+  branding: providedBranding,
 }: {
   branding?: Pick<LibraryBranding, "title" | "shortName" | "colorMode" | "accentColor">;
 }) {
+  const branding = providedBranding ?? await readLibraryBranding();
   const light = branding?.colorMode === "light";
   const title = branding?.title ?? "Pastor Josh Digital Library";
   const shortName = branding?.shortName ?? "PJDL";

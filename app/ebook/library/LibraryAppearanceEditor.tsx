@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, type ChangeEvent, type FormEvent } from "react";
+import { useEffect, useState, type ChangeEvent, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
 import {
   LibraryBrandingSchema,
@@ -8,14 +8,23 @@ import {
 } from "@/lib/schemas/library-branding";
 import {
   removeLibraryCover,
+  fetchLibraryFeatureOptions,
   saveLibraryAppearance,
   uploadLibraryCover,
 } from "@/lib/library-branding-client";
 
 const SECTION_OPTIONS = [
+  { value: "featuredSermons", label: "Featured Sermons" },
+  { value: "featuredShorts", label: "Featured Shorts" },
+  { value: "featuredBooks", label: "Featured Books" },
   { value: "newReleases", label: "New Releases" },
   { value: "myList", label: "My Reading List" },
   { value: "allBooks", label: "All Books" },
+] as const;
+
+const COVER_LAYER_OPTIONS = [
+  { value: "behind", label: "Behind text", description: "Use the cover as a subtle background image." },
+  { value: "foreground", label: "Foreground", description: "Show the cover clearly beside the welcome text." },
 ] as const;
 
 const ACCENT_OPTIONS = [
@@ -35,7 +44,9 @@ const LAYOUT_OPTIONS = [
 const FIELD_CLASS = "mt-1 min-h-12 w-full rounded-xl border border-slate-700 bg-slate-950/70 px-3 text-base text-slate-100 outline-none focus:border-cyan-400 focus:ring-1 focus:ring-cyan-400";
 const LABEL_CLASS = "block text-sm font-medium text-slate-300";
 const MAX_COVER_BYTES = 10 * 1024 * 1024;
+const MAX_FEATURED_ITEMS = 8;
 const COVER_IMAGE_TYPES = ["image/jpeg", "image/png", "image/webp"];
+type LibraryFeatureOptions = Awaited<ReturnType<typeof fetchLibraryFeatureOptions>>;
 
 function orderedSections(sections: LibraryBranding["sections"]) {
   const indexOf = (value: LibraryBranding["sections"][number]) => {
@@ -48,9 +59,28 @@ function orderedSections(sections: LibraryBranding["sections"]) {
 export default function LibraryAppearanceEditor({ initialBranding }: { initialBranding: LibraryBranding }) {
   const router = useRouter();
   const [branding, setBranding] = useState(initialBranding);
+  const [featureOptions, setFeatureOptions] = useState<LibraryFeatureOptions>({ books: [], videos: [], shorts: [] });
+  const [optionsLoading, setOptionsLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+
+  useEffect(() => {
+    let active = true;
+    void fetchLibraryFeatureOptions()
+      .then((options) => {
+        if (active) setFeatureOptions(options);
+      })
+      .catch((loadError: unknown) => {
+        if (active) setError(loadError instanceof Error ? loadError.message : "Could not load published books, sermons, and shorts.");
+      })
+      .finally(() => {
+        if (active) setOptionsLoading(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
 
   function update<K extends keyof LibraryBranding>(key: K, value: LibraryBranding[K]) {
     setBranding((current) => ({ ...current, [key]: value }));
@@ -70,6 +100,10 @@ export default function LibraryAppearanceEditor({ initialBranding }: { initialBr
         accentColor: branding.accentColor,
         colorMode: branding.colorMode,
         heroLayout: branding.heroLayout,
+        simpleCoverLayer: branding.simpleCoverLayer,
+        featuredSermonIds: branding.featuredSermonIds,
+        featuredShortSlugs: branding.featuredShortSlugs,
+        featuredBookSlugs: branding.featuredBookSlugs,
         sections: branding.sections,
       });
       setBranding(saved);
@@ -136,6 +170,27 @@ export default function LibraryAppearanceEditor({ initialBranding }: { initialBr
       ? branding.sections.filter((section) => section !== value)
       : [...branding.sections, value];
     update("sections", sections);
+  }
+
+  function toggleFeaturedSermon(videoId: string) {
+    const ids = branding.featuredSermonIds.includes(videoId)
+      ? branding.featuredSermonIds.filter((id) => id !== videoId)
+      : [...branding.featuredSermonIds, videoId];
+    update("featuredSermonIds", ids);
+  }
+
+  function toggleFeaturedShort(slug: string) {
+    const slugs = branding.featuredShortSlugs.includes(slug)
+      ? branding.featuredShortSlugs.filter((item) => item !== slug)
+      : [...branding.featuredShortSlugs, slug];
+    update("featuredShortSlugs", slugs);
+  }
+
+  function toggleFeaturedBook(slug: string) {
+    const slugs = branding.featuredBookSlugs.includes(slug)
+      ? branding.featuredBookSlugs.filter((item) => item !== slug)
+      : [...branding.featuredBookSlugs, slug];
+    update("featuredBookSlugs", slugs);
   }
 
   function setAccent(value: string) {
@@ -206,6 +261,30 @@ export default function LibraryAppearanceEditor({ initialBranding }: { initialBr
             </div>
           </fieldset>
 
+          {branding.heroLayout === "simple" && (
+            <fieldset>
+              <legend className="mb-2 text-sm font-medium text-slate-300">Compact cover image depth</legend>
+              <div className="grid gap-3 sm:grid-cols-2">
+                {COVER_LAYER_OPTIONS.map((option) => (
+                  <label key={option.value} className={`flex min-h-20 cursor-pointer items-start gap-3 rounded-xl border p-3 ${branding.simpleCoverLayer === option.value ? "border-cyan-400 bg-cyan-950/30" : "border-slate-700 bg-slate-950/40"}`}>
+                    <input
+                      type="radio"
+                      name="simpleCoverLayer"
+                      value={option.value}
+                      checked={branding.simpleCoverLayer === option.value}
+                      onChange={() => update("simpleCoverLayer", option.value)}
+                      className="mt-1 h-4 w-4 accent-cyan-400"
+                    />
+                    <span>
+                      <span className="block text-sm font-semibold text-slate-100">{option.label}</span>
+                      <span className="mt-1 block text-xs leading-relaxed text-slate-400">{option.description}</span>
+                    </span>
+                  </label>
+                ))}
+              </div>
+            </fieldset>
+          )}
+
           <fieldset>
             <legend className="mb-2 text-sm font-medium text-slate-300">Color mode</legend>
             <div className="flex flex-wrap gap-3">
@@ -216,6 +295,83 @@ export default function LibraryAppearanceEditor({ initialBranding }: { initialBr
                 </label>
               ))}
             </div>
+          </fieldset>
+
+          <fieldset>
+            <legend className="mb-1 text-sm font-medium text-slate-300">Welcome page features</legend>
+            <p className="mb-3 text-xs leading-relaxed text-slate-500">Choose up to {MAX_FEATURED_ITEMS} published items per group. Sermons and shorts default to recent items when none are selected; featured books show only the books you choose.</p>
+            {optionsLoading ? (
+              <p className="py-4 text-sm text-slate-400">Loading published features…</p>
+            ) : (
+              <div className="grid gap-4 lg:grid-cols-3">
+                <div className="rounded-xl border border-slate-800 bg-slate-950/40 p-3">
+                  <h3 className="mb-2 text-sm font-semibold text-slate-200">Books</h3>
+                  {featureOptions.books.length ? (
+                    <div className="max-h-64 space-y-1 overflow-y-auto">
+                      {featureOptions.books.map((book) => {
+                        const checked = branding.featuredBookSlugs.includes(book.slug);
+                        return (
+                          <label key={book.slug} className="flex min-h-12 cursor-pointer items-center gap-3 rounded-lg px-2 text-sm text-slate-300 hover:bg-slate-900">
+                            <input
+                              type="checkbox"
+                              checked={checked}
+                              disabled={!checked && branding.featuredBookSlugs.length >= MAX_FEATURED_ITEMS}
+                              onChange={() => toggleFeaturedBook(book.slug)}
+                              className="h-4 w-4 accent-cyan-400"
+                            />
+                            <span className="line-clamp-2">{book.title}</span>
+                          </label>
+                        );
+                      })}
+                    </div>
+                  ) : <p className="py-3 text-sm text-slate-500">No published books are available yet.</p>}
+                </div>
+                <div className="rounded-xl border border-slate-800 bg-slate-950/40 p-3">
+                  <h3 className="mb-2 text-sm font-semibold text-slate-200">Sermon videos</h3>
+                  {featureOptions.videos.length ? (
+                    <div className="max-h-64 space-y-1 overflow-y-auto">
+                      {featureOptions.videos.map((video) => {
+                        const checked = branding.featuredSermonIds.includes(video.videoId);
+                        return (
+                          <label key={video.videoId} className="flex min-h-12 cursor-pointer items-center gap-3 rounded-lg px-2 text-sm text-slate-300 hover:bg-slate-900">
+                            <input
+                              type="checkbox"
+                              checked={checked}
+                              disabled={!checked && branding.featuredSermonIds.length >= MAX_FEATURED_ITEMS}
+                              onChange={() => toggleFeaturedSermon(video.videoId)}
+                              className="h-4 w-4 accent-cyan-400"
+                            />
+                            <span className="line-clamp-2">{video.title}</span>
+                          </label>
+                        );
+                      })}
+                    </div>
+                  ) : <p className="py-3 text-sm text-slate-500">No published sermon videos are available yet.</p>}
+                </div>
+                <div className="rounded-xl border border-slate-800 bg-slate-950/40 p-3">
+                  <h3 className="mb-2 text-sm font-semibold text-slate-200">Shorts</h3>
+                  {featureOptions.shorts.length ? (
+                    <div className="max-h-64 space-y-1 overflow-y-auto">
+                      {featureOptions.shorts.map((short) => {
+                        const checked = branding.featuredShortSlugs.includes(short.slug);
+                        return (
+                          <label key={short.slug} className="flex min-h-12 cursor-pointer items-center gap-3 rounded-lg px-2 text-sm text-slate-300 hover:bg-slate-900">
+                            <input
+                              type="checkbox"
+                              checked={checked}
+                              disabled={!checked && branding.featuredShortSlugs.length >= MAX_FEATURED_ITEMS}
+                              onChange={() => toggleFeaturedShort(short.slug)}
+                              className="h-4 w-4 accent-cyan-400"
+                            />
+                            <span className="line-clamp-2">{short.title}</span>
+                          </label>
+                        );
+                      })}
+                    </div>
+                  ) : <p className="py-3 text-sm text-slate-500">No published shorts are available yet.</p>}
+                </div>
+              </div>
+            )}
           </fieldset>
 
           <fieldset>

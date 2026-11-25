@@ -13,6 +13,7 @@ export class LibraryCoverValidationError extends Error {}
 const BRANDING_KEY = "published/pjdl/branding.json";
 const COVER_IMAGE_PREFIX = "published/pjdl/hero-covers/";
 const MAX_COVER_BYTES = 10 * 1024 * 1024;
+const DEFAULT_WELCOME_SECTIONS = ["featuredSermons", "featuredShorts", "featuredBooks"] as const;
 const DEFAULT_BRANDING = LibraryBrandingSchema.parse({});
 
 function getStorageConfig() {
@@ -39,7 +40,20 @@ function isPjdlCoverUrl(value: string, publicUrl: string): boolean {
 }
 
 function parseBranding(value: unknown, publicUrl?: string): LibraryBranding {
-  const branding = LibraryBrandingSchema.parse(value);
+  let input = value;
+  if (typeof value === "object" && value !== null && "sections" in value) {
+    const sections = LibraryBrandingSchema.shape.sections.safeParse(value.sections);
+    if (sections.success) {
+      input = {
+        ...value,
+        sections: [
+          ...DEFAULT_WELCOME_SECTIONS.filter((section) => !sections.data.includes(section)),
+          ...sections.data,
+        ],
+      };
+    }
+  }
+  const branding = LibraryBrandingSchema.parse(input);
   if (branding.coverImageUrl && publicUrl && !isPjdlCoverUrl(branding.coverImageUrl, publicUrl)) {
     throw new Error("The saved PJDL cover image URL is invalid.");
   }

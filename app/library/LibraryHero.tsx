@@ -21,6 +21,9 @@ function HeroActions({ accent, light }: { accent: LibraryBranding["accentColor"]
       <Link href="/library/faqs" className={`inline-flex min-h-12 items-center justify-center rounded-xl border px-5 text-base font-semibold transition-colors ${light ? "border-slate-300 bg-white/70 text-slate-800 hover:bg-white" : "border-white/20 bg-slate-950/40 text-white hover:bg-slate-950/70"}`}>
         Browse FAQs
       </Link>
+      <Link href="/library/books" className={`inline-flex min-h-12 items-center justify-center rounded-xl border px-5 text-base font-semibold transition-colors ${light ? "border-slate-300 bg-white/70 text-slate-800 hover:bg-white" : "border-white/20 bg-slate-950/40 text-white hover:bg-slate-950/70"}`}>
+        Browse books
+      </Link>
     </div>
   );
 }
@@ -75,6 +78,26 @@ export default function LibraryHero({ branding }: { branding: LibraryBranding })
   }
 
   if (branding.heroLayout === "simple") {
+    if (branding.simpleCoverLayer === "foreground") {
+      return (
+        <section className="mx-auto max-w-6xl px-5 pb-8 pt-6 sm:pt-8 lg:pb-10">
+          <div className={`relative isolate overflow-hidden rounded-3xl border shadow-xl ${baseClass}`}>
+            <div className={`absolute inset-0 z-0 bg-gradient-to-r ${ACCENT_STYLES[branding.accentColor].glow} to-transparent`} />
+            <div className="relative z-10 grid gap-6 p-5 sm:p-8 lg:grid-cols-[minmax(0,1.3fr)_minmax(240px,0.7fr)] lg:items-center lg:gap-10 lg:p-10">
+              <BrandCopy branding={branding} light={light} />
+              <div className={`relative min-h-56 overflow-hidden rounded-2xl border ${light ? "border-slate-200 bg-slate-100" : "border-white/10 bg-slate-950"} sm:min-h-72 lg:min-h-80`}>
+                {image ? (
+                  <div className="absolute inset-0">{image}</div>
+                ) : (
+                  <div className={`absolute inset-0 bg-gradient-to-br ${ACCENT_STYLES[branding.accentColor].glow} to-transparent`} />
+                )}
+              </div>
+            </div>
+          </div>
+        </section>
+      );
+    }
+
     return (
       <section className="mx-auto max-w-6xl px-5 pb-8 pt-6 sm:pt-8 lg:pb-10">
         <div className={`relative isolate overflow-hidden rounded-3xl border shadow-xl ${baseClass}`}>
