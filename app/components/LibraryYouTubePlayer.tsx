@@ -310,8 +310,9 @@ export default function LibraryYouTubePlayer({
       <div className={controlsHidden
         ? "hidden"
         : isFullscreen
-        ? "fixed inset-x-0 bottom-0 z-[102] mx-auto flex w-full max-w-5xl items-center gap-2 bg-gradient-to-t from-black/95 via-black/75 to-transparent px-3 pb-[max(env(safe-area-inset-bottom),_1rem)] pt-6 lg:px-6 lg:pb-4"
+        ? "fixed bottom-0 left-1/2 z-[102] flex w-full max-w-none -translate-x-1/2 items-center gap-2 bg-gradient-to-t from-black/95 via-black/75 to-transparent px-3 pb-[max(env(safe-area-inset-bottom),_1rem)] pt-6 lg:px-6 lg:pb-4"
         : "mx-auto mt-2 flex w-full max-w-5xl items-center gap-2"}
+        style={isFullscreen ? { width: "min(100vw, 177.7778dvh)" } : undefined}
       >
         <button
           type="button"
