@@ -9,13 +9,17 @@ import {
   savePrivateShort,
   unpublishShort,
 } from "@/lib/shorts-store";
+import { env } from "@/lib/env";
 import { ShortProjectSchema, ShortSlugSchema } from "@/lib/schemas/video-short";
+import { createShortSlug } from "@/lib/short-video-utils";
+import { fetchYoutubeVideoDetails, getYoutubeVideoIdFromUrl } from "@/lib/youtube-channel";
 
 export const runtime = "nodejs";
 
 const ActionSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("save"), project: ShortProjectSchema }).strict(),
   z.object({ action: z.literal("publish"), project: ShortProjectSchema }).strict(),
+  z.object({ action: z.literal("publish-youtube"), url: z.string().url().max(2000) }).strict(),
   z.object({ action: z.literal("unpublish"), slug: ShortSlugSchema }).strict(),
   z.object({ action: z.literal("delete"), slug: ShortSlugSchema }).strict(),
 ]);
@@ -56,6 +60,40 @@ export async function POST(request: NextRequest) {
   }
 
   try {
+    if (action.action === "publish-youtube") {
+      const videoId = getYoutubeVideoIdFromUrl(action.url);
+      if (!videoId) {
+        return NextResponse.json({ error: "Enter a valid YouTube Shorts, video, or youtu.be URL." }, { status: 400 });
+      }
+      if (!env.YOUTUBE_API_KEY) {
+        return NextResponse.json({ error: "Add YOUTUBE_API_KEY to Nexus Director to publish YouTube Shorts directly." }, { status: 503 });
+      }
+      const video = await fetchYoutubeVideoDetails(videoId);
+      const project = ShortProjectSchema.parse({
+        slug: `${createShortSlug(video.title)}-${crypto.randomUUID().slice(0, 8)}`,
+        title: video.title.slice(0, 120),
+        description: "",
+        thumbnailUrl: `https://i.ytimg.com/vi/${video.videoId}/hqdefault.jpg`,
+        sourceVideoId: video.videoId,
+        source: { type: "youtube", videoId: video.videoId, videoTitle: video.title },
+        sourceDurationSeconds: video.durationSeconds,
+        startSeconds: 0,
+        endSeconds: video.durationSeconds,
+        frameSlots: [{
+          startSeconds: 0,
+          endSeconds: video.durationSeconds,
+          aspectRatio: "9:16",
+          fit: "cover",
+          keyframes: [{ timeSeconds: 0, x: 50, y: 50, zoom: 1, fit: "cover" }],
+        }],
+        captions: [],
+        captionsEnabled: false,
+        status: "published",
+        updatedAt: new Date().toISOString(),
+      });
+      const published = await publishShort(project);
+      return NextResponse.json({ project: published });
+    }
     if (action.action === "save") {
       const publicCatalog = await listPublicShorts();
       const status = publicCatalog.shorts.some((short) => short.slug === action.project.slug)

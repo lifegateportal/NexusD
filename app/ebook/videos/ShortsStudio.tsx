@@ -333,6 +333,7 @@ export default function ShortsStudio() {
   const [videos, setVideos] = useState<Video[]>([]);
   const [shorts, setShorts] = useState<ShortSummary[]>([]);
   const [selectedVideoId, setSelectedVideoId] = useState("");
+  const [directYoutubeUrl, setDirectYoutubeUrl] = useState("");
   const [project, setProject] = useState<ShortProject | null>(null);
   const [rangeDraft, setRangeDraft] = useState<{ startSeconds: number; endSeconds: number } | null>(null);
   const [localVideoUrl, setLocalVideoUrl] = useState<string | null>(null);
@@ -2683,6 +2684,39 @@ export default function ShortsStudio() {
     }
   }
 
+  async function publishYoutubeShortDirectly() {
+    const url = directYoutubeUrl.trim();
+    if (!url || busy) return;
+    setBusy(true);
+    setError("");
+    setNotice("");
+    try {
+      const body = await requestJson("/api/ebook/shorts", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "publish-youtube", url }),
+      });
+      const parsed = z.object({ project: ShortProjectSchema }).safeParse(body);
+      if (!parsed.success) throw new Error("The direct YouTube Short response is invalid.");
+      skipHistoryRef.current = true;
+      setProject(parsed.data.project);
+      setSelectedVideoId("");
+      setLocalVideoUrl(null);
+      localFileRef.current = null;
+      setCurrentTime(0);
+      setSuggestions([]);
+      setSuggestionsVideoId("");
+      setSuggestionsSourceSlug("");
+      setDirectYoutubeUrl("");
+      await refreshShorts();
+      setNotice("YouTube Short published directly to the Library without transcript captions or timestamped transcript data.");
+    } catch (publishError) {
+      setError(publishError instanceof Error ? publishError.message : "Could not publish this YouTube Short.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function unpublishProject() {
     if (!project) return;
     setBusy(true);
@@ -2844,12 +2878,41 @@ export default function ShortsStudio() {
         <p className="text-[10px] font-bold uppercase tracking-[0.25em] text-cyan-300">Transcript-powered editing</p>
         <h2 className="mt-2 text-2xl font-bold text-white">Shorts Studio</h2>
         <p className="mt-2 max-w-3xl text-sm leading-relaxed text-slate-400">
-          Build shareable web shorts from saved transcripts. YouTube embeds need no source download; authorized uploads unlock clean, manually keyframed reframing.
+          Build shareable web shorts from saved transcripts, or publish an existing YouTube Short directly without transcript captions. YouTube embeds need no source download; authorized uploads unlock clean, manually keyframed reframing.
         </p>
       </header>
 
       {error && <p role="alert" className="rounded-xl border border-rose-900 bg-rose-950/40 p-4 text-sm text-rose-200">{error}</p>}
       {notice && <p role="status" className="rounded-xl border border-emerald-900 bg-emerald-950/30 p-4 text-sm text-emerald-200">{notice}</p>}
+
+      <section className="space-y-3 rounded-2xl border border-emerald-900/70 bg-emerald-950/15 p-4 sm:p-6">
+        <div>
+          <h3 className="text-sm font-bold text-white">Publish an existing YouTube Short</h3>
+          <p className="mt-1 text-sm leading-relaxed text-slate-400">
+            Paste its YouTube URL to publish the original video directly. No transcript is required, and no transcript timestamps or captions are added.
+          </p>
+        </div>
+        <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-end">
+          <label className="block text-sm font-medium text-slate-300">
+            YouTube URL
+            <input
+              type="url"
+              value={directYoutubeUrl}
+              onChange={(event) => setDirectYoutubeUrl(event.target.value)}
+              placeholder="https://youtube.com/shorts/…"
+              className="mt-2 min-h-12 w-full rounded-xl border border-slate-700 bg-slate-950 px-4 text-base text-white placeholder:text-slate-500 focus:border-emerald-400 focus:outline-none"
+            />
+          </label>
+          <button
+            type="button"
+            onClick={publishYoutubeShortDirectly}
+            disabled={busy || !directYoutubeUrl.trim()}
+            className="min-h-12 rounded-xl bg-emerald-500 px-5 text-sm font-bold text-white disabled:opacity-50"
+          >
+            {busy ? "Publishing…" : "Publish to Library Shorts"}
+          </button>
+        </div>
+      </section>
 
       <section className="space-y-3 rounded-2xl border border-slate-800 bg-slate-900/40 p-4 sm:p-6">
         <label className="block text-sm font-medium text-slate-300">

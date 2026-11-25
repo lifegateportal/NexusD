@@ -3,7 +3,11 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { env } from "@/lib/env";
 import { makeR2Client } from "@/lib/r2-storage";
-import { fetchYoutubeChannelVideos, YoutubePageTokenSchema } from "@/lib/youtube-channel";
+import {
+  fetchYoutubeChannelVideos,
+  getYoutubeVideoIdFromUrl,
+  YoutubePageTokenSchema,
+} from "@/lib/youtube-channel";
 import {
   DirectorVideoCatalogSchema,
   DirectorVideoSchema,
@@ -122,25 +126,6 @@ async function savePrivateCatalog(videos: z.infer<typeof DirectorVideoSchema>[])
   const catalog = DirectorVideoCatalogSchema.parse({ updatedAt: new Date().toISOString(), videos });
   await writeJsonObject(PRIVATE_CATALOG_KEY, catalog);
   return catalog;
-}
-
-function videoIdFromUrl(input: string): string | null {
-  try {
-    const url = new URL(input);
-    const hostname = url.hostname.toLowerCase().replace(/^www\./, "");
-    if (hostname === "youtu.be") {
-      const shortId = url.pathname.split("/").filter(Boolean)[0];
-      return shortId && VideoIdSchema.safeParse(shortId).success ? shortId : null;
-    }
-    if (hostname !== "youtube.com" && hostname !== "m.youtube.com" && hostname !== "youtube-nocookie.com") {
-      return null;
-    }
-    const candidate = url.searchParams.get("v")
-      ?? url.pathname.match(/^\/(?:embed|shorts|live)\/([A-Za-z0-9_-]{11})/)?.[1];
-    return candidate && VideoIdSchema.safeParse(candidate).success ? candidate : null;
-  } catch {
-    return null;
-  }
 }
 
 function parseTranscript(transcript: string): z.infer<typeof LibraryVideoSegmentSchema>[] {
@@ -288,7 +273,7 @@ export async function POST(request: NextRequest) {
 
     const catalog = await readPrivateCatalog();
     if (action.action === "add") {
-      const videoId = videoIdFromUrl(action.url);
+      const videoId = getYoutubeVideoIdFromUrl(action.url);
       if (!videoId) {
         return NextResponse.json({ error: "Enter a valid YouTube video, Shorts, or youtu.be URL." }, { status: 400 });
       }
