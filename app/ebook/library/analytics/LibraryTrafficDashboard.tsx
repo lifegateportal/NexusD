@@ -38,7 +38,7 @@ function TrafficList({
     <section className="min-w-0 rounded-2xl border border-slate-800 bg-slate-900/60 p-4 sm:p-5">
       <h2 className="text-base font-bold text-white">{title}</h2>
       {items.length ? (
-        <ol className="mt-4 space-y-4">
+        <ol className="mt-4 max-h-64 space-y-4 overflow-y-auto overscroll-contain pr-2">
           {items.map((item) => (
             <li key={item.label} className="min-w-0">
               <div className="flex min-w-0 items-center justify-between gap-3 text-sm">
@@ -167,7 +167,7 @@ export default function LibraryTrafficDashboard() {
 
               <section className="mt-4 rounded-2xl border border-slate-800 bg-slate-900/60 p-4 sm:p-5">
                 <h2 className="text-base font-bold text-white">Daily page views</h2>
-                <ol className="mt-4 space-y-3">
+                <ol className="mt-4 max-h-80 space-y-3 overflow-y-auto overscroll-contain pr-2">
                   {[...summary.byDay].reverse().map((day) => (
                     <li key={day.date} className="grid grid-cols-[4.5rem_minmax(0,1fr)_3rem] items-center gap-3 text-xs sm:grid-cols-[6rem_minmax(0,1fr)_4rem] sm:text-sm">
                       <time dateTime={day.date} className="text-slate-400">{formatDate(day.date)}</time>
@@ -186,13 +186,13 @@ export default function LibraryTrafficDashboard() {
               <div className="mt-4 grid gap-4 lg:grid-cols-3">
                 <TrafficList title="Top pages" items={summary.topPages} emptyText="No page views recorded yet." />
                 <TrafficList title="Traffic sources" items={summary.topSources} emptyText="No traffic sources recorded yet." />
-                <TrafficList title="Devices" items={summary.devices} emptyText="No device data recorded yet." />
+                <TrafficList title="Page views by device type" items={summary.devices} emptyText="No device data recorded yet." />
               </div>
             </>
           ) : null}
 
           <p className="mt-5 pb-4 text-xs leading-relaxed text-slate-500">
-            Analytics records page path, referring site, device category, and a session-only anonymous identifier. It does not store names or IP addresses. Visitors who enable Do Not Track are not counted; estimates may also miss visitors who block scripts.
+            Analytics records page path, referring site, and device category. Device totals are page views, not distinct devices. No names or IP addresses are stored. Visitors who enable Do Not Track are not counted; estimates may also miss visitors who block scripts.
           </p>
         </div>
       </main>
