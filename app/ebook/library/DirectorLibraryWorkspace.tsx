@@ -43,6 +43,12 @@ export default function DirectorLibraryWorkspace({
               Open Trailer Studio
             </Link>
             <Link
+              href="/ebook/library/analytics"
+              className="ml-3 mt-4 inline-flex min-h-12 items-center rounded-xl border border-cyan-700 px-4 text-sm font-semibold text-cyan-100"
+            >
+              Library Traffic
+            </Link>
+            <Link
               href="/library"
               target="_blank"
               rel="noreferrer"

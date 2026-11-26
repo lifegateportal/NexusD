@@ -3,6 +3,7 @@
 import type { Metadata } from "next";
 import { readLibraryBranding } from "@/lib/library-branding-store";
 import type { CSSProperties } from "react";
+import LibraryTrafficTracker from "./LibraryTrafficTracker";
 
 const ACCENT_RGB = {
   amber: "251 191 36",
@@ -52,6 +53,7 @@ export default async function LibraryLayout({ children }: { children: React.Reac
       style={style}
       className="min-h-dvh"
     >
+      <LibraryTrafficTracker />
       {children}
     </div>
   );
