@@ -15,6 +15,20 @@ function getSessionId(): string {
   }
 }
 
+function getBrowserId(): string | null {
+  try {
+    const existing = localStorage.getItem("pjdl_traffic_browser_v1");
+    if (existing && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(existing)) {
+      return existing;
+    }
+    const created = crypto.randomUUID();
+    localStorage.setItem("pjdl_traffic_browser_v1", created);
+    return created;
+  } catch {
+    return null;
+  }
+}
+
 function getSource(): string {
   if (!document.referrer) return "Direct / unknown";
   try {
@@ -49,6 +63,7 @@ export default function LibraryTrafficTracker() {
       body: JSON.stringify({
         path: pathname,
         sessionId: getSessionId(),
+        browserId: getBrowserId(),
         source: getSource(),
         device: getDevice(),
       }),

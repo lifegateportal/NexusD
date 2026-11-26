@@ -120,7 +120,7 @@ export default function LibraryTrafficDashboard() {
               <div>
                 <p className="text-[10px] font-bold uppercase tracking-[0.25em] text-cyan-300">Public PJDL</p>
                 <h1 className="mt-2 text-3xl font-bold tracking-tight text-white sm:text-4xl">Library traffic</h1>
-                <p className="mt-2 text-sm text-slate-400">Anonymous page views, estimated sessions, and traffic sources.</p>
+                <p className="mt-2 text-sm text-slate-400">Page views, sessions, and estimated unique browser profiles.</p>
               </div>
               <div className="flex flex-wrap gap-2" role="group" aria-label="Report date range">
                 {RANGES.map((days) => (
@@ -152,7 +152,7 @@ export default function LibraryTrafficDashboard() {
             <p className="py-12 text-center text-sm text-slate-400">Loading library traffic…</p>
           ) : summary ? (
             <>
-              <div className="grid gap-3 sm:grid-cols-2">
+              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
                 <section className="rounded-2xl border border-slate-800 bg-slate-900/60 p-5">
                   <p className="text-sm text-slate-400">Page views</p>
                   <p className="mt-2 text-3xl font-bold tabular-nums text-white">{formatNumber(summary.pageViews)}</p>
@@ -162,6 +162,11 @@ export default function LibraryTrafficDashboard() {
                   <p className="text-sm text-slate-400">Estimated sessions</p>
                   <p className="mt-2 text-3xl font-bold tabular-nums text-white">{formatNumber(summary.sessions)}</p>
                   <p className="mt-1 text-xs text-slate-500">Browser sessions, not identified people</p>
+                </section>
+                <section className="rounded-2xl border border-slate-800 bg-slate-900/60 p-5">
+                  <p className="text-sm text-slate-400">Estimated unique browsers</p>
+                  <p className="mt-2 text-3xl font-bold tabular-nums text-white">{formatNumber(summary.estimatedUniqueBrowsers)}</p>
+                  <p className="mt-1 text-xs text-slate-500">New visits only; not physical devices</p>
                 </section>
               </div>
 
@@ -192,7 +197,7 @@ export default function LibraryTrafficDashboard() {
           ) : null}
 
           <p className="mt-5 pb-4 text-xs leading-relaxed text-slate-500">
-            Analytics records page path, referring site, and device category. Device totals are page views, not distinct devices. No names or IP addresses are stored. Visitors who enable Do Not Track are not counted; estimates may also miss visitors who block scripts.
+            A random first-party browser ID in browser storage estimates unique browser profiles; the server stores only a keyed hash. This is not an exact count of physical devices or people: separate browsers, private browsing, or cleared storage can count again, while blocked storage or scripts and Do Not Track can cause undercounting. Counts begin with visits after this update. Device totals are page views; no names or IP addresses are stored.
           </p>
         </div>
       </main>

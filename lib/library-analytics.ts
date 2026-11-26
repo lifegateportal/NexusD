@@ -20,6 +20,7 @@ const StoredEventSchema = z.object({
   viewedAt: z.string().datetime(),
   path: z.string().regex(/^\/library(?:\/[^\s?#]*)?$/).max(300),
   sessionHash: z.string().regex(/^[a-f0-9]{64}$/),
+  browserHash: z.string().regex(/^[a-f0-9]{64}$/).optional(),
   source: z.string().trim().min(1).max(253),
   device: DeviceSchema,
 }).strict();
@@ -46,6 +47,15 @@ function sessionHash(sessionId: string): string {
     .digest("hex");
 }
 
+function browserHash(browserId: string): string {
+  const secret = env.AUTH_COOKIE_SECRET;
+  if (!secret) throw new Error("Configure Director authentication before collecting library traffic.");
+  return createHmac("sha256", secret)
+    .update("browser:")
+    .update(browserId)
+    .digest("hex");
+}
+
 export async function recordLibraryPageView(
   input: z.infer<typeof LibraryTrafficEventInputSchema>,
 ): Promise<void> {
@@ -56,6 +66,7 @@ export async function recordLibraryPageView(
     viewedAt: viewedAt.toISOString(),
     path: input.path,
     sessionHash: sessionHash(input.sessionId),
+    ...(input.browserId ? { browserHash: browserHash(input.browserId) } : {}),
     source: input.source,
     device: input.device,
   });
@@ -137,6 +148,7 @@ export async function readLibraryTraffic(days: number): Promise<LibraryTrafficSu
   const pageViewsByDay = new Map(dates.map((date) => [date, 0]));
   const sessionsByDay = new Map(dates.map((date) => [date, new Set<string>()]));
   const sessions = new Set<string>();
+  const browserProfiles = new Set<string>();
   const pages = new Map<string, number>();
   const sources = new Map<string, number>();
   const devices = new Map<string, number>();
@@ -146,6 +158,7 @@ export async function readLibraryTraffic(days: number): Promise<LibraryTrafficSu
     pageViewsByDay.set(date, (pageViewsByDay.get(date) ?? 0) + 1);
     sessionsByDay.get(date)?.add(event.sessionHash);
     sessions.add(event.sessionHash);
+    if (event.browserHash) browserProfiles.add(event.browserHash);
     increment(pages, event.path);
     increment(sources, event.source);
     increment(devices, event.device);
@@ -160,6 +173,7 @@ export async function readLibraryTraffic(days: number): Promise<LibraryTrafficSu
     days,
     pageViews: events.length,
     sessions: sessions.size,
+    estimatedUniqueBrowsers: browserProfiles.size,
     byDay: dates.map((date) => ({
       date,
       pageViews: pageViewsByDay.get(date) ?? 0,
