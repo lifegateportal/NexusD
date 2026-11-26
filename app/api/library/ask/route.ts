@@ -11,6 +11,7 @@ import {
 } from "@/lib/schemas/library-assistant";
 import { parseMarkdownBlockquote } from "@/lib/scripture-formatter";
 import { fetchCanonicalScripture } from "@/lib/scripture-verse";
+import { readLibraryBranding } from "@/lib/library-branding-store";
 
 export const runtime = "nodejs";
 export const maxDuration = 180;
@@ -549,6 +550,9 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: "The public book library is not configured." }, { status: 503 });
   }
   try {
+    if (!(await readLibraryBranding()).askLibraryEnabled) {
+      return NextResponse.json({ error: "Ask the Library is not currently available." }, { status: 404 });
+    }
     const slug = request.nextUrl.searchParams.get("slug");
     const catalog = await loadPublishedCatalog(base);
     if (!slug) {
@@ -592,6 +596,9 @@ export async function POST(request: NextRequest) {
   }
 
   try {
+    if (!(await readLibraryBranding()).askLibraryEnabled) {
+      return NextResponse.json({ error: "Ask the Library is not currently available." }, { status: 404 });
+    }
     if (input.purpose === "video-transcript" || input.purpose === "video-teaching-outline") {
       if (!input.videoId) {
         return NextResponse.json({ error: "Choose a published video first." }, { status: 400 });

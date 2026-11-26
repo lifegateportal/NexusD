@@ -1,12 +1,18 @@
 import LibraryNav from "../LibraryNav";
 import LibraryAssistant from "./LibraryAssistant";
+import { notFound } from "next/navigation";
+import { readLibraryBranding } from "@/lib/library-branding-store";
 
+export const dynamic = "force-dynamic";
 export const metadata = {
   title: "Ask the Library | Pastor Josh Digital Library",
   description: "Ask questions answered only from published books and video transcripts.",
 };
 
-export default function LibraryAskPage() {
+export default async function LibraryAskPage() {
+  const branding = await readLibraryBranding();
+  if (!branding.askLibraryEnabled) notFound();
+
   return (
     <div className="min-h-dvh bg-slate-950 text-slate-100 lg:pl-64">
       <LibraryNav />

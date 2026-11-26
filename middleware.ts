@@ -35,7 +35,7 @@ export async function middleware(request: NextRequest) {
     (pathname.startsWith("/academy") && request.method === "GET") ||
     (pathname === "/api/academy/publish" && request.method === "GET") ||
     (pathname === "/api/library/branding" && request.method === "GET") ||
-    (pathname === "/api/library/ask" && request.method === "POST") ||
+    (pathname === "/api/library/ask" && ["GET", "POST"].includes(request.method)) ||
     (pathname === "/api/library/traffic" && request.method === "POST") ||
     (pathname === "/api/library/videos" && request.method === "GET") ||
     (pathname.startsWith("/api/library/shorts") && request.method === "GET") ||

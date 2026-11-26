@@ -9,12 +9,18 @@ const ACCENT_STYLES: Record<LibraryBranding["accentColor"], { badgeDark: string;
   violet: { badgeDark: "border-violet-400/25 text-violet-300", badgeLight: "border-violet-600/30 text-violet-800", button: "bg-violet-400 hover:bg-violet-300", glow: "from-violet-500/10" },
 };
 
-function HeroActions({ accent, light }: { accent: LibraryBranding["accentColor"]; light: boolean }) {
+function HeroActions({ accent, light, showAskLibrary }: {
+  accent: LibraryBranding["accentColor"];
+  light: boolean;
+  showAskLibrary: boolean;
+}) {
   return (
     <div className="mt-7 grid grid-cols-2 gap-3 sm:flex sm:flex-wrap">
-      <Link href="/library/ask" className={`inline-flex min-h-12 w-full items-center justify-center rounded-xl px-3 text-center text-base font-bold text-slate-950 transition-colors sm:w-auto sm:px-5 ${ACCENT_STYLES[accent].button}`}>
-        Ask the library
-      </Link>
+      {showAskLibrary && (
+        <Link href="/library/ask" className={`inline-flex min-h-12 w-full items-center justify-center rounded-xl px-3 text-center text-base font-bold text-slate-950 transition-colors sm:w-auto sm:px-5 ${ACCENT_STYLES[accent].button}`}>
+          Ask the library
+        </Link>
+      )}
       <Link href="/library/videos" className={`inline-flex min-h-12 w-full items-center justify-center rounded-xl border px-3 text-center text-base font-semibold transition-colors sm:w-auto sm:px-5 ${light ? "border-slate-300 bg-white/70 text-slate-800 hover:bg-white" : "border-white/20 bg-slate-950/40 text-white hover:bg-slate-950/70"}`}>
         Browse videos
       </Link>
@@ -42,7 +48,11 @@ function BrandCopy({ branding, light }: { branding: LibraryBranding; light: bool
       <p className={`mt-4 max-w-xl text-sm leading-relaxed sm:text-base ${light ? "text-slate-700" : "text-slate-300"}`}>
         {branding.description}
       </p>
-      <HeroActions accent={branding.accentColor} light={light} />
+      <HeroActions
+        accent={branding.accentColor}
+        light={light}
+        showAskLibrary={branding.askLibraryEnabled}
+      />
     </div>
   );
 }

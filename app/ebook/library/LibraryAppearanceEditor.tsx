@@ -99,6 +99,7 @@ export default function LibraryAppearanceEditor({ initialBranding }: { initialBr
         description: branding.description,
         accentColor: branding.accentColor,
         colorMode: branding.colorMode,
+        askLibraryEnabled: branding.askLibraryEnabled,
         heroLayout: branding.heroLayout,
         simpleCoverLayer: branding.simpleCoverLayer,
         featuredSermonIds: branding.featuredSermonIds,
@@ -296,6 +297,21 @@ export default function LibraryAppearanceEditor({ initialBranding }: { initialBr
               ))}
             </div>
           </fieldset>
+
+          <label className="flex min-h-14 cursor-pointer items-start gap-3 rounded-xl border border-slate-700 bg-slate-950/40 p-3">
+            <input
+              type="checkbox"
+              checked={branding.askLibraryEnabled}
+              onChange={(event) => update("askLibraryEnabled", event.target.checked)}
+              className="mt-1 h-5 w-5 shrink-0 accent-cyan-400"
+            />
+            <span>
+              <span className="block text-sm font-semibold text-slate-200">Show Ask the Library publicly</span>
+              <span className="mt-1 block text-xs leading-relaxed text-slate-400">
+                When disabled, the public navigation and welcome page link are hidden, and the Ask Library page and API are unavailable.
+              </span>
+            </span>
+          </label>
 
           <fieldset>
             <legend className="mb-1 text-sm font-medium text-slate-300">Welcome page features</legend>

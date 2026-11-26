@@ -108,8 +108,7 @@ export async function PUT(request: NextRequest) {
   }
   try {
     const branding = await saveLibraryAppearance(parsed.data);
-    revalidatePath("/library");
-    revalidatePath("/library/books");
+    revalidatePath("/library", "layout");
     return jsonResponse(branding);
   } catch (error) {
     return NextResponse.json(

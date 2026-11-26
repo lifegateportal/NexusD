@@ -19,6 +19,7 @@ export const LibraryBrandingSchema = z.object({
   ),
   accentColor: z.enum(["amber", "cyan", "emerald", "rose", "violet"]).default("amber"),
   colorMode: z.enum(["dark", "light"]).default("dark"),
+  askLibraryEnabled: z.boolean().default(true),
   heroLayout: z.enum(["cinematic", "split", "simple"]).default("cinematic"),
   simpleCoverLayer: z.enum(["behind", "foreground"]).default("behind"),
   featuredSermonIds: z.array(z.string().regex(/^[A-Za-z0-9_-]{11}$/))

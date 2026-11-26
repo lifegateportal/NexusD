@@ -23,7 +23,7 @@ const ACCENT_ICON: Record<LibraryBranding["accentColor"], string> = {
 export default async function LibraryNav({
   branding: providedBranding,
 }: {
-  branding?: Pick<LibraryBranding, "title" | "shortName" | "colorMode" | "accentColor">;
+  branding?: Pick<LibraryBranding, "title" | "shortName" | "colorMode" | "accentColor" | "askLibraryEnabled">;
 }) {
   const branding = providedBranding ?? await readLibraryBranding();
   const light = branding?.colorMode === "light";
@@ -33,6 +33,9 @@ export default async function LibraryNav({
   const asideTheme = light ? "border-slate-200 bg-white" : "border-slate-800/70 bg-slate-950";
   const navText = light ? "text-slate-600 hover:bg-slate-100 hover:text-slate-950" : "text-slate-400 hover:bg-slate-900 hover:text-white";
   const mobileTheme = light ? "border-slate-200 bg-white/95" : "border-slate-800/80 bg-slate-950/95";
+  const visibleLinks = links.filter((link) => (
+    link.href !== "/library/ask" || branding.askLibraryEnabled
+  ));
 
   return (
     <>
@@ -42,7 +45,7 @@ export default async function LibraryNav({
           <span className={`mt-1 block text-xl font-bold leading-tight ${light ? "text-slate-950" : "text-white"}`}>{title}</span>
         </Link>
         <nav aria-label="Pastor Josh Digital Library navigation" className="space-y-2">
-          {links.map((link) => (
+          {visibleLinks.map((link) => (
             <Link
               key={link.href}
               href={link.href}
@@ -62,7 +65,7 @@ export default async function LibraryNav({
         aria-label="Pastor Josh Digital Library navigation"
         className={`fixed inset-x-0 bottom-0 z-30 flex min-h-16 items-stretch justify-start overflow-x-auto border-t px-2 pb-[max(env(safe-area-inset-bottom),_0.25rem)] backdrop-blur-xl [scrollbar-width:none] [&::-webkit-scrollbar]:hidden lg:hidden ${mobileTheme}`}
       >
-        {links.map((link) => (
+        {visibleLinks.map((link) => (
           <Link
             key={link.href}
             href={link.href}
