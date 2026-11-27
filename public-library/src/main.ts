@@ -1,19 +1,22 @@
 import { z } from "zod";
-import { EbookManifestSchema } from "../../lib/schemas/ebook";
-import { PublishedCatalogSchema } from "../../lib/schemas/published-book";
+import {
+  LibraryConfigSchema,
+  PublishedCatalogSchema,
+  ReaderManifestSchema,
+  projectReaderManifest,
+} from "./schemas";
 import "./styles.css";
 
-const CatalogSchema = PublishedCatalogSchema.strict();
-const ManifestSchema = EbookManifestSchema.strict();
 const SlugSchema = z.string().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/);
 const root = document.querySelector<HTMLElement>("#app");
-const r2BaseUrl = import.meta.env.VITE_LIBRARY_R2_PUBLIC_URL.replace(/\/$/, "");
+const config = LibraryConfigSchema.safeParse(window.PUBLIC_LIBRARY_CONFIG);
+const r2BaseUrl = config.success ? config.data.r2PublicUrl.replace(/\/$/, "") : "";
 
 if (!root) throw new Error("Library root element is missing.");
 
-type Catalog = z.infer<typeof CatalogSchema>;
+type Catalog = z.infer<typeof PublishedCatalogSchema>;
 type Book = Catalog["books"][number];
-type Manifest = z.infer<typeof ManifestSchema>;
+type Manifest = z.infer<typeof ReaderManifestSchema>;
 
 function element<K extends keyof HTMLElementTagNameMap>(
   tag: K,
@@ -37,15 +40,19 @@ async function fetchJson(url: string): Promise<unknown> {
 }
 
 async function fetchCatalog(): Promise<Catalog> {
-  if (!r2BaseUrl) throw new Error("The library site is missing its public R2 URL configuration.");
-  return CatalogSchema.parse(await fetchJson(`${r2BaseUrl}/published/index.json`));
+  if (!r2BaseUrl) throw new Error("Set the public R2 URL in public/library-config.js before deploying the library.");
+  return PublishedCatalogSchema.parse(await fetchJson(`${r2BaseUrl}/published/index.json`));
 }
 
 async function fetchManifest(slug: string): Promise<Manifest> {
   const safeSlug = SlugSchema.parse(slug);
-  return ManifestSchema.parse(
+  return projectReaderManifest(
     await fetchJson(`${r2BaseUrl}/published/${encodeURIComponent(safeSlug)}/manifest.json`),
   );
+}
+
+function currentRoute(): string[] {
+  return window.location.hash.replace(/^#\/?/, "").split("/").filter(Boolean);
 }
 
 function mountPage(active: "books" | "reading"): HTMLElement {
@@ -53,13 +60,13 @@ function mountPage(active: "books" | "reading"): HTMLElement {
   const shell = element("div", "site-shell");
   const sidebar = element("aside", "desktop-rail");
   const brand = element("a", "brand-lockup");
-  brand.href = "/";
+  brand.href = "/#/";
   brand.setAttribute("aria-label", "Public Library home");
   brand.append(element("span", "brand-mark", "PL"), element("span", "brand-name", "Public Library"));
   const desktopNav = element("nav", "rail-nav");
   desktopNav.setAttribute("aria-label", "Main navigation");
   const browseLink = element("a", `nav-link${active === "books" ? " is-active" : ""}`, "Browse books");
-  browseLink.href = "/";
+  browseLink.href = "/#/";
   const websiteLink = element("a", "nav-link", "Visit epicglobal.app");
   websiteLink.href = "https://epicglobal.app";
   websiteLink.target = "_blank";
@@ -71,7 +78,7 @@ function mountPage(active: "books" | "reading"): HTMLElement {
   const mobileNav = element("nav", "mobile-nav");
   mobileNav.setAttribute("aria-label", "Main navigation");
   const mobileBrowse = element("a", `mobile-nav-link${active === "books" ? " is-active" : ""}`, "Books");
-  mobileBrowse.href = "/";
+  mobileBrowse.href = "/#/";
   const mobileWebsite = element("a", "mobile-nav-link", "Website");
   mobileWebsite.href = "https://epicglobal.app";
   mobileWebsite.target = "_blank";
@@ -104,7 +111,7 @@ function addCover(container: HTMLElement, book: Pick<Book, "title" | "authorName
 
 function createBookCard(book: Book): HTMLAnchorElement {
   const card = element("a", "book-card");
-  card.href = `/book/${encodeURIComponent(book.slug)}`;
+  card.href = `/#/book/${encodeURIComponent(book.slug)}`;
   const cover = element("div", "book-cover");
   addCover(cover, book);
   const details = element("div", "book-card-details");
@@ -252,7 +259,7 @@ function appendBodyMarkup(container: HTMLElement, text: string): void {
 function renderBookDetails(book: Book, manifest: Manifest): void {
   const main = mountPage("books");
   const back = element("a", "back-link", "Back to books");
-  back.href = "/";
+  back.href = "/#/";
 
   const detail = element("section", "book-detail");
   const cover = element("div", "detail-cover");
@@ -267,7 +274,7 @@ function renderBookDetails(book: Book, manifest: Manifest): void {
   if (book.synopsis) copy.append(element("p", "detail-synopsis", book.synopsis));
 
   const start = element("a", "primary-button", "Read online");
-  start.href = `/book/${encodeURIComponent(book.slug)}/read`;
+  start.href = `/#/book/${encodeURIComponent(book.slug)}/read`;
   copy.append(start);
   detail.append(cover, copy);
 
@@ -277,7 +284,7 @@ function renderBookDetails(book: Book, manifest: Manifest): void {
   manifest.chapters.forEach((chapter) => {
     const item = element("li", "chapter-list-item");
     const link = element("a", "chapter-list-link", chapter.title || `Chapter ${chapter.number}`);
-    link.href = `/book/${encodeURIComponent(book.slug)}/read#chapter-${chapter.number}`;
+    link.href = `/#/book/${encodeURIComponent(book.slug)}/read/chapter-${chapter.number}`;
     item.append(link);
     chapterList.append(item);
   });
@@ -289,7 +296,7 @@ function renderReader(book: Book, manifest: Manifest): void {
   const main = mountPage("reading");
   const top = element("header", "reader-header");
   const back = element("a", "back-link", "Book details");
-  back.href = `/book/${encodeURIComponent(book.slug)}`;
+  back.href = `/#/book/${encodeURIComponent(book.slug)}`;
   top.append(back, element("p", "eyebrow", book.authorName), element("h1", "reader-title", book.title));
 
   const controls = element("div", "reader-controls");
@@ -347,7 +354,7 @@ function renderError(error: unknown): void {
 
 async function start(): Promise<void> {
   try {
-    const path = window.location.pathname.split("/").filter(Boolean);
+    const path = currentRoute();
     if (path[0] !== "book" || !path[1]) {
       renderCatalog(await fetchCatalog());
       return;
@@ -357,7 +364,15 @@ async function start(): Promise<void> {
     const [catalog, manifest] = await Promise.all([fetchCatalog(), fetchManifest(slug)]);
     const book = catalog.books.find((entry) => entry.slug === slug);
     if (!book) throw new Error("This book is not in the published library.");
-    if (path[2] === "read") renderReader(book, manifest);
+    if (path[2] === "read") {
+      renderReader(book, manifest);
+      const chapterMatch = /^chapter-(\d+)$/.exec(path[3] ?? "");
+      if (chapterMatch) {
+        requestAnimationFrame(() => {
+          document.getElementById(`chapter-${chapterMatch[1]}`)?.scrollIntoView();
+        });
+      }
+    }
     else renderBookDetails(book, manifest);
   } catch (error) {
     renderError(error);
@@ -365,3 +380,4 @@ async function start(): Promise<void> {
 }
 
 void start();
+window.addEventListener("hashchange", () => void start());

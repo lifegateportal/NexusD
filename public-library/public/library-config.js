@@ -1,0 +1,3 @@
+window.PUBLIC_LIBRARY_CONFIG = {
+  r2PublicUrl: "REPLACE_WITH_PUBLIC_R2_URL",
+};

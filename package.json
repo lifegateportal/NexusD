@@ -8,8 +8,8 @@
   },
   "scripts": {
     "dev": "rm -rf .next && NEXT_DISABLE_DEVTOOLS=1 next dev --port 5000 --hostname 0.0.0.0",
-    "library:site:dev": "vite --config public-library/vite.config.ts",
-    "library:site:build": "vite build --config public-library/vite.config.ts",
+    "library:site:dev": "vite public-library --config public-library/vite.config.ts",
+    "library:site:build": "vite build public-library --config public-library/vite.config.ts",
     "clean:next": "rm -rf .next",
     "build": "next build",
     "start": "node server.mjs",
