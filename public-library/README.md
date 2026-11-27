@@ -1,19 +1,14 @@
 # EpicGlobal Public Library
 
-This directory is a self-contained static-site project for EpicGlobal's Static Site deployment. It does not contain or call the NexusDirector backend. It reads the public book catalog and manifests from R2.
-
-## Before deployment
-
-Edit `public/library-config.js` and replace `REPLACE_WITH_PUBLIC_R2_URL` with the public R2 base URL. This is a public read URL, not an access key; do not put R2 credentials in this project. Configure the R2 bucket's CORS policy to allow `GET` requests from the deployed site origin.
+This static site displays the existing public library at `https://nexusdirector.epicglobal.app/library` in a full-screen frame. The original library UI, reader, navigation, and API-backed features remain on the DigitalOcean NexusDirector deployment; this project does not make a reduced duplicate.
 
 ## Deploy through Nexus Code
 
-1. Import the contents of this directory as a new Nexus Code project named `Public Library`.
-2. Select **Static Site** and deploy. The project includes `package.json`, `package-lock.json`, and an `npm run build` script; the built files are written to `dist`.
-3. Use the EpicGlobal URL shown in deployment status for the public library.
-4. Update the **My Library** link on the EpicGlobal website to that deployed URL.
+1. Import the contents of this directory as a Nexus Code project named `Public Library`.
+2. Select **Static Site** and deploy. The project includes `package.json`, `package-lock.json`, and a Vite build that emits the static `dist/index.html`.
+3. Use the EpicGlobal URL shown in deployment status as the public library address.
 
-The site uses hash-based book routes, so direct links and refreshes work without host-side rewrite rules. New publications appear from R2 without rebuilding the site. EPUB downloads are not published as files today; NexusDirector currently generates EPUBs through its API.
+The NexusDirector `/library` route must remain available for the frame. Do not redirect that route to this static site, or it will create a loop.
 
 ## Local development
 

@@ -3,16 +3,38 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="theme-color" content="#f4f6f3" />
-    <meta name="description" content="Browse and read books from the public library." />
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Literata:opsz,wght@7..72,500;7..72,600;7..72,700&display=swap" rel="stylesheet" />
+    <meta name="theme-color" content="#090d12" />
+    <meta name="description" content="Browse books, videos, FAQs, and reading resources in the public library." />
     <title>Public Library</title>
+    <style>
+      * { box-sizing: border-box; }
+      html, body, main { width: 100%; height: 100%; margin: 0; overflow: hidden; }
+      body { background: #090d12; color: #e2e8f0; font: 16px system-ui, sans-serif; }
+      iframe { display: block; width: 100%; height: 100%; border: 0; background: #090d12; }
+      #loading { position: fixed; inset: 0; display: grid; place-content: center; gap: 12px; padding: 24px; text-align: center; }
+      #loading[hidden] { display: none; }
+      #loading a { color: #67e8f9; }
+      #loading p { margin: 0; }
+    </style>
   </head>
   <body>
-    <div id="app"></div>
-    <script src="/library-config.js"></script>
-    <script type="module" src="/src/main.ts"></script>
+    <main>
+      <iframe
+        id="public-library"
+        src="https://nexusdirector.epicglobal.app/library"
+        title="Public Library"
+        allow="autoplay; fullscreen; picture-in-picture; encrypted-media"
+        allowfullscreen
+      ></iframe>
+      <div id="loading" role="status">
+        <p>Loading the public library…</p>
+        <p><a href="https://nexusdirector.epicglobal.app/library">Open the library directly</a></p>
+      </div>
+    </main>
+    <script>
+      const frame = document.getElementById("public-library");
+      const loading = document.getElementById("loading");
+      frame.addEventListener("load", () => { loading.hidden = true; });
+    </script>
   </body>
 </html>
