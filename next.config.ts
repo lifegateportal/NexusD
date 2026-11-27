@@ -25,6 +25,15 @@ const nextConfig: NextConfig = {
       },
     ];
   },
+  async redirects() {
+    return [
+      {
+        source: "/library",
+        destination: "https://library.epicglobal.app/",
+        permanent: false,
+      },
+    ];
+  },
   serverExternalPackages: ["@deepgram/sdk", "epub-gen-memory", "pdfkit", "@sparticuz/chromium", "playwright-core"],
   experimental: {
     serverActions: { bodySizeLimit: "30mb" },
